@@ -27,6 +27,19 @@ struct LlmConfig {
     // thinking: {type: "disabled"}（两者同时发本机网关实测不报错）。
     QString reasoningEffort = QStringLiteral("none");
 
+    // 批量合并：一次 HTTP 请求最多翻多少段。<= 1 表示退回"逐段请求"。
+    //
+    // 为什么默认 8：实测本机网关的延迟几乎全部来自**每次请求固定的上游首字延迟**
+    // （约 1.1s），与输入/输出 token 数几乎无关：
+    //   输入 32 token / 输出 4 token   → 1031~1357 ms
+    //   输入 69 token / 输出 5 token   →  991~1431 ms   ← token 变多，耗时没变
+    //   流式 TTFT                      → 1278~1638 ms   ← 流式也救不了
+    // 因此 N 段逐段请求 = N × 1.1s；合并成 1 次 = 1.1s。
+    // 实测 5 段：逐段 5662 ms → 合并 1034 ms（5.5 倍）。
+    //
+    // 代价：批量返回需要 JSON 数组校验，模型可能漏条/加前言，故失败会整块回退到逐段。
+    int batchSize = 8;
+
     bool isValid() const { return !baseUrl.trimmed().isEmpty() && !model.trimmed().isEmpty(); }
 };
 

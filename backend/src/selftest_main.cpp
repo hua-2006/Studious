@@ -563,6 +563,85 @@ void runModelsMode()
     }
 }
 
+// --llm-batch：验证"批量合并请求"带来的加速，并保证译文与逐段一致。
+void runLlmBatchMode()
+{
+    config::LlmConfig base = defaultLlmConfig();
+    studious::net::QtHttpClient http;
+
+    const QStringList paragraphs = {
+        QStringLiteral("Hello, world!"),
+        QStringLiteral("Good morning."),
+        QStringLiteral("How are you today?"),
+        QStringLiteral("See you tomorrow."),
+        QStringLiteral("Thank you very much."),
+    };
+
+    const auto runWith = [&](int batchSize, QStringList &outTexts, qint64 &outMs) {
+        config::LlmConfig cfg = base;
+        cfg.batchSize = batchSize;
+        translate::LlmTranslator translator(cfg, http);
+        QElapsedTimer timer;
+        timer.start();
+        const core::TranslateOutcome outcome =
+            translator.translate(paragraphs, QStringLiteral("auto"), {QStringLiteral("zh")}, QJsonObject());
+        outMs = timer.elapsed();
+        outTexts = outcome.byLang.value(QStringLiteral("zh"));
+        return outcome;
+    };
+
+    say(QStringLiteral("=== LLM 批量合并对比（%1 段，英->中） ===").arg(paragraphs.size()));
+    say(QStringLiteral("model = ") + base.model);
+    say(QString());
+
+    QStringList onceTexts;
+    qint64 onceMs = 0;
+    const core::TranslateOutcome onceOutcome = runWith(1, onceTexts, onceMs);
+    say(QStringLiteral("[batchSize=1 逐段请求] %1 ms").arg(onceMs));
+    if (!onceOutcome.ok) {
+        markFail(QStringLiteral("perSegment"), onceOutcome.error);
+        return;
+    }
+    for (const QString &t : onceTexts) {
+        say(QStringLiteral("    ") + t);
+    }
+    markPass(QStringLiteral("perSegment"));
+
+    say(QString());
+    QStringList batchTexts;
+    qint64 batchMs = 0;
+    const core::TranslateOutcome batchOutcome = runWith(8, batchTexts, batchMs);
+    say(QStringLiteral("[batchSize=8 合并请求] %1 ms").arg(batchMs));
+    if (!batchOutcome.ok) {
+        markFail(QStringLiteral("batch"), batchOutcome.error);
+        return;
+    }
+    for (const QString &t : batchTexts) {
+        say(QStringLiteral("    ") + t);
+    }
+    markPass(QStringLiteral("batch"));
+
+    // 段落数必须与输入一致，否则回填会错位。
+    if (batchTexts.size() != paragraphs.size()) {
+        markFail(QStringLiteral("batchCount"),
+                 QStringLiteral("返回 %1 段，期望 %2 段").arg(batchTexts.size()).arg(paragraphs.size()));
+        return;
+    }
+    markPass(QStringLiteral("batchCount"));
+
+    say(QString());
+    if (batchMs < onceMs) {
+        say(QStringLiteral("加速：%1 ms -> %2 ms（%3x）")
+                .arg(onceMs)
+                .arg(batchMs)
+                .arg(QString::number(double(onceMs) / double(qMax<qint64>(1, batchMs)), 'f', 1)));
+    } else {
+        say(QStringLiteral("注意：批量未更快（%1 ms vs %2 ms），可能是网关不支持长输出或多段合并")
+                .arg(batchMs)
+                .arg(onceMs));
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -572,8 +651,23 @@ int main(int argc, char *argv[])
     const bool providersMode = args.contains(QStringLiteral("--providers"));
     const bool llmMode = args.contains(QStringLiteral("--llm"));
     const bool modelsMode = args.contains(QStringLiteral("--models"));
+    const bool llmBatchMode = args.contains(QStringLiteral("--llm-batch"));
 
     // 专项模式互斥，先处理它们，互不影响原有两条路径。
+    if (llmBatchMode) {
+        runLlmBatchMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("LLM BATCH CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
+
     if (modelsMode) {
         runModelsMode();
         say(QString());

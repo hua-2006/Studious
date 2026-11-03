@@ -58,6 +58,26 @@ private:
                       QString &outText,
                       QString &outError);
 
+    // 多段合并成一次请求（JSON 字符串数组输出）。
+    // 解析失败内部会重试 1 次；仍失败返回 false，由调用方回退到逐段。
+    bool translateBatch(const QStringList &texts,
+                        const QString &dstLang,
+                        const QString &endpoint,
+                        QStringList &outTexts,
+                        QString &outError);
+
+    // 发一次 /chat/completions，返回已剥掉包装的 content。
+    // translateOne 与 translateBatch 共用，避免两份 HTTP 代码各写各的。
+    bool postChat(const QString &systemPrompt,
+                  const QString &userPrompt,
+                  double temperature,
+                  int maxTokens,
+                  QString &outContent,
+                  QString &outError);
+
+    // 从模型输出里抠出 JSON 字符串数组，并校验长度与内容非空。
+    static bool parseJsonStringArray(const QString &content, int expected, QStringList &out);
+
     // 把 HTTP 层失败映射成中文原因。
     static QString describeHttpFailure(const net::HttpResponse &resp);
 
