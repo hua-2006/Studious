@@ -19,6 +19,10 @@ public:
     // 可选能力：不支持检测的组件返回空串。
     virtual QString detectLanguage(const QStringList &texts) const { Q_UNUSED(texts); return {}; }
 
+    // 缓存标签：参与缓存键计算，用来区分"同一引擎下译文会变的配置"。
+    // 例：llm 换了模型或网关，同一句原文的译文就不同，必须分开存。
+    virtual QString cacheTag() const { return id(); }
+
     virtual TranslateOutcome translate(const QStringList &paragraphs,
                                        const QString &srcLang,
                                        const QStringList &dstLangs,

@@ -18,7 +18,10 @@ namespace {
 //   QNetworkAccessManager 只能在创建它的线程使用（Qt 文档明确要求），
 //   跨线程共享会踩 "Cannot create children for a parent in a different thread"
 //   以及请求随机不回调。所以每次翻译都现造一套，代价只有几微秒。
-studious::core::TranslateOutcome translateInWorkerThread(const TranslateJobRequest &job)
+//
+// 缓存是唯一的例外：TranslationCache 由后端保证可跨线程共享
+// （每个线程用自己的 SQLite 连接），所以这里只借用指针，不负责它的生命周期。
+TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job)
 {
     studious::net::QtHttpClient http;   // 工作线程内构造
 
@@ -29,13 +32,27 @@ studious::core::TranslateOutcome translateInWorkerThread(const TranslateJobReque
         studious::factory::makeDefaultTranslators(http, job.llm, job.webProviders);
     studious::router::TranslatorRouter router(std::move(translators));
 
+    // 缓存注入：指针可以为空（= 完全不碰 SQLite），开关另算。
+    // 两个都要给，Router 才真正启用：isCacheEnabled() == (cache != nullptr && enabled)。
+    router.setTranslationCache(job.cache);
+    router.setCacheEnabled(job.cacheEnabled);
+
     // 后端契约只认段落 + 语言对 + 引擎偏好，装配参数不进 TranslateRequest。
     studious::core::TranslateRequest req;
     req.paragraphs = job.paragraphs;
     req.srcLang = job.srcLang;
     req.dstLangs = QStringList{job.dstLang};
     req.preferredEngine = job.engineId;
-    return router.translate(req);
+
+    TranslateJobResult result;
+    result.outcome = router.translate(req);
+
+    // 命中统计只反映"上一次 translate()"，必须在同一线程紧跟着取（别挪到主线程读）。
+    const studious::router::TranslatorRouter::CacheReport report = router.lastCacheReport();
+    result.cacheUsed = report.used;
+    result.cacheHits = report.hits;
+    result.cacheMisses = report.misses;
+    return result;
 }
 
 } // namespace
@@ -74,10 +91,10 @@ QStringList splitParagraphs(const QString &text)
 
 TranslateJob::TranslateJob(QObject *parent)
     : QObject(parent)
-    , m_watcher(new QFutureWatcher<studious::core::TranslateOutcome>(this))
+    , m_watcher(new QFutureWatcher<TranslateJobResult>(this))
 {
     connect(m_watcher,
-            &QFutureWatcher<studious::core::TranslateOutcome>::finished,
+            &QFutureWatcher<TranslateJobResult>::finished,
             this,
             &TranslateJob::onFutureFinished);
 }
@@ -103,7 +120,7 @@ void TranslateJob::start(const TranslateJobRequest &req)
     }
 
     m_timer.start();
-    // 按值拷贝进线程：req 是纯数据，跨线程不能带引用。
+    // 按值拷贝进线程：req 是纯数据（缓存指针只是借用，不转移所有权），跨线程不能带引用。
     m_watcher->setFuture(QtConcurrent::run(&translateInWorkerThread, req));
 }
 

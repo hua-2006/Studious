@@ -99,9 +99,10 @@ QComboBox *newLangBox() { return new QComboBox; }
 
 } // namespace
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(studious::cache::TranslationCache *cache, QWidget *parent)
     : QMainWindow(parent)
     , m_settings(AppSettings::load())
+    , m_cache(cache)
     , m_job(new TranslateJob(this))
 {
     setWindowTitle(QStringLiteral("Studious — 文本翻译测试"));
@@ -135,11 +136,12 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // 关窗即保存：语言 / 引擎 / 来源都随手记住，LLM 设置由对话框保存。
+    // 关窗即保存：语言 / 引擎 / 来源 / 缓存开关都随手记住，LLM 设置由对话框保存。
     m_settings.srcLang = currentSrcLang();
     m_settings.dstLang = currentDstLang();
     m_settings.engineId = currentEngine();
     m_settings.webProviderId = currentWebProviderId();
+    m_settings.cacheEnabled = m_cacheCheck->isChecked();
     m_settings.save();
 
     QMainWindow::closeEvent(event);
@@ -188,9 +190,16 @@ void MainWindow::buildUi()
     m_settingsButton = new QPushButton(QStringLiteral("设置…"));
     m_settingsButton->setToolTip(QStringLiteral("LLM 网关 / API Key / 模型 / 采样参数"));
 
+    // 缓存开关：勾着 = 命中缓存的段落不再发请求（重复文本秒出）。
+    m_cacheCheck = new QCheckBox(QStringLiteral("启用缓存"));
+    m_cacheCheck->setChecked(m_settings.cacheEnabled);
+    m_cacheCheck->setToolTip(
+        QStringLiteral("命中缓存的句子不再请求翻译接口，重复文本秒出结果"));
+
     sourceBar->addWidget(new QLabel(QStringLiteral("来源")));
     sourceBar->addWidget(m_webProviderBox);
     sourceBar->addStretch(1);
+    sourceBar->addWidget(m_cacheCheck);
     sourceBar->addWidget(m_settingsButton);
     root->addLayout(sourceBar);
 
@@ -392,7 +401,7 @@ void MainWindow::setStatusError(const QString &text)
 
 void MainWindow::onOpenSettings()
 {
-    SettingsDialog dialog(m_settings, this);
+    SettingsDialog dialog(m_settings, m_cache, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -429,6 +438,7 @@ void MainWindow::onTranslateClicked()
     m_settings.dstLang = currentDstLang();
     m_settings.engineId = currentEngine();
     m_settings.webProviderId = currentWebProviderId();
+    m_settings.cacheEnabled = m_cacheCheck->isChecked();
 
     TranslateJobRequest req;
     req.paragraphs = paragraphs;
@@ -437,9 +447,12 @@ void MainWindow::onTranslateClicked()
     req.engineId = m_settings.engineId;
     req.webProviders = currentWebProviders();
     req.llm = m_settings.llm;   // 配置快照：翻译过程中改不了，线程内也无需回读界面
+    req.cache = m_cache;        // 进程级共享实例（可为空）
+    req.cacheEnabled = m_settings.cacheEnabled;
 
     m_lastSrcParagraphs = paragraphs;
     m_lastEngineId = req.engineId.isEmpty() ? QStringLiteral("自动") : req.engineId;
+    m_lastCacheEnabled = req.cacheEnabled;
 
     m_translateButton->setEnabled(false);
     m_output->clear();
@@ -450,28 +463,37 @@ void MainWindow::onTranslateClicked()
     m_job->start(req);
 }
 
-void MainWindow::onTranslationFinished(const studious::core::TranslateOutcome &outcome,
-                                       qint64 elapsedMs)
+void MainWindow::onTranslationFinished(const TranslateJobResult &result, qint64 elapsedMs)
 {
     m_translateButton->setEnabled(true);
 
     const QString dst = currentDstLang();
 
-    if (!outcome.ok) {
+    if (!result.outcome.ok) {
         m_output->clear();
-        setStatusError(outcome.error.isEmpty() ? QStringLiteral("翻译失败（后端未给出原因）")
-                                               : outcome.error);
+        setStatusError(result.outcome.error.isEmpty()
+                           ? QStringLiteral("翻译失败（后端未给出原因）")
+                           : result.outcome.error);
         refreshEngineStatus();
         return;
     }
 
-    const QStringList dstParagraphs = outcome.byLang.value(dst);
+    const QStringList dstParagraphs = result.outcome.byLang.value(dst);
     m_output->setPlainText(composeOutput(m_lastSrcParagraphs, dstParagraphs));
 
-    setStatusOk(QStringLiteral("引擎: %1    耗时: %2 ms    段落数: %3")
-                    .arg(m_lastEngineId)
-                    .arg(elapsedMs)
-                    .arg(m_lastSrcParagraphs.size()));
+    QString status = QStringLiteral("引擎: %1    耗时: %2 ms    段落数: %3")
+                         .arg(m_lastEngineId)
+                         .arg(elapsedMs)
+                         .arg(m_lastSrcParagraphs.size());
+
+    // 只在"这次请求真的走了缓存"时追加命中情况：关掉缓存（或 cacheUsed=false）
+    // 就一个字都不提缓存，避免用户以为缓存还在生效。
+    if (m_lastCacheEnabled && result.cacheUsed) {
+        const int total = result.cacheHits + result.cacheMisses;
+        status += QStringLiteral("｜缓存命中 %1/%2").arg(result.cacheHits).arg(total);
+    }
+
+    setStatusOk(status);
 
     refreshEngineStatus();
 }

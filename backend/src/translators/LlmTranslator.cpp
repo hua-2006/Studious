@@ -236,6 +236,12 @@ QString LlmTranslator::chatCompletionsUrl() const
     return base + QStringLiteral("/chat/completions");
 }
 
+QString LlmTranslator::cacheTag() const
+{
+    // 模型或网关一变，同一句原文的译文可能完全不同，缓存必须分开。
+    return QStringLiteral("%1|%2|%3").arg(id(), m_cfg.model.trimmed(), m_cfg.baseUrl.trimmed());
+}
+
 QString LlmTranslator::effectiveSystemPrompt() const
 {
     const QString custom = m_cfg.systemPrompt.trimmed();

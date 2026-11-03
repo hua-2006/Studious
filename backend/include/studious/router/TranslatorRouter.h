@@ -10,6 +10,13 @@
 #include <memory>
 #include <vector>
 
+namespace studious::core {
+class ITranslator;
+}
+namespace studious::cache {
+class TranslationCache;
+}
+
 namespace studious::router {
 
 // 组件所有权容器。
@@ -43,11 +50,31 @@ public:
 
     QStringList engineIds() const;
 
+    // ---------- 翻译缓存（可选） ----------
+    //
+    // 不注入 = 完全不用缓存，行为与以前一模一样。
+    // 注入后还需要 enabled=true 才真正生效，方便界面上放一个开关。
+    void setTranslationCache(cache::TranslationCache *cache) { m_cache = cache; }
+    void setCacheEnabled(bool enabled) { m_cacheEnabled = enabled; }
+    bool isCacheEnabled() const { return m_cache != nullptr && m_cacheEnabled; }
+
+    // 上一次 translate() 的缓存命中情况，供界面显示"命中 3/5（省了 2 次请求）"。
+    struct CacheReport {
+        bool  used = false;
+        int   hits = 0;
+        int   misses = 0;
+    };
+    CacheReport lastCacheReport() const { return m_lastCacheReport; }
+
 private:
     core::ITranslator *findById(const QString &id) const;
 
     TranslatorList m_translators;
     QStringList m_priority;
+
+    cache::TranslationCache *m_cache = nullptr;
+    bool m_cacheEnabled = true;
+    CacheReport m_lastCacheReport;
 };
 
 } // namespace studious::router

@@ -14,7 +14,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Sql)
 
 # 注意：只用 Qt Core / Network，不引 Widgets / Gui，后端保持无 UI 依赖。
 add_library(backend STATIC
@@ -30,6 +30,7 @@ add_library(backend STATIC
     src/translators/LlmTranslator.cpp
     src/llm/LlmCatalog.cpp
     src/router/TranslatorRouter.cpp
+    src/cache/TranslationCache.cpp
     src/Factory.cpp
 )
 
@@ -42,7 +43,7 @@ target_include_directories(backend PUBLIC
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network)
+target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
 
 # 控制台自测程序
 add_executable(backend_selftest src/selftest_main.cpp)

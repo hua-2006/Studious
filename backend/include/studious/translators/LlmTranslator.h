@@ -31,6 +31,8 @@ public:
     LlmTranslator(config::LlmConfig cfg, net::IHttpClient &http);
 
     QString id() const override;
+    // 缓存键要带上模型与网关：换模型后译文会变，不能复用旧结果。
+    QString cacheTag() const override;
     bool isReady() const override;
     core::ResolveResult resolve(const QString &src, const QString &dst) const override;
     QStringList supportedTargetLangs() const override;
