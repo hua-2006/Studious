@@ -10,6 +10,8 @@
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
 
 #include "config/LlmConfig.h"
+#include "llm/LlmCatalog.h"
+#include "llm/LlmModelInfo.h"
 #include "contract/LanguageRegistry.h"
 #include "net/QtHttpClient.h"
 #include "router/TranslatorRouter.h"
@@ -374,15 +376,15 @@ void dumpRawLlmResponse(const config::LlmConfig &cfg, studious::net::QtHttpClien
     say(QStringLiteral("[DEBUG] 响应体前 800 字节: ") + QString::fromUtf8(resp.body.left(800)));
 }
 
-void runLlmMode()
+// 各专项模式共用的默认配置（本机网关），允许环境变量覆盖以便排查：
+//   STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
+static config::LlmConfig defaultLlmConfig()
 {
     config::LlmConfig cfg;
     cfg.baseUrl = QStringLiteral("http://127.0.0.1:3065/v1");
     cfg.apiKey = QStringLiteral("12345678");
     cfg.model = QStringLiteral("deepseek-v4.1-flash");
 
-    // 允许用环境变量临时换网关/模型/Key，方便排查（默认值保持不变）：
-    //   STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
     const auto envOr = [](const char *name, const QString &fallback) {
         const QString v = qEnvironmentVariable(name).trimmed();
         return v.isEmpty() ? fallback : v;
@@ -390,6 +392,12 @@ void runLlmMode()
     cfg.baseUrl = envOr("STUDIOUS_LLM_BASE_URL", cfg.baseUrl);
     cfg.apiKey = envOr("STUDIOUS_LLM_API_KEY", cfg.apiKey);
     cfg.model = envOr("STUDIOUS_LLM_MODEL", cfg.model);
+    return cfg;
+}
+
+void runLlmMode()
+{
+    config::LlmConfig cfg = defaultLlmConfig();
 
     say(QStringLiteral("=== LLM 真实接入自测 ==="));
     say(QStringLiteral("baseUrl = ") + cfg.baseUrl);
@@ -470,6 +478,91 @@ void runLlmMode()
 
 } // namespace
 
+// --models：验证"前端填完 Key + 地址后去问网关"这条链路。
+// 打印模型目录、按模型能力推导的思考等级，并真发一次探测确认思考能被关掉。
+void runModelsMode()
+{
+    const config::LlmConfig cfg = defaultLlmConfig();
+    studious::net::QtHttpClient http;
+
+    say(QStringLiteral("=== 模型目录拉取（GET {baseUrl}/models） ==="));
+    say(QStringLiteral("baseUrl = ") + cfg.baseUrl);
+    say(QString());
+
+    const llm::ModelListResult result = llm::listModels(cfg, http);
+    if (!result.ok) {
+        markFail(QStringLiteral("listModels"), result.error);
+        return;
+    }
+
+    say(QStringLiteral("共 %1 个聊天模型：").arg(result.models.size()));
+    for (const llm::LlmModelInfo &m : result.models) {
+        say(QStringLiteral("  %1").arg(m.id));
+        say(QStringLiteral("      名称=%1  供应商=%2  推理=%3  工具=%4  输入上限=%5  输出上限=%6")
+                .arg(m.name,
+                     m.ownedBy.isEmpty() ? QStringLiteral("-") : m.ownedBy,
+                     m.supportsReasoning ? QStringLiteral("是") : QStringLiteral("否"),
+                     m.supportsTools ? QStringLiteral("是") : QStringLiteral("否"))
+                .arg(m.maxInputTokens)
+                .arg(m.maxOutputTokens));
+    }
+    markPass(QStringLiteral("listModels"));
+
+    // 找出配置里指定的模型，推导它支持的思考等级。
+    llm::LlmModelInfo target;
+    for (const llm::LlmModelInfo &m : result.models) {
+        if (m.id == cfg.model) {
+            target = m;
+            break;
+        }
+    }
+
+    say(QString());
+    if (target.id.isEmpty()) {
+        markFail(QStringLiteral("findTarget"),
+                 QStringLiteral("模型 %1 不在返回列表里").arg(cfg.model));
+        return;
+    }
+
+    const QVector<llm::ReasoningOption> options = llm::reasoningOptionsFor(target);
+    say(QStringLiteral("模型 %1 支持的思考等级（由能力推导）：").arg(target.id));
+    for (const llm::ReasoningOption &o : options) {
+        say(QStringLiteral("  [%1] %2%3")
+                .arg(o.value.isEmpty() ? QStringLiteral("<不发送>") : o.value,
+                     o.label,
+                     o.recommended ? QStringLiteral("   ← 推荐") : QString()));
+    }
+    markPass(QStringLiteral("reasoningOptions"));
+
+    // 真实探测：元数据说支持推理，不代表真的能被关掉。
+    say(QString());
+    say(QStringLiteral("真实探测：reasoning_effort=none 是否真能关掉思考…"));
+    const llm::ReasoningProbeResult probe = llm::probeReasoning(cfg, http);
+    if (!probe.ok) {
+        markFail(QStringLiteral("probeReasoning"), probe.error);
+        return;
+    }
+    say(QStringLiteral("  reasoning_tokens  = %1").arg(probe.reasoningTokens));
+    say(QStringLiteral("  reasoning_content = %1")
+            .arg(probe.hasReasoningContent ? QStringLiteral("有（仍在思考）")
+                                           : QStringLiteral("无")));
+    say(QStringLiteral("  探测译文           = %1").arg(probe.sample));
+
+    switch (probe.probe) {
+    case llm::ReasoningProbe::Disabled:
+        say(QStringLiteral("  结论：思考已成功关闭"));
+        markPass(QStringLiteral("probeReasoning"));
+        break;
+    case llm::ReasoningProbe::StillThinking:
+        markFail(QStringLiteral("probeReasoning"), QStringLiteral("参数无效，模型仍在思考"));
+        break;
+    case llm::ReasoningProbe::Unknown:
+        markFail(QStringLiteral("probeReasoning"),
+                 QStringLiteral("网关未返回 usage 明细，无法判定"));
+        break;
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -478,8 +571,23 @@ int main(int argc, char *argv[])
     const bool offline = args.contains(QStringLiteral("--offline"));
     const bool providersMode = args.contains(QStringLiteral("--providers"));
     const bool llmMode = args.contains(QStringLiteral("--llm"));
+    const bool modelsMode = args.contains(QStringLiteral("--models"));
 
-    // 两种专项模式互斥，先处理它们，互不影响原有两条路径。
+    // 专项模式互斥，先处理它们，互不影响原有两条路径。
+    if (modelsMode) {
+        runModelsMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MODELS CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
+
     if (providersMode) {
         studious::net::QtHttpClient http;
         runProvidersMode(http);

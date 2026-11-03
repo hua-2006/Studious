@@ -923,3 +923,66 @@ Resp:   [{"translations":[{"text":"..."}]}]
 | 两者同时发送 | **0** | ✅ 不报错，故实现里同时发 |
 
 > 延迟方差较大（1.0~2.3s），但 `reasoning_tokens` 是最可靠的判据：**看 token 数，不看秒数**。
+
+### 17.7 模型目录与能力探测（`llm/LlmCatalog`）
+
+用户填完 Base URL + API Key 后，**由后端去问网关要模型列表**，前端只负责渲染下拉——前端不拼接口。
+
+```cpp
+// GET {baseUrl}/models
+ModelListResult listModels(const config::LlmConfig &cfg, net::IHttpClient &http);
+
+// 按模型能力推导可选思考等级
+QVector<ReasoningOption> reasoningOptionsFor(const LlmModelInfo &model);
+
+// 真实探测"关闭思考"是否生效（元数据可能是错的）
+ReasoningProbeResult probeReasoning(const config::LlmConfig &cfg, net::IHttpClient &http);
+```
+
+**关键设计 1：网关不返回"思考等级列表"**
+
+`/models` 只给 `supports_reasoning` 布尔值，没有等级枚举。所以等级列表是**推导**出来的：
+
+| 模型能力 | 可选等级 |
+|---|---|
+| `supports_reasoning = true` | `none`(推荐) / `minimal` / `low` / `medium` / `high` / `<不发送>` |
+| `supports_reasoning = false` | 只有一项「不适用」，且**不发送任何思考相关字段**（严格网关遇未知字段会 400） |
+
+**关键设计 2：过滤非聊天模型**
+
+网关返回 24 条，其中 3 条是图像模型（`kind=image`）。只保留 `kind` 为空或 `chat` 的，实测得到 **21 个聊天模型**。把图像模型列进翻译模型下拉只会干扰用户。
+
+**关键设计 3：`reasoningOptionsFor` 是纯函数**
+
+不依赖 HTTP、可在任意线程调用，前端切模型时实时刷新下拉，无需再发请求。
+
+**关键设计 4：元数据可能撒谎，所以有 `probeReasoning`**
+
+它真发一次 `reasoning_effort=none` 的短请求，读 `usage.completion_tokens_details.reasoning_tokens` 与 `message.reasoning_content`，返回三态：
+
+| 结论 | 判据 |
+|---|---|
+| `Disabled` | 有 token 明细且 `reasoning_tokens == 0`，且无 `reasoning_content` |
+| `StillThinking` | 有 `reasoning_content` 或 `reasoning_tokens > 0` |
+| `Unknown` | 网关没回 usage 明细，无法判定 |
+
+**实测输出（本机网关）**：
+
+```
+共 21 个聊天模型：
+  deepseek-v4.1-flash   推理=是 输入上限=1000000 输出上限=128000
+  default-model         推理=否 ...
+  ...
+
+模型 deepseek-v4.1-flash 支持的思考等级（由能力推导）：
+  [none] 关闭（推荐，最快）  ← 推荐
+  [minimal] 极低 / [low] 低 / [medium] 中 / [high] 高 / [<不发送>] 跟随模型默认
+
+真实探测：
+  reasoning_tokens  = 0
+  reasoning_content = 无
+  探测译文           = 你好，世界！
+  结论：思考已成功关闭
+```
+
+**注意**：`default-model`（Auto）的 `supports_reasoning` 是 `false`，但它内部可能路由到推理模型——这种"聚合模型"的元数据不可全信，正是 `probeReasoning` 存在的理由。

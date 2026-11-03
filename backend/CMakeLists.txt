@@ -28,6 +28,7 @@ add_library(backend STATIC
     src/translators/MockTranslator.cpp
     src/translators/LocalMtTranslator.cpp
     src/translators/LlmTranslator.cpp
+    src/llm/LlmCatalog.cpp
     src/router/TranslatorRouter.cpp
     src/Factory.cpp
 )

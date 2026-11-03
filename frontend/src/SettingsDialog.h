@@ -3,6 +3,9 @@
 #include <QDialog>
 #include <QFutureWatcher>
 #include <QString>
+#include <QVector>
+
+#include <studious/llm/LlmModelInfo.h>
 
 #include "AppSettings.h"
 
@@ -24,10 +27,10 @@ struct LlmTestResult {
     qint64 elapsedMs = 0;
 };
 
-// LLM 设置对话框：一份 LlmConfig 的全部字段 + "测试连接"。
+// LLM 设置对话框：一份 LlmConfig 的全部字段 + "获取模型" + "测试连接"。
 //
-// 线程约束同 MainWindow：QtHttpClient 是线程亲和的，测试请求必须在工作线程里
-// 现造 http + translator，主线程只拿回 LlmTestResult（纯数据）。
+// 线程约束同 MainWindow：QtHttpClient 是线程亲和的，拉模型列表 / 测试连接都必须在
+// 工作线程里现造 http，主线程只拿回纯数据（ModelListResult / LlmTestResult）。
 class SettingsDialog : public QDialog {
     Q_OBJECT
 
@@ -41,6 +44,8 @@ public:
 private slots:
     void onTestClicked();
     void onTestFinished();
+    void onFetchModelsClicked();
+    void onFetchModelsFinished();
     void onRestoreDefaults();
 
 private:
@@ -49,20 +54,30 @@ private:
     studious::config::LlmConfig uiToConfig() const;
     void showTestMessage(const QString &text, bool ok);
     void showTestNeutral(const QString &text);
+    void showFetchNeutral(const QString &text);
+    void showFetchMessage(const QString &text, bool ok);
+    // 按当前模型能力重填「思考等级」下拉（保留原选择，恢复不到就选推荐项）。
+    void rebuildReasoningOptions();
 
     AppSettings m_settings;   // 只保存非 LLM 字段，LLM 字段由界面控件产出
 
     QLineEdit *m_baseUrl = nullptr;
     QLineEdit *m_apiKey = nullptr;
     QCheckBox *m_showApiKey = nullptr;
-    QLineEdit *m_model = nullptr;
+    QComboBox *m_model = nullptr;              // 可编辑：网关不支持 /models 时手输
+    QPushButton *m_fetchModelsButton = nullptr;
+    QLabel *m_fetchStatus = nullptr;           // 「获取模型」的状态提示，默认空且隐藏
     QSpinBox *m_timeoutMs = nullptr;
     QDoubleSpinBox *m_temperature = nullptr;
-    QComboBox *m_reasoningEffort = nullptr;
+    QComboBox *m_reasoningEffort = nullptr;    // 内容按模型能力动态生成
     QPlainTextEdit *m_systemPrompt = nullptr;
     QPushButton *m_testButton = nullptr;
     QLabel *m_testResult = nullptr;
     QDialogButtonBox *m_buttons = nullptr;
 
+    // 「获取模型」拿到的能力表；思考等级下拉据此填充。
+    QVector<studious::llm::LlmModelInfo> m_modelInfos;
+
     QFutureWatcher<LlmTestResult> *m_testWatcher = nullptr;
+    QFutureWatcher<studious::llm::ModelListResult> *m_modelsWatcher = nullptr;
 };
