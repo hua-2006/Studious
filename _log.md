@@ -71,3 +71,42 @@
 - **Google 免费接口在这条网络下会 429**：单靠它必挂，正好证明"多来源 + 降级"这条链是必要的（MyMemory 兜底可成）。
 - **`--llm` 硬编码配置不好排查**：补了 `STUDIOUS_LLM_BASE_URL / _API_KEY / _MODEL` 环境变量覆盖（默认值不变），
   借此实测了 401（key 无效）、404（模型不存在）、连接拒绝三条错误映射。
+
+## 2026-11-04 前端「获取模型」+ 模型/思考等级下拉（只动 frontend/）
+
+### 成功路线
+1. 读 `backend/include/studious/llm/{LlmCatalog,LlmModelInfo}.h` 确认新 API：
+   `llm::listModels(cfg, http)` 返回 `ModelListResult`；`reasoningOptionsFor(model)` 纯计算推导等级。
+2. `SettingsDialog`：`m_model` 由 QLineEdit 换 `QComboBox`（`setEditable(true)` +
+   `NoInsert`，网关不支持 /models 时手输不污染列表），新增 `m_fetchModelsButton` / `m_fetchStatus`（11px 小字、灰/绿/红，默认隐藏）。
+3. 「获取模型」：`QtConcurrent::run(&runListModelsInWorkerThread, cfg)`，工作线程内现造
+   `studious::net::QtHttpClient` 调 `llm::listModels`，只把 `ModelListResult` 交回
+   `QFutureWatcher<studious::llm::ModelListResult>`（**未加 Q_DECLARE_METATYPE，直接能编**）。
+   成功后重填下拉（`userData`=id、tooltip=`name / 推理=是|否 / 上限=a/b`），原值还在就保留、否则选第一项。
+4. 「思考等级」不再写死 6 项：`rebuildReasoningOptions()` 按 `m_model->currentText()` 在
+   `m_modelInfos` 里查能力，查不到就造 `supportsReasoning = true` 的默认对象（保证手输也能看到全部等级），
+   重填前记住 `currentData()`、重填后按 `indexOfReasoningOption` 恢复；`options.size()==1` 时 `setEnabled(false)`
+   但**保留 data**（空串），这样置灰状态下 `uiToConfig()` 仍能取到值喂给「测试连接」。
+5. `--list-models`：`QCoreApplication` + 主线程直接 `QtHttpClient`（`send()` 内部自带 QEventLoop，
+   命令行不需要 QtConcurrent），打印目录 + 该模型的思考等级，失败贴后端中文原因 exit 1。
+6. 验证：clean 构建 12 步 0 warning / 0 error；`--list-models` 列出 21 个模型；
+   `--smoke "Hello, world!" --to zh --engine llm` → 「你好，世界！」(1224ms)；
+   `--smoke "Hello" --to ja --engine mock` → 「【ja】Hello」；UIA 实测点「获取模型」→
+   绿字「已获取 21 个模型」、模型下拉 21 项、思考等级 6 项、测试连接仍「连接成功…2124 ms」。
+   截图：`frontend/build/gui_fetch_models.png`、`gui_model_dropdown.png`、`gui_reasoning_dropdown.png`、`gui_test_connection.png`。
+
+### 踩坑
+- **UIA 的 `RootElement.FindAll(Children, pid=...)` 看不到 Qt 模态对话框**：主窗口在、对话框不在。
+  用 Win32 `EnumWindows` 拿 HWND 再 `AutomationElement::FromHandle` 就正常。
+- **ComboBox 弹出层是独立顶层窗口**：条目要从弹出的那个 HWND 里 `FindAll(ListItem)`；
+  别按「标题为空」过滤（会把弹出层漏掉），只排除主窗口/对话框/ConsoleWindowClass。
+  另外弹出层只暴露**可见**条目（滚动出去的算不到，10/21 属于正常）。
+- **截图 `CopyFromScreen` 用 UIA 的 `BoundingRectangle` 会裁边**：这台机器 150% DPI，
+  UIA 报 620x560（逻辑）而实际 930x840 物理。先把对话框 `SetWindowPos` 到 (4,4)，
+  再固定截 960x900 区域，才拿到完整窗口。
+- **PS 5.1 跑中文 .ps1 必须带 BOM**（源码仍必须无 BOM）：自动化脚本先写成 UTF-8 无 BOM，
+  再用 `UTF8Encoding($true)` 重写一遍才不出乱码。
+- **`QComboBox::currentText()` 对可编辑下拉返回编辑框文本**：`uiToConfig()` 直接用它即可，
+  不用区分「列表选中」与「手输」。
+- **`findData("")` 能命中 value 为空串的项**：`applyToUi()` 恢复「跟随模型默认」靠的就是这个，
+  但首次填充（`count()==0`）要走「选 recommended」分支，否则会误选到最后一项。

@@ -11,6 +11,8 @@
 #include <QTimer>
 
 #include <studious/contract/Types.h>
+#include <studious/llm/LlmCatalog.h>
+#include <studious/net/QtHttpClient.h>
 
 #include <cstdio>
 #include <cstring>
@@ -36,6 +38,8 @@ void printUsage()
     say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
     say(QStringLiteral("        --llm-base <url> --llm-key <key> --llm-model <model>"));
     say(QStringLiteral("        （三项都不给时用 AppSettings::defaults() 的本机网关配置）"));
+    say(QStringLiteral("  studious.exe --list-models [--llm-base <url> --llm-key <key>]"));
+    say(QStringLiteral("                                     # 打印网关模型目录 + 思考等级，不开 GUI"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -161,10 +165,96 @@ int runSmoke(const QStringList &args)
     return exitCode;
 }
 
-bool hasSmokeFlag(int argc, char *argv[])
+// --list-models：命令行看清网关到底暴露了哪些模型、每个模型能选哪些思考等级。
+// 不开 GUI：只起 QCoreApplication，QtHttpClient::send() 内部自带 QEventLoop。
+int runListModels(const QStringList &args)
+{
+    QString llmBase;
+    QString llmKey;
+    QString llmModel;
+
+    for (int i = 0; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        const bool hasNext = (i + 1) < args.size();
+        if (arg == QLatin1String("--llm-base") && hasNext) {
+            llmBase = args.at(++i);
+        } else if (arg == QLatin1String("--llm-key") && hasNext) {
+            llmKey = args.at(++i);
+        } else if (arg == QLatin1String("--llm-model") && hasNext) {
+            llmModel = args.at(++i);
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage();
+            return 0;
+        }
+    }
+
+    // 与 --smoke 同一约定：三项没给就用 AppSettings::defaults() 的本机网关配置。
+    studious::config::LlmConfig cfg = AppSettings::defaults().llm;
+    if (!llmBase.isEmpty()) {
+        cfg.baseUrl = llmBase;
+    }
+    if (!llmKey.isEmpty()) {
+        cfg.apiKey = llmKey;
+    }
+    if (!llmModel.isEmpty()) {
+        cfg.model = llmModel;
+    }
+
+    say(QStringLiteral("=== 模型目录 ==="));
+    say(QStringLiteral("baseUrl = %1").arg(cfg.baseUrl));
+
+    studious::net::QtHttpClient http;   // 本线程构造；send() 里自带事件循环，无需 QtConcurrent
+    const studious::llm::ModelListResult result = studious::llm::listModels(cfg, http);
+    if (!result.ok) {
+        say(QStringLiteral("[FAIL] ")
+            + (result.error.isEmpty() ? QStringLiteral("获取模型失败（后端未给出原因）")
+                                      : result.error));
+        return 1;
+    }
+
+    say(QStringLiteral("共 %1 个模型").arg(result.models.size()));
+    for (const studious::llm::LlmModelInfo &info : result.models) {
+        const QString limits = (info.maxInputTokens > 0 || info.maxOutputTokens > 0)
+                                   ? QStringLiteral("%1/%2")
+                                         .arg(info.maxInputTokens)
+                                         .arg(info.maxOutputTokens)
+                                   : QStringLiteral("未告知");
+        // id 补齐到 24 列，后面的「推理」「上限」才对得齐。
+        const QString id = info.id.leftJustified(24, QLatin1Char(' '));
+        say(QStringLiteral("  %1推理=%2  上限=%3")
+                .arg(id,
+                     info.supportsReasoning ? QStringLiteral("是") : QStringLiteral("否"),
+                     limits));
+    }
+
+    // 思考等级演示：优先用 --llm-model 指定且真实存在的模型，否则用列表第一项。
+    const studious::llm::LlmModelInfo *sample =
+        result.models.isEmpty() ? nullptr : &result.models.first();
+    for (const studious::llm::LlmModelInfo &info : result.models) {
+        if (info.id.compare(cfg.model.trimmed(), Qt::CaseInsensitive) == 0) {
+            sample = &info;
+            break;
+        }
+    }
+    if (sample != nullptr) {
+        say(QStringLiteral("--- 思考等级（%1）---").arg(sample->id));
+        const QVector<studious::llm::ReasoningOption> options =
+            studious::llm::reasoningOptionsFor(*sample);
+        for (const studious::llm::ReasoningOption &option : options) {
+            // 空 value = 请求里不发送 reasoning_effort（跟随服务端默认），打出来才看得清。
+            const QString value = option.value.isEmpty() ? QStringLiteral("<空>") : option.value;
+            say(QStringLiteral("  [%1] %2").arg(value, option.label));
+        }
+    }
+
+    say(QStringLiteral("[OK] exit 0"));
+    return 0;
+}
+
+bool hasFlag(int argc, char *argv[], const char *flag)
 {
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--smoke") == 0) {
+        if (std::strcmp(argv[i], flag) == 0) {
             return true;
         }
     }
@@ -175,8 +265,14 @@ bool hasSmokeFlag(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
-    // 先看命令行：冒烟模式只起 QCoreApplication，不碰 GUI 平台插件。
-    if (hasSmokeFlag(argc, argv)) {
+    // 先看命令行：--list-models / --smoke 都只起 QCoreApplication，不碰 GUI 平台插件。
+    if (hasFlag(argc, argv, "--list-models")) {
+        QCoreApplication app(argc, argv);
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        return runListModels(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--smoke")) {
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         return runSmoke(QCoreApplication::arguments());
