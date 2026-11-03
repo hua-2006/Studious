@@ -796,6 +796,24 @@ Windows 控制台默认 cp936，`toLocal8Bit()` 会把 UTF-8 内容转成 GBK �
 
 `QTextCodec` 从 Core 移到 Core5Compat，不要再指望用它做转码。
 
+**坑 7：`.ps1` 脚本必须存成 UTF-8 **带 BOM**
+
+Windows PowerShell 5.1 对无 BOM 的 `.ps1` 按 ANSI(cp936) 解码，脚本里的中文字符串会被打乱，进而导致**语法解析失败**（报 `Unexpected token`）。
+
+另外 `Set-Content -Encoding utf8` 在 PS 5.1 下写出的是**带 BOM**的，但很多编辑器/工具默认存无 BOM —— 用 git 的 `.gitattributes` 也管不了 BOM。
+
+**结论**：交付给用户的 `.ps1` 一律写成 `UTF8Encoding($true)`（带 BOM）。
+
+**坑 8：PATH 必须包含 `mingw_64\bin`，不是 `mingw_64`**
+
+Qt 的 DLL 在 `Qt\6.12.0\mingw_64\bin`。只把 `mingw_64` 加进 PATH，程序启动会以 **`0xC0000135`（-1073741515, DLL_NOT_FOUND）** 静默退出，**并且不打印任何输出** —— 极易被误判为"程序没输出/脚本吞了输出"。
+
+排查口诀：**看到 -1073741515，先查 Qt DLL 路径。**
+
+**坑 9：管道吞输出**
+
+`SomeFunction | Out-Null` 会把函数内部所有原生命令（cmake/ninja/子进程）的输出一并吞掉，只剩 `Write-Host` 能显示。构建脚本因此改为"捕获后逐行 Write-Host 输出"。
+
 ### 16.5 遗留
 
 - `LocalMtTranslator` / `LlmTranslator` 仍为桩，待 v2
