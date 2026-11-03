@@ -25,9 +25,15 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network Sql)
 # 两个 .c 必须都编进来：monocypher-ed25519.c 用到 monocypher.c 里的基础原语。
 set(MONOCYPHER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher)
 
+# 第三方：miniz 3.0.2（MIT / public domain amalgamation 单文件版）。
+# 只用它的 zip **读取**（解压资产包），不用它的压缩写入。
+set(MINIZ_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz)
+
 # 注意：只用 Qt Core / Network，不引 Widgets / Gui，后端保持无 UI 依赖。
 add_library(backend STATIC
     src/contract/LanguageRegistry.cpp
+    src/i18n/L10n.cpp
+    src/net/IHttpClient.cpp
     src/net/QtHttpClient.cpp
     src/translators/adapters/GoogleFreeAdapter.cpp
     src/translators/adapters/MyMemoryAdapter.cpp
@@ -41,10 +47,13 @@ add_library(backend STATIC
     src/router/TranslatorRouter.cpp
     src/cache/TranslationCache.cpp
     src/asset/ManifestParser.cpp
+    src/asset/AssetRegistry.cpp
+    src/asset/Downloader.cpp
     src/Factory.cpp
     # ---- 第三方（C） ----
     ${MONOCYPHER_DIR}/monocypher.c
     ${MONOCYPHER_DIR}/monocypher-ed25519.c
+    ${MINIZ_DIR}/miniz.c
 )
 
 target_include_directories(backend PUBLIC
@@ -60,6 +69,9 @@ target_include_directories(backend PUBLIC
 # 不对外暴露：外部不需要知道我们用了哪个加密库。
 target_include_directories(backend PRIVATE ${MONOCYPHER_DIR})
 
+# miniz 同理：解压是实现细节，调用方只关心 Downloader 的接口。
+target_include_directories(backend PRIVATE ${MINIZ_DIR})
+
 target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
 
 # 控制台自测程序
@@ -70,6 +82,8 @@ set_target_properties(backend_selftest PROPERTIES
 )
 # 自测里用 TEST seed 现场签一份清单，所以也需要 Monocypher 头。
 target_include_directories(backend_selftest PRIVATE ${MONOCYPHER_DIR})
+# --assets 用例要现场造 zip（含 zip-slip 恶意包），所以自测也直接引 miniz。
+target_include_directories(backend_selftest PRIVATE ${MINIZ_DIR})
 
 # 开发/发布用清单工具（genkey / sign / verify）。不随产品分发，不进安装规则。
 add_executable(manifest_tool tools/manifest_tool.cpp)

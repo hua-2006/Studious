@@ -155,3 +155,108 @@ qarraydataops.h:311: error: use of deleted function 'std::unique_ptr<...>::uniqu
 
 Google 免费接口限流/要求验证码时返回的是 HTML 页面，不是 JSON。解析失败时错误信息里带
 响应前 200 字节，排查时直接看这段就能判断是限流还是 URL 拼错。
+
+### 5.5 i18n：静态表会把语言烤死在第一次调用上
+
+`WebProvider` 的来源表原本是 `static const QVector<...>` 常量，`note` 直接是中文。
+改成 `i18n::s(...)` 之后**不能再用 static 缓存**：静态初始化只跑一次，之后切语言全是旧文案。
+现在的写法是 `buildProviderTable()` 每次取词重建（3 条，成本可忽略）。
+
+同理，`i18n::sf()` 的参数替换必须**单遍扫描**：用 `QString::arg()` 逐个替换时，
+参数里的 `%20`（URL 百分号编码）会被当成占位符二次替换，串成乱七八糟的东西。
+
+### 5.6 `IHttpClient` 必须能流式收，否则下不了几个 GB 的模型
+
+`send()` 返回整份 `QByteArray`，用在 3 GB 的 .gguf 上就是直接 OOM。
+所以 `IHttpClient` 加了 `sendStream(req, callbacks)`：`onStart(status, contentLength)` 先决定收不收，
+`onData(chunk, received)` 逐块交数据。`QtHttpClient` 用 `QNetworkReply::readyRead` 真流式实现；
+默认实现（供测试替身）退化成 `send()` + 64 KiB 切块。
+
+两个必须注意的点：
+
+1. **`onStart` 返回 false 之后，一个字节都不能写文件**。否则 404 的 HTML 错误页会被当成包内容
+   拼进 `.part`，后面校验报"哈希不匹配"，排查方向全错。
+2. **超时要用空闲语义**。`QNetworkRequest::setTransferTimeout()` 对大文件是灾难，
+   流式路径里改成"连续 N 秒没有新数据才 abort"（每收到一块就重置计时器）。
+
+### 5.7 断点续传的三个分支，少一个就出脏包
+
+- `206`：追加写，`total = Content-Length + 已有长度`；
+- `200`：服务端不支持 Range → **必须 `truncate` 到 0 再写**，否则新旧字节拼接，哈希必然不匹配；
+- `416`：Range 无法满足 → `.part` 已经完整，直接跳到校验。
+
+还有：请求要带 `Accept-Encoding: identity`。服务端一 gzip，`Content-Length` 与已下载字节数
+就对不上，续传位置全错。
+
+### 5.8 zip 解压：miniz 用回调，别用 `_init_file`
+
+`mz_zip_reader_init_file()` 收的是 `const char*`，Windows 下按 8-bit 本地编码打开文件——
+中文用户名直接打不开。现在用 `mz_zip_reader_init(pZip, size, 0)` + `m_pRead` 回调（内部走 `QFile`），
+解压写盘用 `mz_zip_reader_extract_to_callback()`。顺带避免把整个 zip 读进内存。
+
+zip-slip 三道闸，缺一不可：
+1. 条目名含 `..` 段 → 拒绝；
+2. 绝对路径 / 带盘符（`/x`、`C:`）→ 拒绝；
+3. 符号链接条目（`m_external_attr` 高位 = `S_IFLNK`）→ 拒绝。
+
+解压目标是 `<target>.tmp`，全部成功才 `rename` 成 `<target>`；失败一律把 `.tmp` 删干净，
+绝不留下"半个安装"。
+
+## 6. 双语文案（i18n）
+
+```cpp
+#include "i18n/L10n.h"
+
+out.error = i18n::s("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型",
+                    "LLM API is not configured. Please set the API URL, key and model in Settings.");
+out.error = i18n::sf("目标语言 %1 第 %2 段失败：%3",
+                     "Target language %1, paragraph %2 failed: %3", {dst, i + 1, err});
+```
+
+- `i18n::current()` **只看系统语言**（`QLocale::system().language() == QLocale::Chinese` → 中文，其余英文），
+  不读任何配置文件；`setLanguage()` 只是给测试/前端设置用的显式覆盖。
+- 所有会显示给用户的东西（`TranslateOutcome::error`、`ResolveResult::reason`、`WebProviderInfo::note`、
+  `AssetStatus::detail`、`DownloadResult::error`、`ManifestLoadResult::error`）都是**已本地化的最终文本**，
+  调用方直接显示，不要自己再拼前缀。
+- 注释、日志、selftest 的输出标题一律保持中文，不进 i18n。
+
+## 7. 资产：下载 / 安装 / 删除
+
+```
+AssetRegistry ── 状态真源（磁盘扫描）
+     ▲   │
+     │   └─> targetPath(): <root>/models/<id> | <root>/runtime/<id>
+Downloader ── 多源 failover → Range 续传 → sha256 校验 → 原子落盘 → markInstalled()
+```
+
+磁盘布局：
+
+```
+<installRoot>/
+├─ downloads/<id>.part          # 断点续传的半成品（取消/失败都保留）
+├─ models/<id>                  # model 类：单文件就是文件，zip 就解成目录
+└─ runtime/<id>                 # runtime 类：通常 zip 解出的目录
+```
+
+关键约束：
+
+1. `sha256` 为空 = 未发布正式哈希 → 直接报错，**不允许跳过校验安装**；
+2. 哈希不符 → 删 `.part` 并报"实际 vs 期望"，绝不安装；
+3. `uninstall()` 幂等（不存在也 true），并顺手清掉 `<id>.part`；
+4. `refresh()` 的判定：路径不存在 → `NotInstalled`；存在但是空目录/0 字节文件/缺点名文件 → `Corrupted`；
+   否则 `Installed`。
+
+## 8. 自测模式
+
+```powershell
+backend_selftest.exe             # 核心 + 真实 Web（允许失败）
+backend_selftest.exe --offline   # 跳过网络
+backend_selftest.exe --manifest  # 清单解析 + ed25519 验签
+backend_selftest.exe --i18n      # 错误文案中英双语（离线）
+backend_selftest.exe --assets    # 下载/续传/failover/取消/校验/zip/zip-slip/卸载（本地 HTTP 服务器）
+backend_selftest.exe --cache     # 翻译缓存（需要本机 LLM 网关）
+```
+
+`--assets` 完全不碰外网：`QTcpServer` 起在 `127.0.0.1` 随机端口，`/file` 返回 512 KiB 确定性数据
+并支持 `Range`，`/bad` 返回与清单哈希不符的内容，其它路径 404；服务器侧会记录收到过几次 Range 请求，
+用来证明续传真的走了 `206` 而不是整份重下。

@@ -1,6 +1,7 @@
 #include "translators/adapters/MyMemoryAdapter.h"
 
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -78,11 +79,14 @@ WebAdapterResult MyMemoryAdapter::translate(net::IHttpClient &http,
                                               : core::LanguageRegistry::toMyMemory(srcNormalized);
     const QString dst = core::LanguageRegistry::toMyMemory(dstLang);
     const QString limitationNote = autoFallback
-        ? QStringLiteral("（限制：MyMemory 不支持 auto 自动检测，已固定使用 en 作为代理源语言）")
+        ? i18n::s("（限制：MyMemory 不支持 auto 自动检测，已固定使用 en 作为代理源语言）",
+                  " (limitation: MyMemory cannot auto-detect the source language, so en is used as "
+                  "the proxy source language)")
         : QString();
 
     if (dst.isEmpty() || dst == QLatin1String("auto")) {
-        r.error = QStringLiteral("mymemory: 目标语言无效") + limitationNote;
+        r.error = i18n::s("mymemory: 目标语言无效", "mymemory: invalid target language")
+                  + limitationNote;
         return r;
     }
 
@@ -102,17 +106,19 @@ WebAdapterResult MyMemoryAdapter::translate(net::IHttpClient &http,
     r.httpStatus = resp.status;
 
     if (!resp.ok) {
-        r.error = QStringLiteral("mymemory: %1%2")
-                      .arg(resp.error.isEmpty() ? QStringLiteral("请求失败") : resp.error,
-                           limitationNote);
+        r.error = i18n::sf("mymemory: %1%2", "mymemory: %1%2",
+                           {resp.error.isEmpty() ? i18n::s("请求失败", "the request failed")
+                                                 : resp.error,
+                            limitationNote});
         return r;
     }
 
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        r.error = QStringLiteral("mymemory: 响应解析失败（%1）；响应片段：%2")
-                      .arg(perr.errorString(), QString::fromUtf8(resp.body.left(200)))
+        r.error = i18n::sf("mymemory: 响应解析失败（%1）；响应片段：%2",
+                           "mymemory: failed to parse the response (%1); response snippet: %2",
+                           {perr.errorString(), QString::fromUtf8(resp.body.left(200))})
                   + limitationNote;
         return r;
     }
@@ -125,18 +131,21 @@ WebAdapterResult MyMemoryAdapter::translate(net::IHttpClient &http,
     const int statusCode = statusText.toInt(&statusOk);
     if (!statusOk || statusCode != 200) {
         const QString detail = obj.value(QStringLiteral("responseDetails")).toString();
-        r.error = QStringLiteral("mymemory: responseStatus=%1，%2%3")
-                      .arg(statusText,
-                           detail.isEmpty() ? QStringLiteral("接口返回失败") : detail,
-                           limitationNote);
+        r.error = i18n::sf("mymemory: responseStatus=%1，%2%3",
+                           "mymemory: responseStatus=%1, %2%3",
+                           {statusText,
+                            detail.isEmpty() ? i18n::s("接口返回失败", "the API reported a failure")
+                                             : detail,
+                            limitationNote});
         return r;
     }
 
     const QJsonObject data = obj.value(QStringLiteral("responseData")).toObject();
     const QString translated = data.value(QStringLiteral("translatedText")).toString().trimmed();
     if (translated.isEmpty()) {
-        r.error = QStringLiteral("mymemory: 译文为空；响应片段：%1")
-                      .arg(QString::fromUtf8(resp.body.left(200)))
+        r.error = i18n::sf("mymemory: 译文为空；响应片段：%1",
+                           "mymemory: the translation is empty; response snippet: %1",
+                           {QString::fromUtf8(resp.body.left(200))})
                   + limitationNote;
         return r;
     }

@@ -1,6 +1,7 @@
 #include "translators/WebTranslator.h"
 
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 
 #include <QSet>
 
@@ -31,7 +32,7 @@ core::ResolveResult WebTranslator::resolve(const QString &src, const QString &ds
     Q_UNUSED(dst)
     core::ResolveResult r;
     r.ready = true;
-    r.reason = QStringLiteral("web 无需资产");
+    r.reason = i18n::s("web 无需资产", "The web engine needs no assets");
     return r;
 }
 
@@ -79,11 +80,13 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
     m_cancelRequested = false;
 
     if (m_adapters.isEmpty()) {
-        out.error = QStringLiteral("web 引擎没有注册任何适配器");
+        out.error = i18n::s("web 引擎没有注册任何适配器",
+                            "The web engine has no adapters registered");
         return out;
     }
     if (dstLangs.isEmpty()) {
-        out.error = QStringLiteral("web 引擎未收到目标语言");
+        out.error = i18n::s("web 引擎未收到目标语言",
+                            "The web engine received no target language");
         return out;
     }
 
@@ -96,7 +99,8 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
     for (const QString &rawDst : dstLangs) {
         const QString dst = core::LanguageRegistry::normalize(rawDst);
         if (dst.isEmpty() || dst == QLatin1String("auto")) {
-            langErrors << QStringLiteral("目标语言 \"%1\" 无效").arg(rawDst);
+            langErrors << i18n::sf("目标语言 \"%1\" 无效", "Invalid target language \"%1\"",
+                                   {rawDst});
             continue;
         }
 
@@ -108,7 +112,8 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
             }
         }
         if (candidates.isEmpty()) {
-            langErrors << QStringLiteral("目标语言 %1 没有适配器支持").arg(dst);
+            langErrors << i18n::sf("目标语言 %1 没有适配器支持",
+                                   "No adapter supports the target language %1", {dst});
             continue;
         }
 
@@ -118,7 +123,7 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
 
         for (int i = 0; i < paragraphs.size(); ++i) {
             if (m_cancelRequested) {
-                out.error = QStringLiteral("web 翻译已取消");
+                out.error = i18n::s("web 翻译已取消", "The web translation was cancelled");
                 return out;
             }
 
@@ -135,9 +140,11 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
                 // 未配置的来源（如 Azure 还没填 key）不必发请求：记一条原因，
                 // 继续尝试下一个适配器，绝不因为"这家没配"就整体中断。
                 if (!adapter->isConfigured()) {
-                    adapterErrors << QStringLiteral("%1: 尚未配置（需要 API key 才能使用），已跳过")
-                                         .arg(adapter->displayName().isEmpty() ? adapter->id()
-                                                                              : adapter->displayName());
+                    adapterErrors << i18n::sf(
+                                         "%1: 尚未配置（需要 API key 才能使用），已跳过",
+                                         "%1: not configured yet (an API key is required), skipped",
+                                         {adapter->displayName().isEmpty() ? adapter->id()
+                                                                          : adapter->displayName()});
                     continue;
                 }
 
@@ -145,7 +152,8 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
                 if (r.ok) {
                     const QString text = r.text.trimmed();
                     if (text.isEmpty()) {
-                        adapterErrors << QStringLiteral("%1 返回空译文").arg(adapter->id());
+                        adapterErrors << i18n::sf("%1 返回空译文", "%1 returned an empty translation",
+                                                  {adapter->id()});
                         continue;
                     }
                     translated << text;
@@ -165,10 +173,10 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
             if (!done) {
                 translated << QString();
                 if (firstParagraphError.isEmpty()) {
-                    firstParagraphError = QStringLiteral("目标语言 %1 第 %2 段全部适配器失败 [%3]")
-                                              .arg(dst)
-                                              .arg(i + 1)
-                                              .arg(adapterErrors.join(QStringLiteral(" | ")));
+                    firstParagraphError =
+                        i18n::sf("目标语言 %1 第 %2 段全部适配器失败 [%3]",
+                                 "Target language %1, paragraph %2: every adapter failed [%3]",
+                                 {dst, i + 1, adapterErrors.join(QStringLiteral(" | "))});
                 }
             }
         }
@@ -181,7 +189,7 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
 
     out.ok = langErrors.isEmpty();
     if (!out.ok) {
-        out.error = langErrors.join(QStringLiteral("；"));
+        out.error = langErrors.join(i18n::s("；", "; "));
     }
     return out;
 }

@@ -1,5 +1,6 @@
 #include "translators/WebProvider.h"
 
+#include "i18n/L10n.h"
 #include "translators/adapters/AzureTranslatorAdapter.h"
 #include "translators/adapters/GoogleFreeAdapter.h"
 #include "translators/adapters/MyMemoryAdapter.h"
@@ -13,39 +14,48 @@ namespace {
 // 来源元信息表。顺序即默认优先级：Google（覆盖广）-> MyMemory（能兜底）。
 // 表格里的 configured 只是"静态默认值"（有没有可用凭据），
 // 真正装进 WebTranslator 后以适配器自己的 isConfigured() 为准。
-const QVector<WebProviderInfo> &providerTable()
+//
+// displayName / note 都是面向用户的文案，**每次调用重新取词**：
+// 语言切换后立刻生效，所以这张表不能做成 static 缓存。
+QVector<WebProviderInfo> buildProviderTable()
 {
-    static const QVector<WebProviderInfo> table = {
+    return {
         {QStringLiteral("google"),
-         QStringLiteral("Google 在线翻译"),
+         i18n::s("Google 在线翻译", "Google translate (web)"),
          false,
          true,
-         QStringLiteral("免费，无需 key；国内网络通常需要代理，高频请求会被限流")},
+         i18n::s("免费，无需 key；国内网络通常需要代理，高频请求会被限流",
+                 "Free, no key needed. Usually requires a proxy in mainland China, and heavy use "
+                 "gets rate limited")},
         {QStringLiteral("azure"),
-         QStringLiteral("Microsoft Azure 翻译"),
+         i18n::s("Microsoft Azure 翻译", "Microsoft Azure Translator"),
          true,
          false,
-         QStringLiteral("需 Azure 订阅 key + 区域；免费层 F0 约 200 万字符/月，v1 仅保留接口尚未接入")},
+         i18n::s("需 Azure 订阅 key + 区域；免费层 F0 约 200 万字符/月，v1 仅保留接口尚未接入",
+                 "Needs an Azure subscription key and region; the free F0 tier covers about 2 "
+                 "million characters per month. v1 keeps the interface only, not wired up yet")},
         {QStringLiteral("mymemory"),
-         QStringLiteral("MyMemory 记忆库"),
+         i18n::s("MyMemory 记忆库", "MyMemory translation memory"),
          false,
          true,
-         QStringLiteral("免费，无需 key；不支持源语言自动检测（源语言未知时固定按 en 处理），额度有限")},
+         i18n::s("免费，无需 key；不支持源语言自动检测（源语言未知时固定按 en 处理），额度有限",
+                 "Free, no key needed. No source-language auto detection (falls back to en when the "
+                 "source is unknown), and the quota is limited")},
     };
-    return table;
 }
 
 } // namespace
 
 QVector<WebProviderInfo> listWebProviders()
 {
-    return providerTable();
+    return buildProviderTable();
 }
 
 WebProviderInfo findWebProvider(const QString &id)
 {
     const QString key = id.trimmed().toLower();
-    for (const WebProviderInfo &info : providerTable()) {
+    const QVector<WebProviderInfo> table = buildProviderTable();
+    for (const WebProviderInfo &info : table) {
         if (info.id == key) {
             return info;
         }

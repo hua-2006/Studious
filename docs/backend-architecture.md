@@ -1228,3 +1228,129 @@ manifest_tool verify <manifest.json> [pubkeyHex]       # 不带 pubkey 时只做
 
 `ManifestVerifyOptions` 有 `allowMissingSha256`（**默认 false**）。
 原因：示例 `manifest.json` 里模型条目有 urls 但 sha256 待填。发布路径永远不要开这个开关——否则等于给占位哈希开后门。只有 `manifest_tool verify` 不带公钥的开发分支会开。
+
+---
+
+## 20. 资产下载 / 安装 / 删除（v0.4）
+
+### 20.1 为什么要先做"流式 HTTP"
+
+原来的 `IHttpClient::send()` 是一次性把整个响应读进内存。GB 级模型这样用会直接吃掉几 GB 内存，而且**没法做进度条、没法断点续传**。
+
+所以先给端口加流式能力：
+
+```cpp
+struct HttpStreamCallbacks {
+    std::function<bool(int status, qint64 contentLength)> onStart;   // false = 拒收
+    std::function<bool(const QByteArray &chunk, qint64 receivedTotal)> onData;  // false = 中止
+};
+virtual HttpResponse sendStream(const HttpRequest &, const HttpStreamCallbacks &);
+```
+
+`IHttpClient` 提供默认实现（退化为整体读取），`QtHttpClient` 覆写为真流式。
+
+### 20.2 下载流程
+
+```
+download(assetId)
+  ├─ 清单里查资产；sha256 为空（占位）→ 直接报"尚未发布正式哈希"
+  ├─ 目标 .part = <root>/downloads/<id>.part
+  ├─ 按 urls 顺序尝试（多源 failover）
+  │    ├─ .part 已有 N 字节 → 发 Range: bytes=N-
+  │    ├─ 206 → 追加写
+  │    ├─ 200 → 服务端不支持续传 → truncate 到 0 重写
+  │    └─ 416 → .part 已完整 → 直接进校验
+  ├─ 每收一块（64KiB）落盘 + 回调 progress
+  ├─ 下载完 → sha256 比对
+  │    └─ 不符 → 删 .part + 报错（带实际/期望哈希）
+  └─ 安装：zip → 解压到 <target>.tmp → rename；单文件 → 直接 rename
+       └─ 成功后 registry.markInstalled() + 删 .part
+```
+
+### 20.3 四个必须踩对的细节
+
+| # | 细节 | 踩错的后果 |
+|---|---|---|
+| 1 | `onStart` 返回 false 后**一个字节都不能写文件** | 404 的 HTML 混进 .part，最后报"哈希不匹配"，排查方向全错 |
+| 2 | 流式**不能用 `setTransferTimeout()`** | GB 级下载必被误杀；改成"每收一块重置的空闲超时" |
+| 3 | 续传必须区分 206/200/416 三分支 | 200 分支不 truncate 会写出"旧+新"混合文件 |
+| 4 | 请求带 `Accept-Encoding: identity` | 服务器 gzip 后长度与内容全错 |
+
+### 20.4 zip-slip 三道闸
+
+恶意 zip 能写到目标目录之外（也顺手防 zip bomb）：
+
+1. 条目名含 `..` 路径段 → 拒绝
+2. 绝对路径 / 带盘符（`C:\`）→ 拒绝
+3. 符号链接条目（`m_external_attr` 高位 `S_IFLNK`）→ 拒绝
+
+解压到 `<target>.tmp`，全部成功才 `rename`；失败把 `.tmp` 删干净。
+
+实测：`../evil.txt` 被拒绝，无文件逃逸。
+
+### 20.5 miniz 选型
+
+| 项 | 说明 |
+|---|---|
+| 版本 | 3.0.2 **官方 release 的 amalgamation 单文件版** |
+| 为什么不用 master | master 已拆成 4 个 .c + 若干头，且需要 CMake 生成 `miniz_export.h` / `miniz_common.h`，直接源码引入编译不过 |
+| 用哪个 API | 回调式 `mz_zip_reader_init` + `m_pRead` + `mz_zip_reader_extract_to_callback` |
+| 为什么 | `mz_zip_reader_init_file()` 吃 `char*` 本地编码，**中文用户名路径会打不开**；回调式还能避免整包进内存 |
+
+### 20.6 删除（卸载）
+
+```cpp
+bool uninstall(const QString &id, QString *error = nullptr);   // 幂等：不存在也返回 true
+```
+
+要求：
+- 递归删除 `<root>/{models,runtime}/<id>` 与 `.part`
+- 删完 `refresh()` 状态回 `NotInstalled`
+- **幂等**：重复调用不报错（UI 上连点两次不应该弹错误）
+
+**为什么删除必须和下载一起做**：资产是 GB 级，用户装错了模型、或磁盘紧张时要能立刻清掉；没有删除的下载器等于只能装不能卸。
+
+### 20.7 状态判定
+
+| 状态 | 判据 |
+|---|---|
+| `Installed` | 目标路径存在且非空 |
+| `Corrupted` | 路径存在，但缺失清单 `files` 里声明的关键文件 |
+| `NotInstalled` | 其它 |
+
+`Corrupted` 是必要的：用户手工删了目录里一个 dll，程序不能还认为"已安装"然后启动失败。
+
+### 20.8 错误提示中英双语
+
+新增 `i18n/L10n.h`：
+
+```cpp
+enum class Language { Chinese, English };
+Language current();                       // 默认跟 QLocale::system()，不读配置
+void setLanguage(Language);               // 前端设置页切语言
+QString s(const char *zh, const char *en);
+QString sf(const char *zh, const char *en, const QVariantList &args);  // %1 %2
+```
+
+**所有面向用户的 error / reason / note 都走 `i18n::s()`**，调用方直接显示，不再二次判断语言。
+
+一个坑：`sf()` **不能**用 `QString::arg()` 逐个替换 —— 参数里的 `%20`（URL 编码）会被当成占位符二次替换。改成单遍扫描。
+
+另一个坑：`WebProvider` 的来源表原来是 `static const`，加 i18n 后必须每次重建，否则语言会被"烤死"在第一次调用的结果里。
+
+### 20.9 自测（`--assets`，11 个用例）
+
+用 **进程内 QTcpServer 起临时 HTTP 服务**做确定性测试（不依赖外网）：
+
+| 用例 | 断言 |
+|---|---|
+| `assetsDownloadOk` | 512KB 下载成功、9 次进度回调、sha256 一致 |
+| `assetsShaMismatch` | 失败且 `.part` 被清理 |
+| `assetsResume` | 预置半截 `.part`，服务器收到 1 次 `Range`，最终内容正确 |
+| `assetsFailover` | urls = [坏端口, 本地服务] → 最终 `sourceIndex=1` |
+| `assetsCancel` | 取消后 `.part` 保留 |
+| `assetsZipInstall` / `assetsZipSlip` | 正常解压 / `../evil.txt` 被拒 |
+| `assetsInstallFromFile` | 手动导入 |
+| `assetsCorrupted` | 删关键文件后 `refresh()` → `Corrupted` |
+| `assetsUninstall` | 删除后 `NotInstalled`，重复删除仍 true |
+| `assetsStatusList` / `assetsI18n` | 列表与双语 |

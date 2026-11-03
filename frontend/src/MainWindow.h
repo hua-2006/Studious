@@ -39,6 +39,7 @@ protected:
 private slots:
     void onTranslateClicked();
     void onOpenSettings();
+    void onOpenAssets();
     void onTranslationFinished(const TranslateJobResult &result, qint64 elapsedMs);
 
 private:
@@ -64,6 +65,7 @@ private:
     QComboBox *m_webProviderBox = nullptr;
     QPushButton *m_translateButton = nullptr;
     QPushButton *m_settingsButton = nullptr;
+    QPushButton *m_assetsButton = nullptr;   // 「资产…」：模型 / 运行时下载与管理
     QCheckBox *m_showSourceCheck = nullptr;
     QCheckBox *m_cacheCheck = nullptr;   // 「启用缓存」
     QPlainTextEdit *m_input = nullptr;

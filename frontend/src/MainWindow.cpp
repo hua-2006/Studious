@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "AssetDialog.h"
 #include "SettingsDialog.h"
 #include "TranslateJob.h"
 
@@ -117,7 +118,12 @@ MainWindow::MainWindow(studious::cache::TranslationCache *cache, QWidget *parent
 
     connect(m_translateButton, &QPushButton::clicked, this, &MainWindow::onTranslateClicked);
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onOpenSettings);
+    connect(m_assetsButton, &QPushButton::clicked, this, &MainWindow::onOpenAssets);
     connect(m_job, &TranslateJob::finished, this, &MainWindow::onTranslationFinished);
+
+    // Ctrl+Alt+A 打开资产对话框：菜单栏没有「工具」这类入口，给个快捷键省得摸鼠标。
+    auto *shortcutAssets = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+A")), this);
+    connect(shortcutAssets, &QShortcut::activated, this, &MainWindow::onOpenAssets);
 
     // Ctrl+Enter / Ctrl+Return 都能触发。两个不同 keysym 各注册一次，
     // 不要给按钮再 setShortcut 同一个序列，否则会变成 ambiguous shortcut 谁都不触发。
@@ -188,7 +194,12 @@ void MainWindow::buildUi()
     m_webProviderBox = newLangBox();
     m_webProviderBox->setMinimumWidth(240);
     m_settingsButton = new QPushButton(QStringLiteral("设置…"));
-    m_settingsButton->setToolTip(QStringLiteral("LLM 网关 / API Key / 模型 / 采样参数"));
+    m_settingsButton->setToolTip(QStringLiteral("LLM 网关 / API Key / 模型 / 采样参数 / 界面语言"));
+
+    // 资产：模型 / 运行时的下载、删除、手动导入（对应清单 manifest.json）。
+    m_assetsButton = new QPushButton(QStringLiteral("资产…"));
+    m_assetsButton->setToolTip(QStringLiteral(
+        "模型与运行时管理：下载 / 取消 / 删除 / 手动导入（快捷键 Ctrl+Alt+A）"));
 
     // 缓存开关：勾着 = 命中缓存的段落不再发请求（重复文本秒出）。
     m_cacheCheck = new QCheckBox(QStringLiteral("启用缓存"));
@@ -200,6 +211,7 @@ void MainWindow::buildUi()
     sourceBar->addWidget(m_webProviderBox);
     sourceBar->addStretch(1);
     sourceBar->addWidget(m_cacheCheck);
+    sourceBar->addWidget(m_assetsButton);
     sourceBar->addWidget(m_settingsButton);
     root->addLayout(sourceBar);
 
@@ -418,6 +430,13 @@ void MainWindow::onOpenSettings()
                     ? QStringLiteral("设置已保存（LLM：%1 / %2）")
                           .arg(m_settings.llm.model, m_settings.llm.baseUrl)
                     : QStringLiteral("设置已保存（LLM 未配置，将不会参与自动降级）"));
+}
+
+void MainWindow::onOpenAssets()
+{
+    // 模态对话框：清单默认取 <repo>/backend/asset/manifest.json，可在对话框内换文件。
+    AssetDialog dialog(this);
+    dialog.exec();
 }
 
 void MainWindow::onTranslateClicked()

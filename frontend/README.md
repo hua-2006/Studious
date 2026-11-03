@@ -38,7 +38,7 @@ $env:Path = "C:\Code\language\Qt\6.12.0\mingw_64\bin;" + $env:Path
 ```
 
 - 顶部第一行：源语言 / 目标语言 / 引擎 / 显示原文对照 / 翻译按钮（Ctrl+Enter、Ctrl+Return）
-- 顶部第二行：**来源**（Web 翻译来源下拉）+ **设置…**（打开「设置 — LLM 翻译」对话框）
+- 顶部第二行：**来源**（Web 翻译来源下拉）+ **资产…**（模型 / 运行时管理，Ctrl+Alt+A）+ **设置…**
 - 中间：左原文、右译文（QSplitter 可拖）
 - 底部：`引擎 / 耗时 ms / 段落数`，失败时红字显示后端 error；
   再下一行是各引擎就绪状态（来自 `router.status()`，如 `mock:就绪  web:就绪  llm:未就绪  local-mt:未就绪`，
@@ -67,6 +67,7 @@ $env:Path = "C:\Code\language\Qt\6.12.0\mingw_64\bin;" + $env:Path
 
 | 控件 | 说明 |
 |---|---|
+| 界面语言 | `跟随系统`（userData 空）/ `中文`（`zh`）/ `English`（`en`），**重启后生效** |
 | Base URL | 默认 `http://127.0.0.1:3065/v1` |
 | API Key | 默认 `12345678`，密码态 + 右侧「显示」勾选框切换明文 |
 | 模型 | 默认 `deepseek-v4.1-flash` |
@@ -88,6 +89,37 @@ $env:Path = "C:\Code\language\Qt\6.12.0\mingw_64\bin;" + $env:Path
 - 关窗时 `MainWindow::closeEvent()` 写回（语言 / 引擎 / 来源）。
 - 设置对话框点「确定」立即保存，随后**重建两个下拉**（`configured` 与 `llm.isValid()` 可能已变化）。
 - `llm` 配置无效（baseUrl 或 model 空）时，引擎下拉里的 `llm` 项显示 `llm（未配置）` 并置灰。
+
+### 2.4 资产 — 模型 / 运行时（AssetDialog，Ctrl+Alt+A）
+
+清单默认取 `<repo>/backend/asset/manifest.json`（`applicationDirPath()/../../backend/asset/manifest.json`），
+可点「浏览…」换文件。解析选项固定为**开发模式**：
+`requireSignature=false`（示例清单没签名）、`allowMissingSha256=true`（sha256 是待填占位）、
+`maxSchemaVersion=1`。解析失败弹 `QMessageBox` 显示后端 `error` 原文。
+
+| 列 | 内容 |
+|---|---|
+| ID / 类型 / 大小 | 清单条目；大小人类可读（B/KB/MB/GB，KB 以上 1 位小数） |
+| 状态 | `未安装`（灰）/ `已安装`（绿）/ `损坏`（红）；悬停看后端 detail |
+| 说明 | 清单 `note`；**占位条目**（`urls` 为空）显示 `未发布` |
+| 操作 | 未安装/损坏 → `下载` + `导入…`；已安装 → `删除`；下载中 → `取消` |
+
+- 安装根目录：`QStandardPaths::writableLocation(AppDataLocation) + "/assets"`，对话框底部小字显示。
+  实际布局由后端决定：`<root>/runtime/<id>`、`<root>/models/<id>`、`<root>/downloads/<id>.part`。
+- 底部：进度条 + 状态文本 + 右侧 `已安装总计: X`。
+- 错误一律显示**后端返回的已本地化文本**（例如占位条目 `暂无可用的下载地址`、
+  sha256 未发布 `该资产尚未发布正式哈希，暂不可下载`），前端不自己拼中文。
+- 删除前有确认框（默认按钮是「取消」）；删除会连 `.part` 一起清掉。
+
+### 2.5 界面语言（中 / 英）
+
+- `AppSettings::uiLanguage`（QSettings 键 `settings/ui/language`，空 = 跟随系统）。
+- `main.cpp` 在 `QApplication` 构造之后、建窗口之前调用
+  `i18n::setLanguage(Chinese|English)` 或 `i18n::resetToSystemLanguage()`。
+- 前端文案走 `studious::i18n::s(zh, en)`，后端文案自动跟随同一个覆盖。
+- **切换需要重启**：Qt 没有运行时重建界面的机制，设置页 tooltip 已注明。
+- 已知范围：本次只把「资产」对话框 + 设置页新行 + `--assets-cli` 做成双语；
+  主窗口/设置页的其余历史文案仍是中文（后续可按同样方式铺开）。
 
 ---
 
@@ -132,7 +164,29 @@ llm=deepseek-v4.1-flash @ http://127.0.0.1:3065/v1  timeout=60000 ms  temperatur
 
 ---
 
-## 4. 线程模型（本 demo 的核心约束）
+## 4. 资产清单命令行（`--assets-cli`）
+
+```powershell
+.\frontend\build\studious.exe --assets-cli "backend\asset\manifest.json"
+```
+
+```
+=== 资产清单 ===
+清单: C:\Code\code\project\Studious\backend\asset\manifest.json
+共 10 条（占位 1 条）
+  runtime.llama.vulkan.win-x64    runtime  250.0 MB  未安装
+  runtime.llama.vulkan.linux-x64  runtime  256.0 MB  未安装  占位
+  ...
+已安装总计: 0 B
+```
+
+- 只起 `QCoreApplication`，不开 GUI；解析选项与资产对话框一致（开发模式）。
+- 成功 exit 0；清单解析失败打印后端 `error` 原文并 exit 1。
+- 输出文案跟随「界面语言」（`en` 时整表变英文）。
+
+---
+
+## 5. 线程模型（本 demo 的核心约束）
 
 `net::QtHttpClient` 包着 `QNetworkAccessManager`，**只能在所属线程使用**。因此：
 
@@ -158,22 +212,30 @@ MainWindow ── start(req) ──> TranslateJob
   但对象必须与调用同线程，所以不能复用工作线程那个。
 - 设置对话框的「测试连接」同理：`QFutureWatcher<LlmTestResult>` 在主线程，
   真正的 `QtHttpClient` + `makeLlmTranslator()` 在 `QtConcurrent::run` 的线程里生灭。
+- 资产对话框同理，而且更严格：`AssetRegistry` 内部有状态缓存、**非线程安全**，
+  所以主线程留一个只读实例（列表 / 总占用 / 刷新），下载 / 导入 / 删除各自在工作线程里
+  **另建一个** `AssetRegistry(installRoot, manifest 副本)` + `QtHttpClient`，
+  磁盘是唯一共享点。进度回调只写 `std::atomic`（`AssetProgressShare`），
+  主线程 200 ms 的 `QTimer` 轮询刷新进度条——回调里绝不碰 QObject。
+  `cancelFlag` 用 `shared_ptr<atomic_bool>` 持有：对话框先关也不会让工作线程踩悬空指针。
 
 另外：`router::TranslatorList` 是 `std::vector<std::unique_ptr<ITranslator>>`，
 **不能用 QVector**（Qt6 的 QList 要求元素可拷贝，`unique_ptr` 直接编译失败）。
 
 ---
 
-## 5. 文件
+## 6. 文件
 
 ```
 frontend/
 ├─ CMakeLists.txt      # Qt6 Core/Widgets/Concurrent + add_subdirectory(../backend)
 ├─ README.md
 └─ src/
-    ├─ main.cpp        # 入口；--smoke 走 QCoreApplication + QEventLoop，否则 QApplication + MainWindow
-    ├─ MainWindow.h/.cpp     # 主窗口：语言 / 引擎 / Web 来源 / 设置入口 / 输出
+    ├─ main.cpp        # 入口；--smoke / --list-models / --assets-cli 走 QCoreApplication，否则 QApplication + MainWindow
+    ├─ MainWindow.h/.cpp     # 主窗口：语言 / 引擎 / Web 来源 / 资产入口 / 设置入口 / 输出
     ├─ TranslateJob.h/.cpp   # splitParagraphs() + TranslateJobRequest + QtConcurrent 作业
-    ├─ AppSettings.h/.cpp    # QSettings 持久化（LlmConfig + 来源 + 引擎 + 语言）
-    └─ SettingsDialog.h/.cpp # 「设置 — LLM 翻译」对话框 + 测试连接
+    ├─ AppSettings.h/.cpp    # QSettings 持久化（LlmConfig + 来源 + 引擎 + 语言 + 界面语言）
+    ├─ SettingsDialog.h/.cpp # 「设置 — LLM 翻译」对话框 + 测试连接 + 界面语言
+    ├─ AssetDialog.h/.cpp    # 「资产」对话框：清单解析 / 状态表 / 下载 / 取消 / 删除 / 导入
+    └─ AssetFormat.h         # humanBytes() + assetStateText()（对话框与 --assets-cli 共用）
 ```

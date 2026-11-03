@@ -1,18 +1,25 @@
 #include "AppSettings.h"
+#include "AssetFormat.h"
 #include "MainWindow.h"
 #include "TranslateJob.h"
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <QObject>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTimer>
 
+#include <studious/asset/AssetRegistry.h>
+#include <studious/asset/Manifest.h>
 #include <studious/cache/TranslationCache.h>
 #include <studious/contract/Types.h>
+#include <studious/i18n/L10n.h>
 #include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
 
@@ -50,6 +57,31 @@ void say(const QString &line)
     std::fflush(stdout);
 }
 
+// 界面语言：配置里存了 zh / en 就显式覆盖后端语言，否则跟随系统。
+//
+// 调用时机很关键：必须在 QApplication / QCoreApplication **构造之后**
+// （QSettings 需要一个已存在的 application 实例来定位持久化位置）、
+// 且在创建任何窗口 / 解析任何本地化文案**之前**——i18n 覆盖是进程级的纯内存状态，
+// 晚了就有一半文案是旧语言。
+void applyUiLanguage(const QString &uiLanguage)
+{
+    using studious::i18n::Language;
+
+    if (uiLanguage == QLatin1String("zh")) {
+        studious::i18n::setLanguage(Language::Chinese);
+    } else if (uiLanguage == QLatin1String("en")) {
+        studious::i18n::setLanguage(Language::English);
+    } else {
+        studious::i18n::resetToSystemLanguage();
+    }
+}
+
+// 读配置 -> 应用界面语言。三条入口（GUI / --smoke / --assets-cli）都走这一份。
+void applyUiLanguageFromSettings()
+{
+    applyUiLanguage(AppSettings::load().uiLanguage);
+}
+
 void printUsage()
 {
     say(QStringLiteral("用法:"));
@@ -62,6 +94,8 @@ void printUsage()
     say(QStringLiteral("        （三项都不给时用 AppSettings::defaults() 的本机网关配置）"));
     say(QStringLiteral("  studious.exe --list-models [--llm-base <url> --llm-key <key>]"));
     say(QStringLiteral("                                     # 打印网关模型目录 + 思考等级，不开 GUI"));
+    say(QStringLiteral("  studious.exe --assets-cli <manifest.json>"));
+    say(QStringLiteral("                                     # 打印资产清单（类型/大小/状态/占位），不开 GUI"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -300,6 +334,124 @@ int runListModels(const QStringList &args)
     return 0;
 }
 
+// --assets-cli：纯命令行打印资产清单 + 每条安装状态，供手动验收（不开 GUI）。
+//
+// 解析选项与「资产」对话框完全一致：仓库里的 backend/asset/manifest.json 是示例清单，
+// 未签名、sha256 是发布前才填的占位空串 —— 所以 requireSignature=false、allowMissingSha256=true。
+int runAssetsCli(const QStringList &args)
+{
+    QString manifestPath;
+
+    for (int i = 0; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        const bool hasNext = (i + 1) < args.size();
+        if (arg == QLatin1String("--assets-cli")) {
+            if (hasNext && !args.at(i + 1).startsWith(QLatin1String("--"))) {
+                manifestPath = args.at(++i);
+            }
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage();
+            return 0;
+        }
+    }
+
+    if (manifestPath.isEmpty()) {
+        say(QStringLiteral("[FAIL] --assets-cli 需要一个 manifest.json 路径"));
+        printUsage();
+        return 1;
+    }
+
+    const QString absolutePath = QFileInfo(manifestPath).absoluteFilePath();
+
+    QFile file(manifestPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        say(QStringLiteral("[FAIL] 打开清单失败：%1（%2）")
+                .arg(file.errorString(), QDir::toNativeSeparators(absolutePath)));
+        return 1;
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    studious::asset::ManifestVerifyOptions opts;
+    opts.requireSignature = false;    // 示例清单未签名
+    opts.allowMissingSha256 = true;   // 示例清单的 sha256 全是待填占位
+    opts.maxSchemaVersion = 1;
+
+    const studious::asset::ManifestLoadResult parsed = studious::asset::parseManifest(bytes, opts);
+    if (!parsed.ok) {
+        // 后端 error 已本地化，原样打印。
+        say(QStringLiteral("[FAIL] ") + parsed.error);
+        return 1;
+    }
+
+    // 安装根目录与 GUI 完全一致（QStandardPaths::AppDataLocation + /assets）。
+    const QString installRoot =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("assets"));
+
+    studious::asset::AssetRegistry registry(installRoot, parsed.manifest);
+    registry.refresh();
+
+    struct Row {
+        QString id;
+        QString type;
+        QString size;
+        QString state;
+        QString placeholderNote;
+    };
+
+    QVector<Row> rows;
+    int idWidth = 0;
+    int typeWidth = 0;
+    int sizeWidth = 0;
+    int placeholders = 0;
+
+    const QVector<studious::asset::AssetStatus> statuses = registry.listStatus();
+    for (const studious::asset::AssetStatus &status : statuses) {
+        const studious::asset::AssetEntry *entry = parsed.manifest.find(status.id);
+        const bool isPlaceholder = entry != nullptr && entry->isPlaceholder();
+        if (isPlaceholder) {
+            ++placeholders;
+        }
+
+        Row row;
+        row.id = status.id;
+        row.type = entry != nullptr ? entry->type : QString();
+        row.size = studious::frontend::humanBytes(entry != nullptr ? entry->size
+                                                                   : status.installedBytes);
+        row.state = studious::frontend::assetStateText(status.state);
+        row.placeholderNote = isPlaceholder ? studious::i18n::s("占位", "placeholder") : QString();
+
+        idWidth = qMax(idWidth, static_cast<int>(row.id.size()));
+        typeWidth = qMax(typeWidth, static_cast<int>(row.type.size()));
+        sizeWidth = qMax(sizeWidth, static_cast<int>(row.size.size()));
+        rows << row;
+    }
+
+    say(studious::i18n::s("=== 资产清单 ===", "=== Asset manifest ==="));
+    say(studious::i18n::s("清单: ", "Manifest: ") + QDir::toNativeSeparators(absolutePath));
+    say(studious::i18n::sf("共 %1 条（占位 %2 条）",
+                           "%1 entries (%2 placeholders)",
+                           {QString::number(rows.size()), QString::number(placeholders)}));
+
+    for (const Row &row : rows) {
+        QString line = QStringLiteral("  %1  %2  %3  %4")
+                           .arg(row.id.leftJustified(idWidth),
+                                row.type.leftJustified(typeWidth),
+                                row.size.leftJustified(sizeWidth),
+                                row.state);
+        if (!row.placeholderNote.isEmpty()) {
+            line += QStringLiteral("  ") + row.placeholderNote;
+        }
+        say(line);
+    }
+
+    say(studious::i18n::sf("已安装总计: %1",
+                           "Installed total: %1",
+                           {studious::frontend::humanBytes(registry.totalInstalledBytes())}));
+    return 0;
+}
+
 bool hasFlag(int argc, char *argv[], const char *flag)
 {
     for (int i = 1; i < argc; ++i) {
@@ -314,21 +466,35 @@ bool hasFlag(int argc, char *argv[], const char *flag)
 
 int main(int argc, char *argv[])
 {
-    // 先看命令行：--list-models / --smoke 都只起 QCoreApplication，不碰 GUI 平台插件。
+    // 先看命令行：--list-models / --smoke / --assets-cli 都只起 QCoreApplication，
+    // 不碰 GUI 平台插件（无桌面 / 无 DISPLAY 也能跑）。
     if (hasFlag(argc, argv, "--list-models")) {
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
         return runListModels(QCoreApplication::arguments());
     }
 
     if (hasFlag(argc, argv, "--smoke")) {
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
         return runSmoke(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--assets-cli")) {
+        QCoreApplication app(argc, argv);
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
+        return runAssetsCli(QCoreApplication::arguments());
     }
 
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("studious"));
+
+    // 界面语言必须在建窗口之前落地：之后所有 i18n::s 才对得上配置。
+    // 改语言要重启（Qt 没有运行时换界面的机制），设置页里有说明。
+    applyUiLanguageFromSettings();
 
     MainWindow window(sharedCache());
     window.show();

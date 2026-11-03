@@ -120,6 +120,7 @@ SettingsDialog::SettingsDialog(const AppSettings &current,
 
     buildUi();
     applyToUi(current.llm);
+    applyLanguageToUi(current.uiLanguage);
     refreshCacheStatus();
 
     connect(m_testWatcher, &QFutureWatcher<LlmTestResult>::finished,
@@ -145,6 +146,18 @@ void SettingsDialog::buildUi()
     auto *form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    // ---------- 界面语言 ----------
+    // Qt 没有运行时换语言的机制（QTranslator 只影响后续新建/retranslate 的界面，
+    // 已经建好的控件不会自己重刷），所以这里只存配置，真正的切换发生在下次启动。
+    m_languageBox = new QComboBox;
+    m_languageBox->addItem(QStringLiteral("跟随系统"), QString());
+    m_languageBox->addItem(QStringLiteral("中文"), QStringLiteral("zh"));
+    m_languageBox->addItem(QStringLiteral("English"), QStringLiteral("en"));
+    m_languageBox->setToolTip(QStringLiteral(
+        "界面与提示文字的语言。重启后生效（Qt 不支持运行时换语言，需要重新启动程序）。\n"
+        "「跟随系统」= 按系统区域设置自动判断（中文系统用中文，其余用英文）。"));
+    form->addRow(QStringLiteral("界面语言"), m_languageBox);
 
     m_baseUrl = new QLineEdit;
     m_baseUrl->setPlaceholderText(QStringLiteral("http://127.0.0.1:3065/v1"));
@@ -376,6 +389,13 @@ void SettingsDialog::rebuildReasoningOptions()
     m_reasoningEffort->setEnabled(options.size() > 1);
 }
 
+void SettingsDialog::applyLanguageToUi(const QString &uiLanguage)
+{
+    // findData：空串 = 第一项「跟随系统」，所以不需要特判。
+    const int index = m_languageBox->findData(uiLanguage);
+    m_languageBox->setCurrentIndex(index >= 0 ? index : 0);
+}
+
 studious::config::LlmConfig SettingsDialog::uiToConfig() const
 {
     studious::config::LlmConfig cfg;
@@ -394,6 +414,8 @@ AppSettings SettingsDialog::settings() const
 {
     AppSettings out = m_settings;
     out.llm = uiToConfig();
+    // 空串 = 跟随系统（与 AppSettings 的约定一致）。
+    out.uiLanguage = m_languageBox->currentData().toString();
     return out;
 }
 
@@ -520,6 +542,7 @@ void SettingsDialog::onFetchModelsFinished()
 void SettingsDialog::onRestoreDefaults()
 {
     applyToUi(AppSettings::defaults().llm);
+    applyLanguageToUi(AppSettings::defaults().uiLanguage);   // 空 = 跟随系统
     m_showApiKey->setChecked(false);
     m_apiKey->setEchoMode(QLineEdit::Password);
     showTestNeutral(QStringLiteral("已恢复默认值（尚未保存，点「确定」才写回配置）。"));
