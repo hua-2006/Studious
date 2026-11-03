@@ -1124,3 +1124,107 @@ translate()
 | 模糊命中 | 仅标点/空格差异时归一化后复用 |
 | 缓存导入导出 | 社区共享译文库（注意版权与审核） |
 | 淘汰策略 | 按 `hit_count` 而非纯时间，保留高频句 |
+
+---
+
+## 19. 资产清单与 ed25519 验签（v0.3）
+
+### 19.1 为什么先做清单，而不是先做本地翻译
+
+本地 MT / 本地 LLM 的代码量都在 ①② 之下：
+
+| 积木 | 内容 | 谁需要 |
+|---|---|---|
+| **① 资产系统**（本节） | 清单 + 验签 + 下载 + 安装 | **local-mt 和本地 LLM 都要** |
+| ② 推理运行时 | onnxruntime / llama-server 拉起 | 各自 |
+| ③ 翻译逻辑 | 语言对路由、中转 | local-mt 独有 |
+
+先把 ① 做完，两个引擎共用一套底座。
+
+### 19.2 清单信封格式
+
+```jsonc
+{
+  "schema": "studious-manifest/1",
+  "keyId": "studious-dev",
+  "payload": { "schemaVersion": 1, "generatedAt": "...", "channel": "stable", "assets": [...] },
+  "sig": "<128 位 hex>"
+}
+```
+
+**签名覆盖 `QJsonDocument(payload).toJson(Compact)` 的字节**。
+
+为什么这样定：
+- `QJsonObject` 内部按 key 排序 → 序列化确定性有保证
+- 签名只覆盖 payload，信封字段（如 `keyId`）可自由扩展
+- 但**清单里的数字一律写整数**，避免浮点格式化抖动导致签名对不上
+
+### 19.3 信任链
+
+```
+编译进二进制的公钥（TrustKeys.h）
+        │ 验证
+        ▼
+远程 manifest.json（ed25519 签名）
+        │ 内含每个资产的 sha256
+        ▼
+下载的 zip / gguf → sha256 校验 → （runtime）独立签名校验
+```
+
+**只有 hash 没有签名是不安全的**：攻击者同时改文件与清单里的 hash 即可通过。
+
+### 19.4 结构校验（8 条，全部中文 error）
+
+| # | 规则 |
+|---|---|
+| 1 | 顶层 JSON 合法、`payload` 是 object、`sig` 是 128 位 hex |
+| 2 | `requireSignature` 时必填 sig 并用受信公钥验签 |
+| 3 | `schema == "studious-manifest/1"` |
+| 4 | `schemaVersion` 在 `(0, maxSchemaVersion]`，否则提示"客户端版本过旧" |
+| 5 | 资产 `id` 非空且**全局唯一**；`type ∈ {runtime, model}` |
+| 6 | **有 urls 的资产 sha256 必须是 64 位小写 hex**（无 urls = 占位，可为空） |
+| 7 | urls 必须 `https://` 开头，拒绝明文 http |
+| 8 | `size >= 0` |
+
+### 19.5 加密选型
+
+| 项 | 决定 |
+|---|---|
+| 库 | **Monocypher 4.0.2**（单文件、无依赖、BSD-2-Clause OR CC0-1.0） |
+| 算法 | **monocypher-ed25519（RFC 8032 兼容）** |
+| 为什么不用 `crypto_eddsa_*` | 那是 BLAKE2b 变体，**不与标准 Ed25519 互通**；用 RFC 变体才能让 openssl/python/libsodium 也能签 |
+| 签名字节 | 64；公钥 32；私钥 seed 32 |
+
+⚠️ **`crypto_ed25519_key_pair()` 会把传入的 seed 数组清零**（内部 `crypto_wipe`），所以要在调用前先把 seed hex 抄走 —— 这是踩过的坑。
+
+### 19.6 开发工具 `manifest_tool`
+
+```
+manifest_tool genkey                                   # 生成 seed + pubkey
+manifest_tool sign <payload.json> <seedHex> <out.json> # 签名，输出完整信封
+manifest_tool verify <manifest.json> [pubkeyHex]       # 不带 pubkey 时只做结构校验
+```
+
+不随产品分发，仅发布/CI 用。
+
+### 19.7 密钥管理铁律
+
+| 项 | 要求 |
+|---|---|
+| 私钥（seed） | **离线保存，绝不进仓库**（已加检查：仓库内 grep seed 无命中） |
+| 公钥 | 公开无妨，编译进 `TrustKeys.h` |
+| 换钥 | 需发新版客户端，所以 `keyId` 支持将来多密钥轮换 |
+| 当前密钥 | `studious-dev`，**发版前必须重新生成** |
+
+### 19.8 自测覆盖（`--manifest`，11 个用例）
+
+`manifestValid` / `manifestTampered` / `manifestMissingSig` / `manifestBadSchema` /
+`manifestDupId` / `manifestHttpUrl` / `manifestBadSha` / `sha256FileOk` / `sha256FileTampered`
+/ `manifestTestKey` / `manifestTrustKey`
+
+篡改用例是核心：签名后改任一字段，验签必须失败。
+
+### 19.9 已知取舍
+
+`ManifestVerifyOptions` 有 `allowMissingSha256`（**默认 false**）。
+原因：示例 `manifest.json` 里模型条目有 urls 但 sha256 待填。发布路径永远不要开这个开关——否则等于给占位哈希开后门。只有 `manifest_tool verify` 不带公钥的开发分支会开。

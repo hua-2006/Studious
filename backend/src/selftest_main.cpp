@@ -5,11 +5,14 @@
 //   backend_selftest.exe            包含网络测试
 //   backend_selftest.exe --offline  跳过网络测试
 //   backend_selftest.exe --providers 打印 Web 来源表 + 装配校验
+//   backend_selftest.exe --manifest  资产清单解析 + ed25519 验签（离线，用 TEST seed 现场签名）
 //   backend_selftest.exe --llm       用本机网关真实翻译两句话（需要网关在 127.0.0.1:3065）
 //                                    可用环境变量临时换网关/Key/模型排查：
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
 
 #include "Factory.h"
+#include "asset/Manifest.h"
+#include "asset/TrustKeys.h"
 #include "cache/TranslationCache.h"
 #include "config/LlmConfig.h"
 #include "llm/LlmCatalog.h"
@@ -25,8 +28,12 @@
 #include "translators/adapters/GoogleFreeAdapter.h"
 #include "translators/adapters/MyMemoryAdapter.h"
 
+#include "monocypher-ed25519.h"
+#include "monocypher.h"
+
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -35,11 +42,13 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QUrl>
 #include <QVector>
 #include <QtGlobal>
 
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <utility>
 
@@ -256,6 +265,357 @@ void testWebNetwork(studious::net::QtHttpClient &http)
         say(QStringLiteral("[INFO] web: ") + (zh.isEmpty() ? QStringLiteral("<空>") : zh.at(0)));
     } else {
         say(QStringLiteral("[INFO] web 失败（网络问题不算用例失败）: ") + r.error);
+    }
+}
+
+// ---------- 4.5 资产清单 / ed25519 验签（--manifest） ----------
+// 全部在内存里造 payload + 现场签名，不依赖网络、不依赖仓库里的示例清单。
+//
+// ⚠️ TEST KEY：下面这个 seed 是 RFC 8032 的公开测试向量，写死在源码里 = 谁都能签出"合法"清单。
+//    它只能用来验证"验签链路本身对不对"，绝不能用于任何真实发布签名。
+//    真实私钥离线保存，公钥走 include/studious/asset/TrustKeys.h。
+constexpr const char *kTestSeedHex =
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+
+struct TestKeyPair {
+    QByteArray seed;   // 32 字节
+    QByteArray pub;    // 32 字节
+};
+
+TestKeyPair testKeyPair()
+{
+    TestKeyPair kp;
+    kp.seed = asset::hexToBytes(QString::fromLatin1(kTestSeedHex));
+    if (kp.seed.size() != 32) {
+        return kp;
+    }
+
+    uint8_t seedBuf[32] = {};
+    std::memcpy(seedBuf, kp.seed.constData(), 32);
+
+    uint8_t secretKey[64] = {};
+    uint8_t publicKey[32] = {};
+    crypto_ed25519_key_pair(secretKey, publicKey, seedBuf);
+    crypto_wipe(secretKey, sizeof(secretKey));
+
+    kp.pub = QByteArray(reinterpret_cast<const char *>(publicKey), 32);
+    return kp;
+}
+
+// 用 TEST seed 签一份 payload，返回完整信封的 JSON 字节。
+QByteArray signTestPayload(const QJsonObject &payload, const TestKeyPair &keys)
+{
+    const QByteArray signedBytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+
+    uint8_t seedBuf[32] = {};
+    std::memcpy(seedBuf, keys.seed.constData(), 32);
+
+    uint8_t secretKey[64] = {};
+    uint8_t publicKey[32] = {};
+    crypto_ed25519_key_pair(secretKey, publicKey, seedBuf);
+
+    uint8_t signature[64] = {};
+    crypto_ed25519_sign(signature, secretKey,
+                        reinterpret_cast<const uint8_t *>(signedBytes.constData()),
+                        static_cast<size_t>(signedBytes.size()));
+    crypto_wipe(secretKey, sizeof(secretKey));
+    crypto_wipe(seedBuf, sizeof(seedBuf));
+
+    QJsonObject envelope;
+    envelope.insert(QStringLiteral("schema"), QLatin1String(asset::kManifestSchema));
+    envelope.insert(QStringLiteral("keyId"), QStringLiteral("studious-dev"));
+    envelope.insert(QStringLiteral("payload"), payload);
+    envelope.insert(QStringLiteral("sig"),
+                    QString::fromLatin1(
+                        QByteArray(reinterpret_cast<const char *>(signature), 64).toHex()));
+    return QJsonDocument(envelope).toJson(QJsonDocument::Compact);
+}
+
+// 64 位小写 hex 的假 sha256（只验证格式，不对应任何真实文件）。
+QString fakeSha256(QChar fill)
+{
+    return QString(64, fill);
+}
+
+QJsonObject makeAsset(const QString &id, const QString &type, const QStringList &urls,
+                      const QString &sha256, double size = 1024.0)
+{
+    QJsonArray urlArray;
+    for (const QString &url : urls) {
+        urlArray.append(url);
+    }
+
+    QJsonObject asset;
+    asset.insert(QStringLiteral("id"), id);
+    asset.insert(QStringLiteral("type"), type);
+    asset.insert(QStringLiteral("op"), QStringLiteral("windows"));
+    asset.insert(QStringLiteral("arch"), QStringLiteral("x64"));
+    asset.insert(QStringLiteral("backend"), QStringLiteral("vulkan"));
+    asset.insert(QStringLiteral("version"), QStringLiteral("b4200"));
+    asset.insert(QStringLiteral("size"), size);
+    asset.insert(QStringLiteral("sha256"), sha256);
+    asset.insert(QStringLiteral("archive"), QStringLiteral("zip"));
+    asset.insert(QStringLiteral("urls"), urlArray);
+    return asset;
+}
+
+// 默认 payload：两条资产（一条 runtime + 一条 model），都用合法 https 地址 + 合法 sha256。
+QJsonObject makeTestPayload(int schemaVersion = 1)
+{
+    QJsonArray assets;
+    assets.append(makeAsset(QStringLiteral("runtime.llama.vulkan.win-x64"), QStringLiteral("runtime"),
+                            {QStringLiteral("https://cdn.studious.app/runtime/llama-vulkan.zip")},
+                            fakeSha256(QLatin1Char('a')), 262144000.0));
+    assets.append(makeAsset(QStringLiteral("model.qwen2.5-3b-instruct.q4km"), QStringLiteral("model"),
+                            {QStringLiteral("https://hf-mirror.com/x/qwen2.5-3b-q4_k_m.gguf")},
+                            fakeSha256(QLatin1Char('b')), 1930000000.0));
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("schemaVersion"), schemaVersion);
+    payload.insert(QStringLiteral("generatedAt"), QStringLiteral("2026-11-04T00:00:00Z"));
+    payload.insert(QStringLiteral("channel"), QStringLiteral("stable"));
+    payload.insert(QStringLiteral("assets"), assets);
+    return payload;
+}
+
+asset::ManifestVerifyOptions manifestOptions(const TestKeyPair &keys, bool requireSignature = true)
+{
+    asset::ManifestVerifyOptions opts;
+    opts.trustedPublicKey = keys.pub;
+    opts.requireSignature = requireSignature;
+    opts.maxSchemaVersion = 1;
+    return opts;
+}
+
+void runManifestMode()
+{
+    say(QStringLiteral("=== 资产清单 / ed25519 验签自测 ==="));
+
+    const TestKeyPair keys = testKeyPair();
+    Assertions keyAssert;
+    keyAssert.expect(keys.seed.size() == 32, QStringLiteral("TEST seed 不是 32 字节"));
+    keyAssert.expect(keys.pub.size() == 32, QStringLiteral("TEST 公钥不是 32 字节"));
+    check(QStringLiteral("manifestTestKey"), keyAssert.ok(), keyAssert.details());
+    say(QStringLiteral("        TEST pubkey = ") + asset::bytesToHex(keys.pub)
+        + QStringLiteral("   ← 仅自测，不可用于发布"));
+
+    // 编译进二进制的正式公钥必须是 32 字节，且不能还是全 0 占位。
+    {
+        const QByteArray trustKey = asset::hexToBytes(QString::fromLatin1(asset::kManifestPublicKeyHex));
+        const bool filled = trustKey.size() == 32
+                            && trustKey != QByteArray(32, '\0');
+        check(QStringLiteral("manifestTrustKey"), filled,
+              QStringLiteral("TrustKeys.h 的 kManifestPublicKeyHex 不是 32 字节有效 hex（或仍是全 0 占位）：%1")
+                  .arg(QLatin1String(asset::kManifestPublicKeyHex)));
+        say(QStringLiteral("        TrustKeys pubkey = ") + QLatin1String(asset::kManifestPublicKeyHex)
+            + QStringLiteral("   (keyId=%1)").arg(QLatin1String(asset::kManifestKeyId)));
+    }
+
+    // 1) 合法签名
+    {
+        const QByteArray raw = signTestPayload(makeTestPayload(), keys);
+        const asset::ManifestLoadResult r = asset::parseManifest(raw, manifestOptions(keys));
+
+        Assertions a;
+        a.expect(r.ok, QStringLiteral("ok=false，error=%1").arg(r.error));
+        a.expect(r.manifest.assets.size() == 2,
+                 QStringLiteral("资产条数=%1（期望 2）").arg(r.manifest.assets.size()));
+        a.expect(r.manifest.schemaVersion == 1,
+                 QStringLiteral("schemaVersion=%1（期望 1）").arg(r.manifest.schemaVersion));
+        a.expect(r.manifest.channel == QStringLiteral("stable"),
+                 QStringLiteral("channel=%1（期望 stable）").arg(r.manifest.channel));
+        a.expect(r.manifest.keyId == QStringLiteral("studious-dev"),
+                 QStringLiteral("keyId=%1").arg(r.manifest.keyId));
+        if (const asset::AssetEntry *e = r.manifest.find(QStringLiteral("model.qwen2.5-3b-instruct.q4km"))) {
+            a.expect(e->isModel(), QStringLiteral("model 条目 isModel()=false"));
+            a.expect(e->size == 1930000000LL,
+                     QStringLiteral("model size=%1（期望 1930000000）").arg(e->size));
+        } else {
+            a.expect(false, QStringLiteral("find() 找不到 model 条目"));
+        }
+        a.expect(r.manifest.ofType(QStringLiteral("runtime")).size() == 1,
+                 QStringLiteral("ofType(runtime) 数量不对"));
+        a.expect(r.manifest.forPlatform(QStringLiteral("windows"), QStringLiteral("x64")).size() == 2,
+                 QStringLiteral("forPlatform(windows,x64) 数量不对"));
+        check(QStringLiteral("manifestValid"), a.ok(), a.details());
+    }
+
+    // 2) 签名后篡改 payload（size 改大）→ 必须验签失败
+    {
+        QByteArray raw = signTestPayload(makeTestPayload(), keys);
+        QJsonDocument doc = QJsonDocument::fromJson(raw);
+        QJsonObject envelope = doc.object();
+        QJsonObject payload = envelope.value(QStringLiteral("payload")).toObject();
+        QJsonArray assets = payload.value(QStringLiteral("assets")).toArray();
+        QJsonObject first = assets.at(0).toObject();
+        first.insert(QStringLiteral("size"), 999999999999.0);   // 篡改：体积改大
+        assets.replace(0, first);
+        payload.insert(QStringLiteral("assets"), assets);
+        envelope.insert(QStringLiteral("payload"), payload);   // 不动 sig
+
+        const QByteArray tampered = QJsonDocument(envelope).toJson(QJsonDocument::Compact);
+        const asset::ManifestLoadResult r = asset::parseManifest(tampered, manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("篡改后竟然解析成功（验签形同虚设）"));
+        a.expect(r.error.contains(QStringLiteral("签名")),
+                 QStringLiteral("error 未提到签名：%1").arg(r.error));
+        check(QStringLiteral("manifestTampered"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 3) 删掉 sig 且 requireSignature=true → 必须拒绝
+    {
+        QByteArray raw = signTestPayload(makeTestPayload(), keys);
+        QJsonDocument doc = QJsonDocument::fromJson(raw);
+        QJsonObject envelope = doc.object();
+        envelope.remove(QStringLiteral("sig"));
+        const QByteArray unsignedRaw = QJsonDocument(envelope).toJson(QJsonDocument::Compact);
+
+        const asset::ManifestLoadResult r = asset::parseManifest(unsignedRaw, manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("缺 sig 竟然解析成功"));
+        a.expect(r.error.contains(QStringLiteral("签名")),
+                 QStringLiteral("error 未提到签名：%1").arg(r.error));
+        check(QStringLiteral("manifestMissingSig"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 4) schemaVersion=99 → 必须提示客户端版本过旧
+    {
+        const QByteArray raw = signTestPayload(makeTestPayload(99), keys);
+        const asset::ManifestLoadResult r = asset::parseManifest(raw, manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("schemaVersion=99 竟然解析成功"));
+        a.expect(r.error.contains(QStringLiteral("版本过旧")),
+                 QStringLiteral("error 未提示客户端版本过旧：%1").arg(r.error));
+        check(QStringLiteral("manifestBadSchema"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 5) 两条同 id → 必须拒绝
+    {
+        QJsonObject payload = makeTestPayload();
+        QJsonArray assets = payload.value(QStringLiteral("assets")).toArray();
+        assets.append(makeAsset(QStringLiteral("runtime.llama.vulkan.win-x64"),
+                                QStringLiteral("runtime"),
+                                {QStringLiteral("https://cdn.studious.app/runtime/dup.zip")},
+                                fakeSha256(QLatin1Char('c'))));
+        payload.insert(QStringLiteral("assets"), assets);
+
+        const asset::ManifestLoadResult r =
+            asset::parseManifest(signTestPayload(payload, keys), manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("重复 id 竟然解析成功"));
+        a.expect(r.error.contains(QStringLiteral("重复")),
+                 QStringLiteral("error 未提到 id 重复：%1").arg(r.error));
+        check(QStringLiteral("manifestDupId"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 6) urls 里放明文 http → 必须拒绝
+    {
+        QJsonObject payload = makeTestPayload();
+        QJsonArray assets = payload.value(QStringLiteral("assets")).toArray();
+        assets.append(makeAsset(QStringLiteral("runtime.http.win-x64"), QStringLiteral("runtime"),
+                                {QStringLiteral("http://insecure.example.com/evil.zip")},
+                                fakeSha256(QLatin1Char('d'))));
+        payload.insert(QStringLiteral("assets"), assets);
+
+        const asset::ManifestLoadResult r =
+            asset::parseManifest(signTestPayload(payload, keys), manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("明文 http 地址竟然解析成功"));
+        a.expect(r.error.contains(QStringLiteral("https")),
+                 QStringLiteral("error 未提到 https：%1").arg(r.error));
+        check(QStringLiteral("manifestHttpUrl"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 7) 有 urls 但 sha256 不是 64 hex → 必须拒绝
+    {
+        QJsonObject payload = makeTestPayload();
+        QJsonArray assets = payload.value(QStringLiteral("assets")).toArray();
+        assets.append(makeAsset(QStringLiteral("runtime.bad.sha.win-x64"), QStringLiteral("runtime"),
+                                {QStringLiteral("https://cdn.studious.app/runtime/bad.zip")},
+                                QStringLiteral("abc")));
+        payload.insert(QStringLiteral("assets"), assets);
+
+        const asset::ManifestLoadResult r =
+            asset::parseManifest(signTestPayload(payload, keys), manifestOptions(keys));
+
+        Assertions a;
+        a.expect(!r.ok, QStringLiteral("sha256=\"abc\" 竟然解析成功"));
+        a.expect(r.error.contains(QStringLiteral("sha256")),
+                 QStringLiteral("error 未提到 sha256：%1").arg(r.error));
+        check(QStringLiteral("manifestBadSha"), a.ok(), a.details());
+        say(QStringLiteral("        error = ") + r.error);
+    }
+
+    // 8) sha256File / verifyFileSha256（临时文件跨 1 MiB 块边界）
+    {
+        QTemporaryDir tmpDir(QDir::tempPath() + QStringLiteral("/studious_manifest_XXXXXX"));
+        Assertions a;
+        a.expect(tmpDir.isValid(), QStringLiteral("无法创建临时目录"));
+        if (tmpDir.isValid()) {
+            QByteArray blob;
+            blob.resize(3 * 1024 * 1024 + 12345);   // 3 MiB 多一点：必然跨多个分块
+            for (int i = 0; i < blob.size(); ++i) {
+                blob[i] = static_cast<char>((i * 37 + 11) & 0xFF);
+            }
+
+            const QString path = tmpDir.path() + QStringLiteral("/blob.bin");
+            QFile file(path);
+            a.expect(file.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                     QStringLiteral("无法写入临时文件：%1").arg(file.errorString()));
+            if (file.isOpen()) {
+                file.write(blob);
+                file.close();
+            }
+
+            const QString expect =
+                QString::fromLatin1(QCryptographicHash::hash(blob, QCryptographicHash::Sha256).toHex());
+
+            QString fileError;
+            const QString actual = asset::sha256File(path, &fileError);
+            a.expect(actual == expect,
+                     QStringLiteral("sha256File=%1 与期望 %2 不一致（%3）").arg(actual, expect, fileError));
+
+            QString verifyError;
+            a.expect(asset::verifyFileSha256(path, expect, &verifyError),
+                     QStringLiteral("verifyFileSha256 应通过，却失败：%1").arg(verifyError));
+            check(QStringLiteral("sha256FileOk"), a.ok(), a.details());
+            say(QStringLiteral("        sha256 = ") + actual);
+
+            // 改一个字节 → 必须失败
+            Assertions t;
+            QFile edit(path);
+            if (edit.open(QIODevice::ReadWrite)) {
+                edit.seek(12345);
+                char byte = 0;
+                edit.getChar(&byte);
+                byte = static_cast<char>(byte ^ 0x01);
+                edit.seek(12345);
+                edit.putChar(byte);
+                edit.close();
+            } else {
+                t.expect(false, QStringLiteral("无法改写临时文件：%1").arg(edit.errorString()));
+            }
+
+            QString tamperedError;
+            const bool pass = asset::verifyFileSha256(path, expect, &tamperedError);
+            t.expect(!pass, QStringLiteral("改了一个字节后 verifyFileSha256 竟然还通过"));
+            t.expect(!tamperedError.isEmpty(),
+                     QStringLiteral("失败但 error 为空，调用方无法提示"));
+            check(QStringLiteral("sha256FileTampered"), t.ok(), t.details());
+            say(QStringLiteral("        error = ") + tamperedError);
+        } else {
+            check(QStringLiteral("sha256FileOk"), false, a.details());
+        }
     }
 }
 
@@ -790,8 +1150,23 @@ int main(int argc, char *argv[])
     const bool modelsMode = args.contains(QStringLiteral("--models"));
     const bool llmBatchMode = args.contains(QStringLiteral("--llm-batch"));
     const bool cacheMode = args.contains(QStringLiteral("--cache"));
+    const bool manifestMode = args.contains(QStringLiteral("--manifest"));
 
     // 专项模式互斥，先处理它们，互不影响原有两条路径。
+    if (manifestMode) {
+        runManifestMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MANIFEST CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
+
     if (cacheMode) {
         runCacheMode();
         say(QString());
