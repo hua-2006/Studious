@@ -28,7 +28,24 @@ const QStringList &googleLangs()
 
 QString GoogleFreeAdapter::id() const
 {
-    return QStringLiteral("google-free");
+    return QStringLiteral("google");
+}
+
+QString GoogleFreeAdapter::displayName() const
+{
+    return QStringLiteral("Google");
+}
+
+bool GoogleFreeAdapter::requiresApiKey() const
+{
+    // 走 translate_a/single 的 gtx 免费端点，不需要任何凭据。
+    return false;
+}
+
+bool GoogleFreeAdapter::isConfigured() const
+{
+    // 无需 key 的来源恒为"已配置"；真实可用性只能由 translate() 的 error 反馈。
+    return true;
 }
 
 QStringList GoogleFreeAdapter::supportedLangs() const
@@ -56,7 +73,7 @@ WebAdapterResult GoogleFreeAdapter::translate(net::IHttpClient &http,
     const QString sl = core::LanguageRegistry::toGoogle(srcLang);
     const QString tl = core::LanguageRegistry::toGoogle(dstLang);
     if (tl.isEmpty() || tl == QLatin1String("auto")) {
-        r.error = QStringLiteral("google-free: 目标语言无效");
+        r.error = QStringLiteral("google: 目标语言无效");
         return r;
     }
 
@@ -76,7 +93,7 @@ WebAdapterResult GoogleFreeAdapter::translate(net::IHttpClient &http,
     r.httpStatus = resp.status;
 
     if (!resp.ok) {
-        r.error = QStringLiteral("google-free: %1")
+        r.error = QStringLiteral("google: %1")
                       .arg(resp.error.isEmpty() ? QStringLiteral("请求失败") : resp.error);
         return r;
     }
@@ -85,14 +102,14 @@ WebAdapterResult GoogleFreeAdapter::translate(net::IHttpClient &http,
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isArray()) {
         // 把响应前 200 字节带出来，便于排查（限流页 / 验证码页都长这样）。
-        r.error = QStringLiteral("google-free: 响应解析失败（%1）；响应片段：%2")
+        r.error = QStringLiteral("google: 响应解析失败（%1）；响应片段：%2")
                       .arg(perr.errorString(), QString::fromUtf8(resp.body.left(200)));
         return r;
     }
 
     const QJsonArray root = doc.array();
     if (root.isEmpty() || !root.at(0).isArray()) {
-        r.error = QStringLiteral("google-free: 响应结构异常，缺少 result[0]；响应片段：%1")
+        r.error = QStringLiteral("google: 响应结构异常，缺少 result[0]；响应片段：%1")
                       .arg(QString::fromUtf8(resp.body.left(200)));
         return r;
     }
@@ -113,7 +130,7 @@ WebAdapterResult GoogleFreeAdapter::translate(net::IHttpClient &http,
 
     merged = merged.trimmed();
     if (merged.isEmpty()) {
-        r.error = QStringLiteral("google-free: 译文为空；响应片段：%1")
+        r.error = QStringLiteral("google: 译文为空；响应片段：%1")
                       .arg(QString::fromUtf8(resp.body.left(200)));
         return r;
     }

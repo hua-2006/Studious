@@ -132,6 +132,15 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
             bool done = false;
             QStringList adapterErrors;
             for (const auto &adapter : candidates) {
+                // 未配置的来源（如 Azure 还没填 key）不必发请求：记一条原因，
+                // 继续尝试下一个适配器，绝不因为"这家没配"就整体中断。
+                if (!adapter->isConfigured()) {
+                    adapterErrors << QStringLiteral("%1: 尚未配置（需要 API key 才能使用），已跳过")
+                                         .arg(adapter->displayName().isEmpty() ? adapter->id()
+                                                                              : adapter->displayName());
+                    continue;
+                }
+
                 const WebAdapterResult r = adapter->translate(m_http, trimmed, src, dst);
                 if (r.ok) {
                     const QString text = r.text.trimmed();
@@ -143,7 +152,14 @@ core::TranslateOutcome WebTranslator::translate(const QStringList &paragraphs,
                     done = true;
                     break;   // 任一适配器成功即采用，不再打别家
                 }
-                adapterErrors << QStringLiteral("%1: %2").arg(adapter->id(), r.error);
+
+                // 适配器失败原因可能有两类：网络/服务不可用，或凭据/配置缺失。
+                // 两类都只记录并继续换下一家，只有全部失败才把原因合并上报。
+                // 适配器的 error 通常自带 "id: " 前缀，避免重复拼一次。
+                const QString prefixed = adapter->id() + QLatin1Char(':');
+                adapterErrors << (r.error.startsWith(prefixed)
+                                      ? r.error
+                                      : QStringLiteral("%1: %2").arg(adapter->id(), r.error));
             }
 
             if (!done) {
@@ -178,6 +194,30 @@ void WebTranslator::cancel()
 QVector<std::shared_ptr<IWebAdapter>> WebTranslator::adapters() const
 {
     return m_adapters;
+}
+
+QVector<WebProviderInfo> WebTranslator::providers() const
+{
+    QVector<WebProviderInfo> list;
+    list.reserve(m_adapters.size());
+    for (const auto &adapter : m_adapters) {
+        if (!adapter) {
+            continue;
+        }
+
+        // 已知来源用注册表里的中文名与备注；未知（第三方扩展）来源退回适配器自报的名字。
+        WebProviderInfo info = findWebProvider(adapter->id());
+        if (info.id.isEmpty()) {
+            info.id = adapter->id();
+            info.displayName = adapter->displayName();
+        }
+
+        // requiresApiKey / configured 一律以适配器实现为准，注册表里的只是静态默认值。
+        info.requiresApiKey = adapter->requiresApiKey();
+        info.configured = adapter->isConfigured();
+        list.push_back(info);
+    }
+    return list;
 }
 
 } // namespace studious::translate

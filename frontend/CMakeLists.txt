@@ -23,6 +23,8 @@ add_executable(studious
     src/main.cpp
     src/MainWindow.cpp
     src/TranslateJob.cpp
+    src/AppSettings.cpp
+    src/SettingsDialog.cpp
 )
 
 target_include_directories(studious PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

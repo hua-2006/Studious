@@ -1,3 +1,4 @@
+#include "AppSettings.h"
 #include "MainWindow.h"
 #include "TranslateJob.h"
 
@@ -32,6 +33,9 @@ void printUsage()
     say(QStringLiteral("  studious.exe                                       # 启动 GUI"));
     say(QStringLiteral("  studious.exe --smoke \"文本\" --to zh --engine web    # 无界面冒烟"));
     say(QStringLiteral("  可选: --to <lang> (默认 zh) / --engine <mock|web|llm|local-mt> (默认自动)"));
+    say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
+    say(QStringLiteral("        --llm-base <url> --llm-key <key> --llm-model <model>"));
+    say(QStringLiteral("        （三项都不给时用 AppSettings::defaults() 的本机网关配置）"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -41,6 +45,10 @@ int runSmoke(const QStringList &args)
     QString text;
     QString to = QStringLiteral("zh");
     QString engine;
+    QString provider = QStringLiteral("auto");
+    QString llmBase;
+    QString llmKey;
+    QString llmModel;
 
     for (int i = 0; i < args.size(); ++i) {
         const QString &arg = args.at(i);
@@ -54,6 +62,14 @@ int runSmoke(const QStringList &args)
             to = args.at(++i);
         } else if (arg == QLatin1String("--engine") && hasNext) {
             engine = args.at(++i);
+        } else if (arg == QLatin1String("--provider") && hasNext) {
+            provider = args.at(++i);
+        } else if (arg == QLatin1String("--llm-base") && hasNext) {
+            llmBase = args.at(++i);
+        } else if (arg == QLatin1String("--llm-key") && hasNext) {
+            llmKey = args.at(++i);
+        } else if (arg == QLatin1String("--llm-model") && hasNext) {
+            llmModel = args.at(++i);
         } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
             printUsage();
             return 0;
@@ -66,20 +82,45 @@ int runSmoke(const QStringList &args)
         return 1;
     }
 
-    studious::core::TranslateRequest req;
+    TranslateJobRequest req;
     req.paragraphs = splitParagraphs(text);
     if (req.paragraphs.isEmpty()) {
         say(QStringLiteral("[FAIL] 切分后没有任何段落"));
         return 1;
     }
     req.srcLang = QStringLiteral("auto");
-    req.dstLangs = QStringList{to};
-    req.preferredEngine = engine;
+    req.dstLang = to;
+    req.engineId = engine;
+
+    // --provider auto（或空）= 空列表 = 后端默认顺序 google -> mymemory。
+    req.webProviders = (provider.isEmpty() || provider == QLatin1String("auto"))
+                           ? QStringList{}
+                           : QStringList{provider};
+
+    // LLM 三项未给出时回落到内置默认网关（保证 --engine llm 开箱可用）。
+    req.llm = AppSettings::defaults().llm;
+    if (!llmBase.isEmpty()) {
+        req.llm.baseUrl = llmBase;
+    }
+    if (!llmKey.isEmpty()) {
+        req.llm.apiKey = llmKey;
+    }
+    if (!llmModel.isEmpty()) {
+        req.llm.model = llmModel;
+    }
 
     say(QStringLiteral("=== Studious 前端冒烟 ==="));
-    say(QStringLiteral("engine=%1  to=%2  src=auto  paragraphs=%3")
-            .arg(engine.isEmpty() ? QStringLiteral("auto") : engine, to)
+    say(QStringLiteral("engine=%1  to=%2  src=auto  provider=%3  paragraphs=%4")
+            .arg(engine.isEmpty() ? QStringLiteral("auto") : engine,
+                 to,
+                 req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
+                                            : req.webProviders.join(QLatin1Char(',')))
             .arg(req.paragraphs.size()));
+    say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4")
+            .arg(req.llm.model.isEmpty() ? QStringLiteral("<未配置>") : req.llm.model,
+                 req.llm.baseUrl.isEmpty() ? QStringLiteral("<未配置>") : req.llm.baseUrl,
+                 QString::number(req.llm.timeoutMs),
+                 QString::number(req.llm.temperature)));
 
     TranslateJob job;
     QEventLoop loop;
@@ -106,9 +147,9 @@ int runSmoke(const QStringList &args)
 
     job.start(req);
 
-    // 包一层超时，避免个别网络环境把冒烟挂死。
-    QTimer::singleShot(60000, &loop, [&]() {
-        say(QStringLiteral("[FAIL] 冒烟超时（60s）"));
+    // 包一层超时，避免个别网络环境把冒烟挂死。LLM 可能比 web 更慢，给 120s。
+    QTimer::singleShot(120000, &loop, [&]() {
+        say(QStringLiteral("[FAIL] 冒烟超时（120s）"));
         exitCode = 1;
         loop.quit();
     });

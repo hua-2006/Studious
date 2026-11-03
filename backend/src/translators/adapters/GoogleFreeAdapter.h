@@ -13,6 +13,9 @@ namespace studious::translate {
 class GoogleFreeAdapter final : public IWebAdapter {
 public:
     QString id() const override;
+    QString displayName() const override;
+    bool requiresApiKey() const override;
+    bool isConfigured() const override;
     QStringList supportedLangs() const override;
     bool supports(const QString &dst) const override;
     WebAdapterResult translate(net::IHttpClient &http,

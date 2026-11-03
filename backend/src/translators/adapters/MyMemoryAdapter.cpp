@@ -31,6 +31,23 @@ QString MyMemoryAdapter::id() const
     return QStringLiteral("mymemory");
 }
 
+QString MyMemoryAdapter::displayName() const
+{
+    return QStringLiteral("MyMemory");
+}
+
+bool MyMemoryAdapter::requiresApiKey() const
+{
+    // 匿名接口即可用（有额度上限，官方支持填 email 提额，但不填也能翻）。
+    return false;
+}
+
+bool MyMemoryAdapter::isConfigured() const
+{
+    // 无需 key 的来源恒为"已配置"；真实可用性只能由 translate() 的 error 反馈。
+    return true;
+}
+
 QStringList MyMemoryAdapter::supportedLangs() const
 {
     return myMemoryLangs();
