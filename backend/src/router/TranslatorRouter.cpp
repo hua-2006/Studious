@@ -2,6 +2,7 @@
 
 #include "cache/TranslationCache.h"
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 
 #include <utility>
 
@@ -71,9 +72,10 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         if (rr.missingAssets.isEmpty()) {
             return QString();
         }
-        return QStringLiteral("；缺失资产: %1").arg(QStringList(rr.missingAssets.begin(),
-                                                               rr.missingAssets.end())
-                                                    .join(QStringLiteral(", ")));
+        return i18n::sf("；缺失资产: %1",
+                        "; missing assets: %1",
+                        {QStringList(rr.missingAssets.begin(), rr.missingAssets.end())
+                             .join(QStringLiteral(", "))});
     };
 
     core::ITranslator *chosen = nullptr;
@@ -83,24 +85,29 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         // 强制组件：存在就只用它，不可用也必须给出明确原因，绝不偷偷换成别的引擎。
         core::ITranslator *t = findById(wanted);
         if (t == nullptr) {
-            out.error = QStringLiteral("指定的引擎 \"%1\" 不存在；已注册引擎: %2")
-                            .arg(wanted, engineIds().join(QStringLiteral(", ")));
+            out.error = i18n::sf("指定的引擎 \"%1\" 不存在；已注册引擎: %2",
+                                 "The requested engine \"%1\" does not exist; registered engines: %2",
+                                 {wanted, engineIds().join(QStringLiteral(", "))});
             return out;
         }
 
         const core::ResolveResult rr = t->resolve(src, dsts.first());
         if (!t->isReady()) {
-            out.error = QStringLiteral("指定的引擎 %1 当前不可用：%2%3")
-                            .arg(wanted,
-                                 rr.reason.isEmpty() ? QStringLiteral("组件未就绪") : rr.reason,
-                                 assetsSuffix(rr));
+            out.error = i18n::sf("指定的引擎 %1 当前不可用：%2%3",
+                                 "The requested engine %1 is currently unavailable: %2%3",
+                                 {wanted,
+                                  rr.reason.isEmpty()
+                                      ? i18n::s("组件未就绪", "the engine is not ready")
+                                      : rr.reason,
+                                  assetsSuffix(rr)});
             return out;
         }
 
         const QStringList bad = unsupportedDsts(t);
         if (!bad.isEmpty()) {
-            out.error = QStringLiteral("指定的引擎 %1 不支持目标语言: %2")
-                            .arg(wanted, bad.join(QStringLiteral(", ")));
+            out.error = i18n::sf("指定的引擎 %1 不支持目标语言: %2",
+                                 "The requested engine %1 does not support these target languages: %2",
+                                 {wanted, bad.join(QStringLiteral(", "))});
             return out;
         }
 
@@ -110,21 +117,25 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         for (const QString &id : m_priority) {
             core::ITranslator *t = findById(id);
             if (t == nullptr) {
-                reasons << QStringLiteral("%1: 该引擎未注册").arg(id);
+                reasons << i18n::sf("%1: 该引擎未注册", "%1: this engine is not registered", {id});
                 continue;
             }
             if (!t->isReady()) {
                 const core::ResolveResult rr = t->resolve(src, dsts.first());
-                reasons << QStringLiteral("%1: %2%3")
-                               .arg(id,
-                                    rr.reason.isEmpty() ? QStringLiteral("组件未就绪") : rr.reason,
-                                    assetsSuffix(rr));
+                reasons << i18n::sf("%1: %2%3",
+                                    "%1: %2%3",
+                                    {id,
+                                     rr.reason.isEmpty()
+                                         ? i18n::s("组件未就绪", "the engine is not ready")
+                                         : rr.reason,
+                                     assetsSuffix(rr)});
                 continue;
             }
             const QStringList bad = unsupportedDsts(t);
             if (!bad.isEmpty()) {
-                reasons << QStringLiteral("%1: 不支持目标语言 %2")
-                               .arg(id, bad.join(QStringLiteral(", ")));
+                reasons << i18n::sf("%1: 不支持目标语言 %2",
+                                    "%1: does not support target languages %2",
+                                    {id, bad.join(QStringLiteral(", "))});
                 continue;
             }
             chosen = t;
@@ -132,9 +143,11 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         }
 
         if (chosen == nullptr) {
-            out.error = QStringLiteral("所有翻译引擎均不可用 — %1")
-                            .arg(reasons.isEmpty() ? QStringLiteral("没有已注册的引擎")
-                                                   : reasons.join(QStringLiteral("；")));
+            out.error = i18n::sf("所有翻译引擎均不可用 — %1",
+                                 "No translation engine is available — %1",
+                                 {reasons.isEmpty()
+                                      ? i18n::s("没有已注册的引擎", "no engines are registered")
+                                      : reasons.join(i18n::s("；", "; "))});
             return out;
         }
     }
@@ -145,7 +158,8 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
     if (!isCacheEnabled()) {
         out = chosen->translate(req.paragraphs, src, dsts, req.options);
         if (!out.ok) {
-            const QString inner = out.error.isEmpty() ? QStringLiteral("未知错误") : out.error;
+            const QString inner =
+                out.error.isEmpty() ? i18n::s("未知错误", "unknown error") : out.error;
             out.error = QStringLiteral("[%1] %2").arg(engineId, inner);
         }
         m_lastCacheReport = CacheReport{};
@@ -192,7 +206,8 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
             const core::TranslateOutcome sub =
                 chosen->translate(missTexts, src, QStringList{dst}, req.options);
             if (!sub.ok) {
-                const QString inner = sub.error.isEmpty() ? QStringLiteral("未知错误") : sub.error;
+                const QString inner =
+                    sub.error.isEmpty() ? i18n::s("未知错误", "unknown error") : sub.error;
                 errors << QStringLiteral("[%1] %2").arg(engineId, inner);
             }
             const QStringList got = sub.byLang.value(dst);
@@ -211,7 +226,7 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
 
     out.ok = errors.isEmpty();
     if (!out.ok) {
-        out.error = errors.join(QStringLiteral("；"));
+        out.error = errors.join(i18n::s("；", "; "));
     }
     return out;
 }
@@ -234,11 +249,13 @@ QVector<QPair<QString, core::ResolveResult>> TranslatorRouter::status(const QStr
         }
         core::ResolveResult rr = t->resolve(s, d);
         if (!rr.ready && rr.reason.isEmpty()) {
-            rr.reason = QStringLiteral("组件未就绪");
+            rr.reason = i18n::s("组件未就绪", "The engine is not ready");
         }
         if (t->isReady() && !rr.ready) {
             // 组件自认可用但 resolve 说不行：以 resolve 为准，同时把矛盾暴露出来。
-            rr.reason = QStringLiteral("组件状态与 resolve 结果不一致：") + rr.reason;
+            rr.reason = i18n::s("组件状态与 resolve 结果不一致：",
+                                "The engine state contradicts its resolve() result: ")
+                        + rr.reason;
         }
         rows.push_back(qMakePair(t->id(), rr));
     }

@@ -1,5 +1,7 @@
 #include "translators/LocalMtTranslator.h"
 
+#include "i18n/L10n.h"
+
 namespace studious::translate {
 
 QString LocalMtTranslator::id() const
@@ -20,7 +22,8 @@ core::ResolveResult LocalMtTranslator::resolve(const QString &src, const QString
     core::ResolveResult r;
     r.ready = false;
     r.missingAssets = {QStringLiteral("mt.opus.en-zh")};
-    r.reason = QStringLiteral("本地翻译模型未安装（v1 未实现）");
+    r.reason = i18n::s("本地翻译模型未安装（v1 未实现）",
+                       "The local translation models are not installed (not implemented in v1)");
     return r;
 }
 
@@ -49,7 +52,7 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
     Q_UNUSED(options)
     core::TranslateOutcome out;
     out.ok = false;
-    out.error = QStringLiteral("local-mt 尚未实现");
+    out.error = i18n::s("local-mt 尚未实现", "local-mt has not been implemented yet");
     return out;
 }
 

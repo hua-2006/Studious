@@ -1,6 +1,7 @@
 #include "translators/MockTranslator.h"
 
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 
 namespace studious::translate {
 
@@ -20,7 +21,7 @@ core::ResolveResult MockTranslator::resolve(const QString &src, const QString &d
     Q_UNUSED(dst)
     core::ResolveResult r;
     r.ready = true;
-    r.reason = QStringLiteral("mock 无需资产");
+    r.reason = i18n::s("mock 无需资产", "The mock engine needs no assets");
     return r;
 }
 
@@ -67,7 +68,7 @@ core::TranslateOutcome MockTranslator::translate(const QStringList &paragraphs,
     m_cancelRequested = false;
 
     if (dstLangs.isEmpty()) {
-        out.error = QStringLiteral("mock 未收到目标语言");
+        out.error = i18n::s("mock 未收到目标语言", "The mock engine received no target language");
         return out;
     }
 
@@ -77,7 +78,7 @@ core::TranslateOutcome MockTranslator::translate(const QStringList &paragraphs,
         translated.reserve(paragraphs.size());
         for (const QString &para : paragraphs) {
             if (m_cancelRequested) {
-                out.error = QStringLiteral("mock 翻译已取消");
+                out.error = i18n::s("mock 翻译已取消", "The mock translation was cancelled");
                 return out;
             }
             translated << (QStringLiteral("【") + dst + QStringLiteral("】") + para);

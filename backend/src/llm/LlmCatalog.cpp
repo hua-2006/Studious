@@ -1,5 +1,6 @@
 #include "llm/LlmCatalog.h"
 
+#include "i18n/L10n.h"
 #include "net/IHttpClient.h"
 
 #include <QJsonArray>
@@ -26,26 +27,30 @@ QString describeFailure(const net::HttpResponse &resp)
 {
     switch (resp.status) {
     case 401:
-        return QStringLiteral("API Key 无效或已过期（401）");
+        return i18n::s("API Key 无效或已过期（401）",
+                       "The API key is invalid or has expired (401).");
     case 402:
-        return QStringLiteral("账户余额不足（402）");
+        return i18n::s("账户余额不足（402）", "The account has insufficient credit (402).");
     case 403:
-        return QStringLiteral("无访问权限（403）");
+        return i18n::s("无访问权限（403）", "Access denied (403).");
     case 404:
-        return QStringLiteral("接口不存在（404）：请检查 Base URL 是否以 /v1 结尾");
+        return i18n::s("接口不存在（404）：请检查 Base URL 是否以 /v1 结尾",
+                       "Endpoint not found (404). Check that the base URL ends with /v1.");
     case 429:
-        return QStringLiteral("请求过于频繁（429），请稍后重试");
+        return i18n::s("请求过于频繁（429），请稍后重试",
+                       "Too many requests (429). Please try again later.");
     default:
         break;
     }
     if (resp.status >= 500) {
-        return QStringLiteral("服务端错误（%1）").arg(resp.status);
+        return i18n::sf("服务端错误（%1）", "Server error (%1).", {resp.status});
     }
     const QString body = QString::fromUtf8(resp.body.left(200)).trimmed();
     if (!body.isEmpty()) {
-        return resp.error.isEmpty() ? body : (resp.error + QStringLiteral("：") + body);
+        return resp.error.isEmpty() ? body
+                                    : (resp.error + i18n::s("：", ": ") + body);
     }
-    return resp.error.isEmpty() ? QStringLiteral("请求失败") : resp.error;
+    return resp.error.isEmpty() ? i18n::s("请求失败", "The request failed") : resp.error;
 }
 
 net::HttpRequest makeRequest(const config::LlmConfig &cfg,
@@ -77,7 +82,8 @@ QVector<ReasoningOption> reasoningOptionsFor(const LlmModelInfo &model)
         // 避免严格的网关因为未知字段直接 400。
         ReasoningOption only;
         only.value = QString();
-        only.label = QStringLiteral("不适用（该模型不支持推理模式）");
+        only.label = i18n::s("不适用（该模型不支持推理模式）",
+                             "Not applicable (this model does not support reasoning mode)");
         only.recommended = true;
         options.append(only);
         return options;
@@ -85,15 +91,15 @@ QVector<ReasoningOption> reasoningOptionsFor(const LlmModelInfo &model)
 
     ReasoningOption none;
     none.value = QStringLiteral("none");
-    none.label = QStringLiteral("关闭（推荐，最快）");
+    none.label = i18n::s("关闭（推荐，最快）", "Off (recommended, fastest)");
     none.recommended = true;
     options.append(none);
 
     const QVector<QPair<QString, QString>> rest = {
-        {QStringLiteral("minimal"), QStringLiteral("极低")},
-        {QStringLiteral("low"), QStringLiteral("低")},
-        {QStringLiteral("medium"), QStringLiteral("中")},
-        {QStringLiteral("high"), QStringLiteral("高")},
+        {QStringLiteral("minimal"), i18n::s("极低", "Very low")},
+        {QStringLiteral("low"), i18n::s("低", "Low")},
+        {QStringLiteral("medium"), i18n::s("中", "Medium")},
+        {QStringLiteral("high"), i18n::s("高", "High")},
     };
     for (const auto &pair : rest) {
         ReasoningOption option;
@@ -104,7 +110,7 @@ QVector<ReasoningOption> reasoningOptionsFor(const LlmModelInfo &model)
 
     ReasoningOption fallback;
     fallback.value = QString();
-    fallback.label = QStringLiteral("跟随模型默认（最慢）");
+    fallback.label = i18n::s("跟随模型默认（最慢）", "Follow the model default (slowest)");
     options.append(fallback);
     return options;
 }
@@ -124,7 +130,8 @@ ModelListResult listModels(const config::LlmConfig &cfg, net::IHttpClient &http)
     ModelListResult out;
 
     if (cfg.baseUrl.trimmed().isEmpty()) {
-        out.error = QStringLiteral("Base URL 为空，请先填写接口地址");
+        out.error = i18n::s("Base URL 为空，请先填写接口地址",
+                            "The base URL is empty. Please fill in the API endpoint first.");
         return out;
     }
 
@@ -137,15 +144,16 @@ ModelListResult listModels(const config::LlmConfig &cfg, net::IHttpClient &http)
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        out.error = QStringLiteral("响应不是合法 JSON：%1")
-                        .arg(QString::fromUtf8(resp.body.left(200)));
+        out.error = i18n::sf("响应不是合法 JSON：%1", "The response is not valid JSON: %1",
+                             {QString::fromUtf8(resp.body.left(200))});
         return out;
     }
 
     const QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
     if (data.isEmpty()) {
-        out.error = QStringLiteral("/models 返回的 data 为空")
-                    + QStringLiteral("（部分网关不支持该接口，请手动填写模型名）");
+        out.error = i18n::s("/models 返回的 data 为空（部分网关不支持该接口，请手动填写模型名）",
+                            "The /models response contains no data (some gateways do not implement "
+                            "this endpoint; please enter the model name manually).");
         return out;
     }
 
@@ -176,7 +184,8 @@ ModelListResult listModels(const config::LlmConfig &cfg, net::IHttpClient &http)
     }
 
     if (out.models.isEmpty()) {
-        out.error = QStringLiteral("/models 里没有任何聊天模型");
+        out.error = i18n::s("/models 里没有任何聊天模型",
+                            "The /models response contains no chat models.");
         return out;
     }
 
@@ -189,7 +198,8 @@ ReasoningProbeResult probeReasoning(const config::LlmConfig &cfg, net::IHttpClie
     ReasoningProbeResult out;
 
     if (!cfg.isValid()) {
-        out.error = QStringLiteral("LLM 未配置：Base URL 或模型名为空");
+        out.error = i18n::s("LLM 未配置：Base URL 或模型名为空",
+                            "The LLM is not configured: the base URL or the model name is empty.");
         return out;
     }
 
@@ -235,15 +245,15 @@ ReasoningProbeResult probeReasoning(const config::LlmConfig &cfg, net::IHttpClie
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        out.error = QStringLiteral("响应不是合法 JSON：%1")
-                        .arg(QString::fromUtf8(resp.body.left(200)));
+        out.error = i18n::sf("响应不是合法 JSON：%1", "The response is not valid JSON: %1",
+                             {QString::fromUtf8(resp.body.left(200))});
         return out;
     }
 
     const QJsonObject root = doc.object();
     const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
     if (choices.isEmpty()) {
-        out.error = QStringLiteral("响应里没有 choices");
+        out.error = i18n::s("响应里没有 choices", "The response contains no choices.");
         return out;
     }
 

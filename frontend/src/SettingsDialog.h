@@ -60,6 +60,8 @@ private slots:
 private:
     void buildUi();
     void applyToUi(const studious::config::LlmConfig &cfg);
+    // 选中配置里的界面语言（空串 = 「跟随系统」）。
+    void applyLanguageToUi(const QString &uiLanguage);
     studious::config::LlmConfig uiToConfig() const;
     void showTestMessage(const QString &text, bool ok);
     void showTestNeutral(const QString &text);
@@ -75,6 +77,7 @@ private:
     studious::cache::TranslationCache *m_cache = nullptr;   // 不拥有
 
     QLineEdit *m_baseUrl = nullptr;
+    QComboBox *m_languageBox = nullptr;        // 界面语言：跟随系统 / 中文 / English（重启生效）
     QLineEdit *m_apiKey = nullptr;
     QCheckBox *m_showApiKey = nullptr;
     QComboBox *m_model = nullptr;              // 可编辑：网关不支持 /models 时手输

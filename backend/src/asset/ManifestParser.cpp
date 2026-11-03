@@ -8,6 +8,7 @@
 
 #include <studious/asset/Manifest.h>
 
+#include "i18n/L10n.h"
 #include "monocypher-ed25519.h"
 
 #include <QByteArrayView>
@@ -73,14 +74,16 @@ bool parseEntry(const QJsonObject &obj, AssetEntry *entry, QString *error)
 {
     entry->id = obj.value(QStringLiteral("id")).toString();
     if (entry->id.isEmpty()) {
-        *error = QStringLiteral("资产缺少 id（id 不能为空）");
+        *error = i18n::s("资产缺少 id（id 不能为空）",
+                         "The asset is missing its id (id must not be empty)");
         return false;
     }
 
     entry->type = obj.value(QStringLiteral("type")).toString();
     if (entry->type != QLatin1String("runtime") && entry->type != QLatin1String("model")) {
-        *error = QStringLiteral("资产 %1 的 type 非法：\"%2\"（只允许 runtime / model）")
-                     .arg(entry->id, entry->type);
+        *error = i18n::sf("资产 %1 的 type 非法：\"%2\"（只允许 runtime / model）",
+                          "Asset %1 has an invalid type: \"%2\" (only runtime / model are allowed)",
+                          {entry->id, entry->type});
         return false;
     }
 
@@ -105,22 +108,26 @@ bool parseEntry(const QJsonObject &obj, AssetEntry *entry, QString *error)
     if (sizeValue.isDouble()) {
         const double size = sizeValue.toDouble();
         if (size < 0.0) {
-            *error = QStringLiteral("资产 %1 的 size 为负数（%2），清单被篡改或发布脚本出错")
-                         .arg(entry->id)
-                         .arg(size);
+            *error = i18n::sf("资产 %1 的 size 为负数（%2），清单被篡改或发布脚本出错",
+                              "Asset %1 has a negative size (%2); the manifest was tampered with or "
+                              "the release script is broken",
+                              {entry->id, size});
             return false;
         }
         entry->size = static_cast<qint64>(size);
     } else if (!sizeValue.isUndefined() && !sizeValue.isNull()) {
-        *error = QStringLiteral("资产 %1 的 size 不是数字").arg(entry->id);
+        *error = i18n::sf("资产 %1 的 size 不是数字",
+                          "Asset %1 has a non-numeric size", {entry->id});
         return false;
     }
 
     // urls 只允许 https（拒绝明文 http 与任何其它协议）。
     for (const QString &url : entry->urls) {
         if (!url.startsWith(QLatin1String("https://"), Qt::CaseInsensitive)) {
-            *error = QStringLiteral("资产 %1 的下载地址不是 https:// 开头，拒绝明文传输：%2")
-                         .arg(entry->id, url);
+            *error = i18n::sf("资产 %1 的下载地址不是 https:// 开头，拒绝明文传输：%2",
+                              "Asset %1 has a non-https download URL; plain-text transfer is "
+                              "refused: %2",
+                              {entry->id, url});
             return false;
         }
     }
@@ -138,12 +145,15 @@ QString validateEntry(const AssetEntry &entry, const ManifestVerifyOptions &opts
         if (opts.allowMissingSha256) {
             return QString();
         }
-        return QStringLiteral("资产 %1 有下载地址但 sha256 为空（发布清单必须带整包哈希）")
-            .arg(entry.id);
+        return i18n::sf("资产 %1 有下载地址但 sha256 为空（发布清单必须带整包哈希）",
+                        "Asset %1 has download URLs but no sha256 (a published manifest must carry "
+                        "the archive checksum)",
+                        {entry.id});
     }
     if (!isHexOfLength(entry.sha256, 64, true)) {
-        return QStringLiteral("资产 %1 的 sha256 不是 64 位小写 hex：\"%2\"")
-            .arg(entry.id, entry.sha256);
+        return i18n::sf("资产 %1 的 sha256 不是 64 位小写 hex：\"%2\"",
+                        "Asset %1 has a sha256 that is not 64 lowercase hex characters: \"%2\"",
+                        {entry.id, entry.sha256});
     }
     return QString();
 }
@@ -210,33 +220,36 @@ QVector<AssetEntry> Manifest::forPlatform(const QString &op, const QString &arch
 ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerifyOptions &opts)
 {
     if (rawJson.trimmed().isEmpty()) {
-        return failResult(QStringLiteral("清单内容为空（0 字节）"));
+        return failResult(i18n::s("清单内容为空（0 字节）", "The manifest is empty (0 bytes)"));
     }
 
     QJsonParseError parseError{};
     const QJsonDocument doc = QJsonDocument::fromJson(rawJson, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
-        return failResult(QStringLiteral("清单 JSON 解析失败：%1（偏移 %2 字节）")
-                              .arg(parseError.errorString())
-                              .arg(parseError.offset));
+        return failResult(i18n::sf("清单 JSON 解析失败：%1（偏移 %2 字节）",
+                                   "Failed to parse the manifest JSON: %1 (at offset %2 bytes)",
+                                   {parseError.errorString(), parseError.offset}));
     }
     if (!doc.isObject()) {
-        return failResult(QStringLiteral("清单顶层必须是 JSON 对象"));
+        return failResult(i18n::s("清单顶层必须是 JSON 对象",
+                                  "The manifest root must be a JSON object"));
     }
     const QJsonObject root = doc.object();
 
     // (1) payload 必须是 object。
     const QJsonValue payloadValue = root.value(QStringLiteral("payload"));
     if (!payloadValue.isObject()) {
-        return failResult(QStringLiteral("清单缺少 payload 对象"));
+        return failResult(i18n::s("清单缺少 payload 对象",
+                                  "The manifest is missing its payload object"));
     }
     const QJsonObject payload = payloadValue.toObject();
 
     // (3) schema 白名单。放在验签前：schema 不对说明这压根不是我们的清单。
     const QString schema = root.value(QStringLiteral("schema")).toString();
     if (schema != QLatin1String(kManifestSchema)) {
-        return failResult(QStringLiteral("清单 schema 不受支持：\"%1\"（只接受 \"%2\"）")
-                              .arg(schema, QLatin1String(kManifestSchema)));
+        return failResult(i18n::sf("清单 schema 不受支持：\"%1\"（只接受 \"%2\"）",
+                                   "Unsupported manifest schema: \"%1\" (only \"%2\" is accepted)",
+                                   {schema, QLatin1String(kManifestSchema)}));
     }
 
     // (1)(2) sig 存在性 + 格式 + 验签。
@@ -244,18 +257,23 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
     QString sigHex;
     if (!sigValue.isUndefined() && !sigValue.isNull()) {
         if (!sigValue.isString()) {
-            return failResult(QStringLiteral("清单 sig 必须是字符串"));
+            return failResult(i18n::s("清单 sig 必须是字符串",
+                                      "The manifest sig must be a string"));
         }
         sigHex = sigValue.toString().trimmed();
         if (!sigHex.isEmpty() && !isHexOfLength(sigHex, 128, false)) {
-            return failResult(QStringLiteral("清单 sig 必须是 128 位 hex（64 字节签名），实际 %1 位")
-                                  .arg(sigHex.size()));
+            return failResult(i18n::sf("清单 sig 必须是 128 位 hex（64 字节签名），实际 %1 位",
+                                       "The manifest sig must be 128 hex characters (a 64-byte "
+                                       "signature); got %1 characters",
+                                       {sigHex.size()}));
         }
     }
 
     if (sigHex.isEmpty()) {
         if (opts.requireSignature) {
-            return failResult(QStringLiteral("清单缺少 sig 签名，拒绝加载未签名的资产清单"));
+            return failResult(i18n::s("清单缺少 sig 签名，拒绝加载未签名的资产清单",
+                                      "The manifest has no sig; refusing to load an unsigned asset "
+                                      "manifest"));
         }
     } else if (opts.trustedPublicKey.size() == 32) {
         // 签名覆盖字节：payload 的 Compact 序列化（QJsonObject 按 key 排序，确定性可保证）。
@@ -268,31 +286,38 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
             message,
             static_cast<size_t>(signedBytes.size()));
         if (checked != 0) {
-            return failResult(QStringLiteral(
-                "清单签名校验失败：payload 已被篡改，或不是由受信任密钥签发（keyId=%1）")
-                                  .arg(root.value(QStringLiteral("keyId")).toString()));
+            return failResult(i18n::sf(
+                "清单签名校验失败：payload 已被篡改，或不是由受信任密钥签发（keyId=%1）",
+                "Manifest signature verification failed: the payload was tampered with, or it was "
+                "not signed by the trusted key (keyId=%1)",
+                {root.value(QStringLiteral("keyId")).toString()}));
         }
     } else if (opts.requireSignature) {
         // requireSignature 为真但没给公钥：配置错误，必须显式失败，不能静默跳过。
-        return failResult(QStringLiteral("未提供清单验签公钥（trustedPublicKey 必须为 32 字节）"));
+        return failResult(i18n::s("未提供清单验签公钥（trustedPublicKey 必须为 32 字节）",
+                                  "No manifest verification key was provided (trustedPublicKey must "
+                                  "be 32 bytes)"));
     }
 
     // (4) schemaVersion 范围。落后于清单 = 客户端太旧，要明确提示。
     Manifest manifest;
     const QJsonValue versionValue = payload.value(QStringLiteral("schemaVersion"));
     if (!versionValue.isDouble()) {
-        return failResult(QStringLiteral("清单缺少 payload.schemaVersion 数字字段"));
+        return failResult(i18n::s("清单缺少 payload.schemaVersion 数字字段",
+                                  "The manifest is missing the numeric payload.schemaVersion field"));
     }
     manifest.schemaVersion = versionValue.toInt();
     if (manifest.schemaVersion <= 0) {
-        return failResult(QStringLiteral("清单 schemaVersion 非法：%1（必须 > 0）")
-                              .arg(manifest.schemaVersion));
+        return failResult(i18n::sf("清单 schemaVersion 非法：%1（必须 > 0）",
+                                   "Invalid manifest schemaVersion: %1 (it must be > 0)",
+                                   {manifest.schemaVersion}));
     }
     if (manifest.schemaVersion > opts.maxSchemaVersion) {
-        return failResult(QStringLiteral(
-            "清单 schemaVersion=%1 超出本客户端支持上限 %2：客户端版本过旧，请升级 Studious 后再试")
-                              .arg(manifest.schemaVersion)
-                              .arg(opts.maxSchemaVersion));
+        return failResult(i18n::sf(
+            "清单 schemaVersion=%1 超出本客户端支持上限 %2：客户端版本过旧，请升级 Studious 后再试",
+            "Manifest schemaVersion=%1 exceeds the highest version this client supports (%2): your "
+            "client is too old, please update Studious and try again",
+            {manifest.schemaVersion, opts.maxSchemaVersion}));
     }
 
     manifest.generatedAt = payload.value(QStringLiteral("generatedAt")).toString();
@@ -302,7 +327,8 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
     // (5)~(8) 逐条资产。
     const QJsonValue assetsValue = payload.value(QStringLiteral("assets"));
     if (!assetsValue.isArray()) {
-        return failResult(QStringLiteral("清单 payload.assets 必须是数组"));
+        return failResult(i18n::s("清单 payload.assets 必须是数组",
+                                  "The manifest payload.assets field must be an array"));
     }
     const QJsonArray assetsArray = assetsValue.toArray();
 
@@ -314,24 +340,28 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
     for (int i = 0; i < assetsArray.size(); ++i) {
         const QJsonValue itemValue = assetsArray.at(i);
         if (!itemValue.isObject()) {
-            return failResult(QStringLiteral("清单 assets[%1] 不是 JSON 对象").arg(i));
+            return failResult(i18n::sf("清单 assets[%1] 不是 JSON 对象",
+                                       "Manifest entry assets[%1] is not a JSON object", {i}));
         }
 
         AssetEntry entry;
         QString error;
         if (!parseEntry(itemValue.toObject(), &entry, &error)) {
-            return failResult(QStringLiteral("清单 assets[%1]：%2").arg(i).arg(error));
+            return failResult(i18n::sf("清单 assets[%1]：%2", "Manifest assets[%1]: %2", {i, error}));
         }
 
         // id 全局唯一：重复 = 发布脚本出错，直接拒绝（否则安装器会随机选一条）。
         if (seenIds.contains(entry.id)) {
-            return failResult(QStringLiteral("清单资产 id 重复：%1（id 必须全局唯一）").arg(entry.id));
+            return failResult(i18n::sf("清单资产 id 重复：%1（id 必须全局唯一）",
+                                       "Duplicate asset id in the manifest: %1 (ids must be unique)",
+                                       {entry.id}));
         }
         seenIds << entry.id;
 
         const QString invalid = validateEntry(entry, opts);
         if (!invalid.isEmpty()) {
-            return failResult(QStringLiteral("清单 assets[%1]：%2").arg(i).arg(invalid));
+            return failResult(i18n::sf("清单 assets[%1]：%2", "Manifest assets[%1]: %2",
+                                       {i, invalid}));
         }
 
         parsed.push_back(entry);
@@ -358,7 +388,8 @@ QString sha256File(const QString &path, QString *error)
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        return setError(QStringLiteral("无法打开文件：%1（%2）").arg(path, file.errorString()));
+        return setError(i18n::sf("无法打开文件：%1（%2）",
+                                 "Unable to open the file: %1 (%2)", {path, file.errorString()}));
     }
 
     // 分块读：模型包动辄几 GB，绝不能整个读进内存。
@@ -370,7 +401,9 @@ QString sha256File(const QString &path, QString *error)
     for (;;) {
         const qint64 read = file.read(buffer.data(), kChunk);
         if (read < 0) {
-            return setError(QStringLiteral("读取文件失败：%1（%2）").arg(path, file.errorString()));
+            return setError(i18n::sf("读取文件失败：%1（%2）",
+                                     "Failed to read the file: %1 (%2)",
+                                     {path, file.errorString()}));
         }
         if (read == 0) {
             break;
@@ -390,7 +423,8 @@ bool verifyFileSha256(const QString &path, const QString &expectedHex, QString *
     const QString expected = expectedHex.trimmed().toLower();
     if (!isHexOfLength(expected, 64, true)) {
         if (error != nullptr) {
-            *error = QStringLiteral("期望的 sha256 不是 64 位 hex：\"%1\"").arg(expectedHex);
+            *error = i18n::sf("期望的 sha256 不是 64 位 hex：\"%1\"",
+                              "The expected sha256 is not 64 hex characters: \"%1\"", {expectedHex});
         }
         return false;
     }
@@ -406,7 +440,8 @@ bool verifyFileSha256(const QString &path, const QString &expectedHex, QString *
 
     if (actual != expected) {
         if (error != nullptr) {
-            *error = QStringLiteral("sha256 不匹配：文件 %1，期望 %2").arg(actual, expected);
+            *error = i18n::sf("sha256 不匹配：文件 %1，期望 %2",
+                              "SHA-256 mismatch: file is %1, expected %2", {actual, expected});
         }
         return false;
     }

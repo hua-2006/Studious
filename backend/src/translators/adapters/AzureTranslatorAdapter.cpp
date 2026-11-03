@@ -1,6 +1,7 @@
 #include "translators/adapters/AzureTranslatorAdapter.h"
 
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 #include "translators/adapters/GoogleFreeAdapter.h"
 
 namespace studious::translate {
@@ -58,8 +59,11 @@ WebAdapterResult AzureTranslatorAdapter::translate(net::IHttpClient &http,
     WebAdapterResult r;
     r.ok = false;
     r.httpStatus = 0;
-    r.error = QStringLiteral("Microsoft Azure 翻译尚未接入：请在设置中填写 Azure 订阅 key"
-                             "（免费层 F0 约 200 万字符/月），当前版本仅保留接口");
+    r.error = i18n::s("Microsoft Azure 翻译尚未接入：请在设置中填写 Azure 订阅 key"
+                      "（免费层 F0 约 200 万字符/月），当前版本仅保留接口",
+                      "Microsoft Azure Translator is not wired up yet. Please set your Azure "
+                      "subscription key in Settings (the free F0 tier covers about 2 million "
+                      "characters per month); this version keeps the interface only.");
     return r;
 }
 

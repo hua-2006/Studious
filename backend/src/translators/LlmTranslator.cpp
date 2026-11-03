@@ -1,6 +1,7 @@
 #include "translators/LlmTranslator.h"
 
 #include "contract/LanguageRegistry.h"
+#include "i18n/L10n.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -67,12 +68,14 @@ core::ResolveResult LlmTranslator::resolve(const QString &src, const QString &ds
     core::ResolveResult r;
     if (m_cfg.isValid()) {
         r.ready = true;
-        r.reason = QStringLiteral("云端 LLM 已配置");
+        r.reason = i18n::s("云端 LLM 已配置", "The cloud LLM is configured");
         return r;
     }
 
     r.ready = false;
-    r.reason = QStringLiteral("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型");
+    r.reason = i18n::s("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型",
+                       "LLM API is not configured. Please set the API URL, key and model in "
+                       "Settings.");
     return r;
 }
 
@@ -105,15 +108,18 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
 
     // 三个前置条件缺失都要有明确原因：前端据此引导用户去设置页。
     if (!m_cfg.isValid()) {
-        out.error = QStringLiteral("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型");
+        out.error = i18n::s("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型",
+                            "LLM API is not configured. Please set the API URL, key and model in "
+                            "Settings.");
         return out;
     }
     if (m_http == nullptr) {
-        out.error = QStringLiteral("llm 未注入 HTTP 客户端，无法发起请求");
+        out.error = i18n::s("llm 未注入 HTTP 客户端，无法发起请求",
+                            "The llm engine has no HTTP client, so it cannot send requests.");
         return out;
     }
     if (dstLangs.isEmpty()) {
-        out.error = QStringLiteral("llm 引擎未收到目标语言");
+        out.error = i18n::s("llm 引擎未收到目标语言", "The llm engine received no target language.");
         return out;
     }
 
@@ -123,7 +129,8 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
     for (const QString &rawDst : dstLangs) {
         const QString dst = core::LanguageRegistry::normalize(rawDst);
         if (dst.isEmpty() || dst == QLatin1String("auto")) {
-            langErrors << QStringLiteral("目标语言 \"%1\" 无效").arg(rawDst);
+            langErrors << i18n::sf("目标语言 \"%1\" 无效", "Invalid target language \"%1\"",
+                                   {rawDst});
             continue;
         }
 
@@ -146,7 +153,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
         int cursor = 0;
         while (cursor < pending.size()) {
             if (m_cancelRequested) {
-                out.error = QStringLiteral("llm 翻译已取消");
+                out.error = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
                 return out;
             }
 
@@ -165,10 +172,10 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                 QString err;
                 if (!translateOne(texts.first(), dst, endpoint, one, err)) {
                     if (firstParagraphError.isEmpty()) {
-                        firstParagraphError = QStringLiteral("目标语言 %1 第 %2 段失败：%3")
-                                                  .arg(dst)
-                                                  .arg(chunk.first() + 1)
-                                                  .arg(err);
+                        firstParagraphError =
+                            i18n::sf("目标语言 %1 第 %2 段失败：%3",
+                                     "Target language %1, paragraph %2 failed: %3",
+                                     {dst, chunk.first() + 1, err});
                     }
                 } else {
                     translated[chunk.first()] = one;
@@ -194,10 +201,9 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                 if (translateOne(texts.at(k), dst, endpoint, one, err)) {
                     translated[chunk.at(k)] = one;
                 } else if (firstParagraphError.isEmpty()) {
-                    firstParagraphError = QStringLiteral("目标语言 %1 第 %2 段失败：%3")
-                                              .arg(dst)
-                                              .arg(chunk.at(k) + 1)
-                                              .arg(err);
+                    firstParagraphError = i18n::sf("目标语言 %1 第 %2 段失败：%3",
+                                                   "Target language %1, paragraph %2 failed: %3",
+                                                   {dst, chunk.at(k) + 1, err});
                 }
             }
         }
@@ -278,7 +284,7 @@ bool LlmTranslator::translateOne(const QString &text,
         return false;
     }
     if (content.isEmpty()) {
-        outError = QStringLiteral("LLM 未返回译文");
+        outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
         return false;
     }
     outText = content;
@@ -345,15 +351,16 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
-        outError = QStringLiteral("LLM 响应解析失败：%1")
-                       .arg(QString::fromUtf8(resp.body.left(200)));
+        outError = i18n::sf("LLM 响应解析失败：%1",
+                            "Failed to parse the LLM response: %1",
+                            {QString::fromUtf8(resp.body.left(200))});
         return false;
     }
 
     const QJsonObject root = doc.object();
     const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
     if (choices.isEmpty()) {
-        outError = QStringLiteral("LLM 未返回译文");
+        outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
         return false;
     }
 
@@ -464,9 +471,9 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
         return true;
     }
 
-    outError = QStringLiteral("批量译文格式不符（期望 %1 条）：%2")
-                   .arg(texts.size())
-                   .arg(content.left(200));
+    outError = i18n::sf("批量译文格式不符（期望 %1 条）：%2",
+                        "The batch reply was malformed (expected %1 items): %2",
+                        {texts.size(), content.left(200)});
     return false;
 }
 
@@ -475,28 +482,34 @@ QString LlmTranslator::describeHttpFailure(const net::HttpResponse &resp)
     const int status = resp.status;
 
     if (status == 401) {
-        return QStringLiteral("LLM API Key 无效或已过期（401）");
+        return i18n::s("LLM API Key 无效或已过期（401）",
+                       "The LLM API key is invalid or has expired (401).");
     }
     if (status == 402) {
-        return QStringLiteral("LLM 账户余额不足（402）");
+        return i18n::s("LLM 账户余额不足（402）",
+                       "The LLM account has insufficient credit (402).");
     }
     if (status == 429) {
-        return QStringLiteral("LLM 请求过于频繁（429），请稍后重试");
+        return i18n::s("LLM 请求过于频繁（429），请稍后重试",
+                       "Too many LLM requests (429). Please try again later.");
     }
     if (status >= 500 && status < 600) {
-        return QStringLiteral("LLM 服务端错误（%1）").arg(status);
+        return i18n::sf("LLM 服务端错误（%1）", "The LLM service failed with HTTP %1.", {status});
     }
     if (status == 0) {
         // 0 = 根本没拿到 HTTP 响应：DNS / 连接被拒 / TLS / 超时都走这里。
-        return QStringLiteral("LLM 连接失败或超时：%1")
-            .arg(resp.error.isEmpty() ? QStringLiteral("未知网络错误") : resp.error);
+        return i18n::sf("LLM 连接失败或超时：%1",
+                        "Could not connect to the LLM (failure or timeout): %1",
+                        {resp.error.isEmpty()
+                             ? i18n::s("未知网络错误", "unknown network error")
+                             : resp.error});
     }
     // 其余 4xx（模型名写错、body 不合法等）：把状态码 + 服务端错误体带出来。
     // 网关通常会在 body 里写清原因（如 {"error":{"code":"model_not_found"...}}），比只给状态码有用得多。
     const QString body = QString::fromUtf8(resp.body.left(200)).trimmed();
-    return QStringLiteral("LLM 请求被拒绝（HTTP %1）：%2")
-        .arg(status)
-        .arg(body.isEmpty() ? resp.error : body);
+    return i18n::sf("LLM 请求被拒绝（HTTP %1）：%2",
+                    "The LLM rejected the request (HTTP %1): %2",
+                    {status, body.isEmpty() ? resp.error : body});
 }
 
 QString LlmTranslator::stripWrapper(QString text)

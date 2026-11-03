@@ -45,6 +45,7 @@ AppSettings AppSettings::defaults()
     s.srcLang = QStringLiteral("auto");
     s.dstLang = QStringLiteral("zh");
     s.cacheEnabled = true;
+    s.uiLanguage.clear();   // 空 = 跟随系统语言
     return s;
 }
 
@@ -87,6 +88,11 @@ AppSettings AppSettings::load()
     // 布尔值不需要空值回落：缺失时 QSettings 直接给默认值 true（= 与 defaults() 一致）。
     s.cacheEnabled = store.value(key("cache/enabled"), true).toBool();
 
+    // 界面语言：空串是有意义的值（= 跟随系统），所以不做 textOr 回落。
+    // 注册表可能被手改成乱七八糟的值，不在白名单里就当"跟随系统"。
+    const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
+    s.uiLanguage = (lang == QLatin1String("zh") || lang == QLatin1String("en")) ? lang : QString();
+
     return s;
 }
 
@@ -109,6 +115,7 @@ void AppSettings::save() const
     store.setValue(key("lang/dst"), dstLang);
 
     store.setValue(key("cache/enabled"), cacheEnabled);
+    store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
 
     store.sync();
 }
