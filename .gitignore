@@ -1,0 +1,59 @@
+# 构建产物
+build/
+out/
+bin/
+obj/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeUserPresets.json
+
+# 编译中间产物
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.dll
+
+# Qt 生成物
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.moc
+*.qmlc
+*.jsc
+.qmake.stash
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.pro.user
+*.pro.user.*
+*.suo
+*.ncb
+*.sdf
+
+# 运行时资产（模型、推理引擎，不入库）
+runtime/
+models/
+downloads/
+
+# 日志与缓存
+*.log
+logs/
+cache/
+*.sqlite
+*.db
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
