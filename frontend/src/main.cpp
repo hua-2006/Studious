@@ -116,11 +116,13 @@ int runSmoke(const QStringList &args)
                  req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
                                             : req.webProviders.join(QLatin1Char(',')))
             .arg(req.paragraphs.size()));
-    say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4")
+    say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4  think=%5")
             .arg(req.llm.model.isEmpty() ? QStringLiteral("<未配置>") : req.llm.model,
                  req.llm.baseUrl.isEmpty() ? QStringLiteral("<未配置>") : req.llm.baseUrl,
                  QString::number(req.llm.timeoutMs),
-                 QString::number(req.llm.temperature)));
+                 QString::number(req.llm.temperature),
+                 req.llm.reasoningEffort.isEmpty() ? QStringLiteral("<默认>")
+                                                   : req.llm.reasoningEffort));
 
     TranslateJob job;
     QEventLoop loop;

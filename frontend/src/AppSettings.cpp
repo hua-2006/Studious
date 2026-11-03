@@ -38,6 +38,7 @@ AppSettings AppSettings::defaults()
     s.llm.maxTokens = 2048;
     s.llm.temperature = 0.2;
     s.llm.systemPrompt.clear();   // 空 = 后端内置 prompt
+    s.llm.reasoningEffort = QStringLiteral("none");   // 默认关闭思考
 
     s.webProviderId.clear();   // 自动
     s.engineId.clear();        // 自动
@@ -72,6 +73,9 @@ AppSettings AppSettings::load()
                                  32768);
     s.llm.temperature = clampedDouble(
         store.value(key("llm/temperature"), def.llm.temperature).toDouble(), 0.0, 1.5);
+    // 思考等级同样不做空值回落：空串 = 不传参数（跟随服务端默认），是有意义的状态。
+    s.llm.reasoningEffort =
+        store.value(key("llm/reasoningEffort"), def.llm.reasoningEffort).toString().trimmed();
 
     // 这两个空串本身是合法值（= 自动），textOr 回落到的也是空串，行为一致。
     s.webProviderId = textOr(key("web/providerId"), def.webProviderId);
@@ -93,6 +97,7 @@ void AppSettings::save() const
     store.setValue(key("llm/maxTokens"), llm.maxTokens);
     store.setValue(key("llm/temperature"), llm.temperature);
     store.setValue(key("llm/systemPrompt"), llm.systemPrompt);
+    store.setValue(key("llm/reasoningEffort"), llm.reasoningEffort);
 
     store.setValue(key("web/providerId"), webProviderId);
     store.setValue(key("engine/id"), engineId);
