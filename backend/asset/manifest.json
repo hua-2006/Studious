@@ -1,0 +1,236 @@
+{
+  "_comment": [
+    "这是 Studious 资产清单的示例 / 开发参考文件，给人看的，不是发布产物。",
+    "它没有签名：sig 为空串。用 parseManifest 解析它时必须 requireSignature=false（manifest_tool verify 不带 pubkeyHex 就是这种模式）。",
+    "所有 sha256 都是空串占位（待发布时填入），真实校验会在发布流水线里用 manifest_tool sign 重新生成并签署。",
+    "体积是按当前已知包大小估的值，仅供 UI 预估下载量 / 磁盘占用。",
+    "runtime.llama.vulkan.linux-x64 的 urls 故意为空 = 占位条目，客户端应显示「暂不支持」而不是去下载。"
+  ],
+  "schema": "studious-manifest/1",
+  "keyId": "studious-dev",
+  "payload": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-11-04T00:00:00Z",
+    "channel": "stable",
+    "assets": [
+      {
+        "id": "runtime.llama.vulkan.win-x64",
+        "type": "runtime",
+        "op": "windows",
+        "arch": "x64",
+        "backend": "vulkan",
+        "version": "b4200",
+        "size": 262144000,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://cdn.studious.app/runtime/llama-vulkan-win-x64-b4200.zip"
+        ],
+        "files": [
+          "llama-server.exe",
+          "llama-cli.exe",
+          "ggml-vulkan.dll"
+        ],
+        "requiresVramGB": 4,
+        "note": "待发布时填入真实 sha256；需要支持 Vulkan 的独立显卡"
+      },
+      {
+        "id": "runtime.llama.cpu.win-x64",
+        "type": "runtime",
+        "op": "windows",
+        "arch": "x64",
+        "backend": "cpu",
+        "version": "b4200",
+        "size": 188743680,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://cdn.studious.app/runtime/llama-cpu-win-x64-b4200.zip"
+        ],
+        "files": [
+          "llama-server.exe",
+          "llama-cli.exe"
+        ],
+        "note": "待发布时填入真实 sha256；无独显时的兜底引擎，速度明显低于 vulkan"
+      },
+      {
+        "id": "runtime.onnxruntime.win-x64",
+        "type": "runtime",
+        "op": "windows",
+        "arch": "x64",
+        "backend": "cpu",
+        "version": "1.20.1",
+        "size": 57671680,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://cdn.studious.app/runtime/onnxruntime-win-x64-1.20.1.zip"
+        ],
+        "files": [
+          "onnxruntime.dll"
+        ],
+        "requiresRamGB": 2,
+        "note": "待发布时填入真实 sha256；本地 MT（OPUS-MT）引擎的运行时"
+      },
+      {
+        "id": "runtime.llama.vulkan.linux-x64",
+        "type": "runtime",
+        "op": "linux",
+        "arch": "x64",
+        "backend": "vulkan",
+        "version": "b4200",
+        "size": 268435456,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [],
+        "files": [
+          "llama-server",
+          "llama-cli"
+        ],
+        "requiresVramGB": 4,
+        "note": "占位：Linux 版尚未发布，urls 为空；客户端只显示「暂不支持」，不要尝试下载"
+      },
+      {
+        "id": "model.qwen2.5-3b-instruct.q4km",
+        "type": "model",
+        "family": "qwen2.5",
+        "quant": "Q4_K_M",
+        "version": "2025-01",
+        "size": 1930000000,
+        "sha256": "",
+        "archive": "",
+        "urls": [
+          "https://modelscope.cn/models/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/master/qwen2.5-3b-instruct-q4_k_m.gguf",
+          "https://hf-mirror.com/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+        ],
+        "files": [
+          "qwen2.5-3b-instruct-q4_k_m.gguf"
+        ],
+        "requiresRamGB": 6,
+        "requiresVramGB": 4,
+        "note": "待发布时填入真实 sha256；默认推荐模型（国内走 ModelScope，海外走 hf-mirror）"
+      },
+      {
+        "id": "model.qwen2.5-7b-instruct.q4km",
+        "type": "model",
+        "family": "qwen2.5",
+        "quant": "Q4_K_M",
+        "version": "2025-01",
+        "size": 4680000000,
+        "sha256": "",
+        "archive": "",
+        "urls": [
+          "https://modelscope.cn/models/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/master/qwen2.5-7b-instruct-q4_k_m.gguf",
+          "https://hf-mirror.com/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf"
+        ],
+        "files": [
+          "qwen2.5-7b-instruct-q4_k_m.gguf"
+        ],
+        "requiresRamGB": 10,
+        "requiresVramGB": 6,
+        "note": "待发布时填入真实 sha256；画质更高但要求 10GB 内存"
+      },
+      {
+        "id": "mt.opus.en-zh",
+        "type": "model",
+        "family": "opus-mt",
+        "quant": "",
+        "version": "2024-11",
+        "pair": [
+          "en",
+          "zh"
+        ],
+        "size": 314572800,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-zh/resolve/main/opus-mt-en-zh.zip"
+        ],
+        "files": [
+          "encoder_model.onnx",
+          "decoder_model.onnx",
+          "source.spm",
+          "target.spm"
+        ],
+        "requiresRamGB": 2,
+        "note": "待发布时填入真实 sha256；本地 MT 语言对，秒级响应、不联网"
+      },
+      {
+        "id": "mt.opus.zh-en",
+        "type": "model",
+        "family": "opus-mt",
+        "quant": "",
+        "version": "2024-11",
+        "pair": [
+          "zh",
+          "en"
+        ],
+        "size": 314572800,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://hf-mirror.com/Helsinki-NLP/opus-mt-zh-en/resolve/main/opus-mt-zh-en.zip"
+        ],
+        "files": [
+          "encoder_model.onnx",
+          "decoder_model.onnx",
+          "source.spm",
+          "target.spm"
+        ],
+        "requiresRamGB": 2,
+        "note": "待发布时填入真实 sha256；本地 MT 语言对"
+      },
+      {
+        "id": "mt.opus.en-ja",
+        "type": "model",
+        "family": "opus-mt",
+        "quant": "",
+        "version": "2024-11",
+        "pair": [
+          "en",
+          "ja"
+        ],
+        "size": 314572800,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-jap/resolve/main/opus-mt-en-jap.zip"
+        ],
+        "files": [
+          "encoder_model.onnx",
+          "decoder_model.onnx",
+          "source.spm",
+          "target.spm"
+        ],
+        "requiresRamGB": 2,
+        "note": "待发布时填入真实 sha256；本地 MT 语言对（日文）"
+      },
+      {
+        "id": "mt.opus.ja-en",
+        "type": "model",
+        "family": "opus-mt",
+        "quant": "",
+        "version": "2024-11",
+        "pair": [
+          "ja",
+          "en"
+        ],
+        "size": 314572800,
+        "sha256": "",
+        "archive": "zip",
+        "urls": [
+          "https://hf-mirror.com/Helsinki-NLP/opus-mt-ja-en/resolve/main/opus-mt-ja-en.zip"
+        ],
+        "files": [
+          "encoder_model.onnx",
+          "decoder_model.onnx",
+          "source.spm",
+          "target.spm"
+        ],
+        "requiresRamGB": 2,
+        "note": "待发布时填入真实 sha256；本地 MT 语言对（日文→英文）"
+      }
+    ]
+  },
+  "sig": ""
+}
