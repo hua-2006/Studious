@@ -1034,3 +1034,93 @@ ReasoningProbeResult probeReasoning(const config::LlmConfig &cfg, net::IHttpClie
 | **翻译缓存**（原文 hash → 译文） | 命中即 0ms；galgame 重复台词多 |
 | **预翻译**（后台提前翻后续 N 句） | 玩家推进时命中缓存，感知延迟趋近 0 |
 | 换更快的模型 | 实测各模型都在 1.0~1.3s，收益有限 |
+
+---
+
+## 18. 翻译缓存（Translation Memory）
+
+### 18.1 定位
+
+缓存不是"优化"，是**延迟结构上的第二个数量级**：
+
+| 场景 | 无缓存 | 有缓存 |
+|---|---|---|
+| 首次遇到某句 | ~1.1s | ~1.1s（不变） |
+| 再次遇到同一句 | ~1.1s | **0ms** |
+
+galgame 的台词、菜单项、角色口头禅重复率极高，实测自测用例首次 1123ms → 命中 **0ms**。
+
+### 18.2 缓存键设计
+
+```cpp
+key = SHA256( engineTag \x1f srcLang \x1f dstLang \x1f text )
+```
+
+三个要点：
+
+1. **必须带 `engineTag`**。同一个原文换个模型/换家翻译源，译文可能完全不同，混用会让用户以为"翻译坏了"。
+   默认 `engineTag = id()`，`LlmTranslator` 覆写为 `"llm|<model>|<baseUrl>"`。
+2. **用 `\x1f` 分隔**，不用 `|` 之类能出现在正文里的字符，避免 `"a|b"` 与 `"a"` + `"|b"` 撞键。
+3. **键里不含 uid/时间**，保证跨进程、跨会话可复用。
+
+### 18.3 开关接口
+
+```cpp
+router.setTranslationCache(&cache);   // 注入（不注入 = 完全不用缓存）
+router.setCacheEnabled(true/false);   // 开关
+router.isCacheEnabled();
+router.lastCacheReport();             // {used, hits, misses} 供 UI 显示
+```
+
+**两级开关**：不注入 = 根本没有缓存能力；注入了但 `enabled=false` = 完全绕过（不读不写）。自测已验证关闭后库内条数为 0。
+
+### 18.4 执行流程
+
+```
+translate()
+  ├─ 未开缓存 → 原样交给引擎（行为与改造前完全一致）
+  └─ 开缓存
+       ├─ 逐段查 key
+       ├─ 命中 → 直接填进结果，不发请求
+       └─ 未命中 → 收集起来，一次性交给引擎翻译（仍然走批量合并）
+                     → 成功后逐条写回缓存
+```
+
+**注意**：未命中集合仍走 §17.8 的批量合并，所以"部分命中"也是 1 次请求，不是 N 次。
+
+### 18.5 存储实现
+
+- SQLite（`QSQLITE`），表 `translations(key, source, translated, engine, src_lang, dst_lang, created_at, hit_count)`
+- `PRAGMA journal_mode=WAL` + `busy_timeout=3000`，允许并发读写
+- **每线程一条连接**（连接名含线程 id）——`QSqlDatabase` 不可跨线程
+- 空译文不入缓存（否则下次会命中一个空结果）
+- 超过 `maxEntries`（默认 10 万条）时按 `created_at` 淘汰最旧的一批
+- `hit_count` 记录命中次数，将来可按"常用度"做淘汰优先级
+
+### 18.6 自测覆盖（`--cache`）
+
+| 用例 | 断言 |
+|---|---|
+| `cacheOpen` | 数据库能打开 |
+| `cacheDisabledIgnored` | `enabled=false` 时 `report.used == false` |
+| `cacheFirstMiss` | 首次全部未命中（hits=0, misses=N） |
+| `cacheSecondHit` | 第二次全部命中（hits=N, misses=0） |
+| `cacheSameResult` | 两次译文完全一致（缓存不能改变结果） |
+| `cacheOffNoWrite` | 关闭后不写入（库内条数 0） |
+
+实测输出：
+
+```
+第一次：hits=0 misses=3  1123 ms
+第二次：hits=3 misses=0     0 ms
+耗时：首次 1123 ms -> 缓存命中 0 ms
+```
+
+### 18.7 后续可扩展
+
+| 方向 | 说明 |
+|---|---|
+| **预翻译** | galgame 提前翻后续 N 句，玩家推进时全部命中 |
+| 模糊命中 | 仅标点/空格差异时归一化后复用 |
+| 缓存导入导出 | 社区共享译文库（注意版权与审核） |
+| 淘汰策略 | 按 `hit_count` 而非纯时间，保留高频句 |

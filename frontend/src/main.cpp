@@ -7,9 +7,11 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QObject>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QTimer>
 
+#include <studious/cache/TranslationCache.h>
 #include <studious/contract/Types.h>
 #include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
@@ -18,6 +20,25 @@
 #include <cstring>
 
 namespace {
+
+// 进程级唯一的翻译缓存（GUI / --smoke 共用同一个 db 文件）。
+//
+// 两个刻意的设计决定：
+//   1. 用函数内静态而不是命名空间级静态：QStandardPaths::writableLocation(AppDataLocation)
+//      依赖 QCoreApplication 的 applicationName，命名空间级静态会在 QApplication 构造
+//      之前就执行，拿到的路径是错的（甚至为空）。
+//   2. new 出来故意不 delete：TranslationCache 的析构函数要碰 QSqlDatabase 的驱动管理器，
+//      而进程退出时谁先析构是未定义的——让它在进程结束时随操作系统回收，最省心。
+studious::cache::TranslationCache *sharedCache()
+{
+    static studious::cache::TranslationCache *instance = nullptr;
+    if (instance == nullptr) {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString cachePath = dir + QStringLiteral("/cache.db");
+        instance = new studious::cache::TranslationCache(cachePath);
+    }
+    return instance;
+}
 
 // 控制台一律写 UTF-8 字节（与 backend_selftest 一致）。
 // Windows Terminal / PowerShell 7 默认 65001；老控制台请先 chcp 65001。
@@ -35,6 +56,7 @@ void printUsage()
     say(QStringLiteral("  studious.exe                                       # 启动 GUI"));
     say(QStringLiteral("  studious.exe --smoke \"文本\" --to zh --engine web    # 无界面冒烟"));
     say(QStringLiteral("  可选: --to <lang> (默认 zh) / --engine <mock|web|llm|local-mt> (默认自动)"));
+    say(QStringLiteral("        --cache <on|off> (默认 on，走进程级 SQLite 翻译缓存)"));
     say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
     say(QStringLiteral("        --llm-base <url> --llm-key <key> --llm-model <model>"));
     say(QStringLiteral("        （三项都不给时用 AppSettings::defaults() 的本机网关配置）"));
@@ -53,6 +75,8 @@ int runSmoke(const QStringList &args)
     QString llmBase;
     QString llmKey;
     QString llmModel;
+    // 缓存开关默认与 GUI 一致（AppSettings::defaults() 里是 true）。
+    bool cacheEnabled = AppSettings::defaults().cacheEnabled;
 
     for (int i = 0; i < args.size(); ++i) {
         const QString &arg = args.at(i);
@@ -68,6 +92,18 @@ int runSmoke(const QStringList &args)
             engine = args.at(++i);
         } else if (arg == QLatin1String("--provider") && hasNext) {
             provider = args.at(++i);
+        } else if (arg == QLatin1String("--cache") && hasNext) {
+            const QString mode = args.at(++i).trimmed().toLower();
+            if (mode == QLatin1String("on") || mode == QLatin1String("1")
+                || mode == QLatin1String("true")) {
+                cacheEnabled = true;
+            } else if (mode == QLatin1String("off") || mode == QLatin1String("0")
+                       || mode == QLatin1String("false")) {
+                cacheEnabled = false;
+            } else {
+                say(QStringLiteral("[FAIL] --cache 只接受 on / off，收到：") + mode);
+                return 1;
+            }
         } else if (arg == QLatin1String("--llm-base") && hasNext) {
             llmBase = args.at(++i);
         } else if (arg == QLatin1String("--llm-key") && hasNext) {
@@ -113,6 +149,10 @@ int runSmoke(const QStringList &args)
         req.llm.model = llmModel;
     }
 
+    // 缓存实例照给（关掉只是不用它，不影响任何行为），开关单独传。
+    req.cache = sharedCache();
+    req.cacheEnabled = cacheEnabled;
+
     say(QStringLiteral("=== Studious 前端冒烟 ==="));
     say(QStringLiteral("engine=%1  to=%2  src=auto  provider=%3  paragraphs=%4")
             .arg(engine.isEmpty() ? QStringLiteral("auto") : engine,
@@ -135,13 +175,22 @@ int runSmoke(const QStringList &args)
     QObject::connect(&job,
                      &TranslateJob::finished,
                      &loop,
-                     [&](const studious::core::TranslateOutcome &outcome, qint64 elapsedMs) {
+                     [&](const TranslateJobResult &result, qint64 elapsedMs) {
                          say(QStringLiteral("耗时: %1 ms").arg(elapsedMs));
-                         if (!outcome.ok) {
-                             say(QStringLiteral("[FAIL] ") + outcome.error);
+                         // 缓存一行：开 = 报命中情况（命中数/总段数），关 = 明确写 off。
+                         if (cacheEnabled) {
+                             const int total = result.cacheHits + result.cacheMisses;
+                             say(QStringLiteral("cache=on  命中=%1/%2")
+                                     .arg(result.cacheHits)
+                                     .arg(total));
+                         } else {
+                             say(QStringLiteral("cache=off"));
+                         }
+                         if (!result.outcome.ok) {
+                             say(QStringLiteral("[FAIL] ") + result.outcome.error);
                              exitCode = 1;
                          } else {
-                             const QStringList lines = outcome.byLang.value(to);
+                             const QStringList lines = result.outcome.byLang.value(to);
                              say(QStringLiteral("译文:"));
                              for (const QString &line : lines) {
                                  say(line);
@@ -281,7 +330,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("studious"));
 
-    MainWindow window;
+    MainWindow window(sharedCache());
     window.show();
     return app.exec();
 }

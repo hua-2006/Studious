@@ -9,6 +9,8 @@
 //                                    可用环境变量临时换网关/Key/模型排查：
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
 
+#include "Factory.h"
+#include "cache/TranslationCache.h"
 #include "config/LlmConfig.h"
 #include "llm/LlmCatalog.h"
 #include "llm/LlmModelInfo.h"
@@ -25,7 +27,9 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -642,6 +646,139 @@ void runLlmBatchMode()
     }
 }
 
+// --cache：验证翻译记忆确实生效（第二次调用 0 请求、耗时断崖式下降）。
+void runCacheMode()
+{
+    config::LlmConfig cfg = defaultLlmConfig();
+    studious::net::QtHttpClient http;
+
+    // 用临时库，别污染用户真实缓存。
+    const QString dbPath = QDir::tempPath() + QStringLiteral("/studious_cache_selftest.db");
+    QFile::remove(dbPath);
+
+    cache::TranslationCache store(dbPath);
+    QString openError;
+    if (!store.ensureOpen(&openError)) {
+        markFail(QStringLiteral("cacheOpen"), openError);
+        return;
+    }
+    say(QStringLiteral("=== 翻译缓存自测 ==="));
+    say(QStringLiteral("库路径 = ") + dbPath);
+    markPass(QStringLiteral("cacheOpen"));
+
+    const QStringList paragraphs = {
+        QStringLiteral("Hello, world!"),
+        QStringLiteral("Good morning."),
+        QStringLiteral("How are you today?"),
+    };
+
+    const auto buildRouter = [&](cache::TranslationCache *cachePtr, bool enabled) {
+        auto translators = factory::makeDefaultTranslators(http, cfg, {});
+        auto r = std::make_unique<router::TranslatorRouter>(
+            std::move(translators), QStringList{QStringLiteral("llm")});
+        if (cachePtr != nullptr) {
+            r->setTranslationCache(cachePtr);
+            r->setCacheEnabled(enabled);
+        }
+        return r;
+    };
+
+    const auto makeRequest = [&]() {
+        core::TranslateRequest req;
+        req.paragraphs = paragraphs;
+        req.srcLang = QStringLiteral("auto");
+        req.dstLangs = {QStringLiteral("zh")};
+        req.preferredEngine = QStringLiteral("llm");
+        return req;
+    };
+
+    // 1) 关闭缓存：报告应为 used=false（完全不碰缓存）
+    {
+        auto r = buildRouter(&store, false);
+        const core::TranslateOutcome out = r->translate(makeRequest());
+        const auto report = r->lastCacheReport();
+        if (out.ok && !report.used) {
+            markPass(QStringLiteral("cacheDisabledIgnored"));
+        } else {
+            markFail(QStringLiteral("cacheDisabledIgnored"),
+                     out.ok ? QStringLiteral("关闭缓存后仍然记录了命中统计")
+                            : out.error);
+            return;
+        }
+    }
+
+    // 2) 开启缓存，第一次：应全部 miss
+    QElapsedTimer timer;
+    timer.start();
+    QStringList firstRun;
+    {
+        auto r = buildRouter(&store, true);
+        const core::TranslateOutcome out = r->translate(makeRequest());
+        const auto report = r->lastCacheReport();
+        if (!out.ok) {
+            markFail(QStringLiteral("cacheFirstRun"), out.error);
+            return;
+        }
+        firstRun = out.byLang.value(QStringLiteral("zh"));
+        say(QStringLiteral("第一次：hits=%1 misses=%2  %3 ms")
+                .arg(report.hits).arg(report.misses).arg(timer.elapsed()));
+        if (report.hits == 0 && report.misses == paragraphs.size()) {
+            markPass(QStringLiteral("cacheFirstMiss"));
+        } else {
+            markFail(QStringLiteral("cacheFirstMiss"),
+                     QStringLiteral("首次应全部未命中，实际 hits=%1").arg(report.hits));
+        }
+    }
+    const qint64 firstMs = timer.elapsed();
+
+    // 3) 第二次：应全部命中且几乎不耗时
+    timer.restart();
+    QStringList secondRun;
+    {
+        auto r = buildRouter(&store, true);
+        const core::TranslateOutcome out = r->translate(makeRequest());
+        const auto report = r->lastCacheReport();
+        if (!out.ok) {
+            markFail(QStringLiteral("cacheSecondRun"), out.error);
+            return;
+        }
+        secondRun = out.byLang.value(QStringLiteral("zh"));
+        say(QStringLiteral("第二次：hits=%1 misses=%2  %3 ms")
+                .arg(report.hits).arg(report.misses).arg(timer.elapsed()));
+        if (report.hits == paragraphs.size() && report.misses == 0) {
+            markPass(QStringLiteral("cacheSecondHit"));
+        } else {
+            markFail(QStringLiteral("cacheSecondHit"),
+                     QStringLiteral("第二次应全部命中，实际 hits=%1").arg(report.hits));
+        }
+    }
+    const qint64 secondMs = timer.elapsed();
+
+    // 4) 译文必须一致，缓存不能改变结果
+    if (firstRun == secondRun && firstRun.size() == paragraphs.size()) {
+        markPass(QStringLiteral("cacheSameResult"));
+    } else {
+        markFail(QStringLiteral("cacheSameResult"), QStringLiteral("两次译文不一致"));
+    }
+
+    say(QString());
+    say(QStringLiteral("耗时：首次 %1 ms -> 缓存命中 %2 ms").arg(firstMs).arg(secondMs));
+    say(QStringLiteral("库内条数 = %1").arg(store.count()));
+
+    // 5) 关闭开关后不再写入（清空后再跑一次，条数应保持 0）
+    store.clear();
+    {
+        auto r = buildRouter(&store, false);
+        const core::TranslateOutcome out = r->translate(makeRequest());
+        if (out.ok && store.count() == 0) {
+            markPass(QStringLiteral("cacheOffNoWrite"));
+        } else {
+            markFail(QStringLiteral("cacheOffNoWrite"),
+                     QStringLiteral("关闭缓存后仍写入了 %1 条").arg(store.count()));
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -652,8 +789,23 @@ int main(int argc, char *argv[])
     const bool llmMode = args.contains(QStringLiteral("--llm"));
     const bool modelsMode = args.contains(QStringLiteral("--models"));
     const bool llmBatchMode = args.contains(QStringLiteral("--llm-batch"));
+    const bool cacheMode = args.contains(QStringLiteral("--cache"));
 
     // 专项模式互斥，先处理它们，互不影响原有两条路径。
+    if (cacheMode) {
+        runCacheMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("CACHE CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
+
     if (llmBatchMode) {
         runLlmBatchMode();
         say(QString());

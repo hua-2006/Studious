@@ -19,6 +19,10 @@ struct AppSettings {
     QString srcLang = QStringLiteral("auto");
     QString dstLang = QStringLiteral("zh");
 
+    // 翻译缓存开关（对应界面上的「启用缓存」勾选框）。
+    // 关掉后 Router 既不查缓存也不写缓存，翻译耗时回到纯网络往返。
+    bool cacheEnabled = true;
+
     // 从 QSettings 读；缺失 / 空值回落 defaults()。
     static AppSettings load();
 

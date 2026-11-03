@@ -44,6 +44,7 @@ AppSettings AppSettings::defaults()
     s.engineId.clear();        // 自动
     s.srcLang = QStringLiteral("auto");
     s.dstLang = QStringLiteral("zh");
+    s.cacheEnabled = true;
     return s;
 }
 
@@ -83,6 +84,9 @@ AppSettings AppSettings::load()
     s.srcLang = textOr(key("lang/src"), def.srcLang);
     s.dstLang = textOr(key("lang/dst"), def.dstLang);
 
+    // 布尔值不需要空值回落：缺失时 QSettings 直接给默认值 true（= 与 defaults() 一致）。
+    s.cacheEnabled = store.value(key("cache/enabled"), true).toBool();
+
     return s;
 }
 
@@ -103,6 +107,8 @@ void AppSettings::save() const
     store.setValue(key("engine/id"), engineId);
     store.setValue(key("lang/src"), srcLang);
     store.setValue(key("lang/dst"), dstLang);
+
+    store.setValue(key("cache/enabled"), cacheEnabled);
 
     store.sync();
 }

@@ -1,5 +1,6 @@
 #include "router/TranslatorRouter.h"
 
+#include "cache/TranslationCache.h"
 #include "contract/LanguageRegistry.h"
 
 #include <utility>
@@ -139,10 +140,78 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
     }
 
     const QString engineId = chosen->id();
-    out = chosen->translate(req.paragraphs, src, dsts, req.options);
+
+    // 没开缓存：保持原样，一次调用交出去。
+    if (!isCacheEnabled()) {
+        out = chosen->translate(req.paragraphs, src, dsts, req.options);
+        if (!out.ok) {
+            const QString inner = out.error.isEmpty() ? QStringLiteral("未知错误") : out.error;
+            out.error = QStringLiteral("[%1] %2").arg(engineId, inner);
+        }
+        m_lastCacheReport = CacheReport{};
+        return out;
+    }
+
+    // 开了缓存：逐段先查，只把未命中的送出去翻译。
+    // 关键收益：全命中时一次网络请求都不发（LLM 单次往返约 1.1s，省一次就是省一秒）。
+    const QString cacheTag = chosen->cacheTag();
+    m_lastCacheReport = CacheReport{};
+    m_lastCacheReport.used = true;
+
+    QStringList errors;
+
+    for (const QString &dst : dsts) {
+        QStringList merged;
+        merged.reserve(req.paragraphs.size());
+
+        QVector<int> missIndex;
+        QStringList missTexts;
+        QStringList missKeys;
+
+        for (int i = 0; i < req.paragraphs.size(); ++i) {
+            merged << QString();
+
+            const QString text = req.paragraphs.at(i).trimmed();
+            if (text.isEmpty()) {
+                continue;   // 空段落既不入缓存也不发请求
+            }
+
+            const QString key = cache::TranslationCache::makeKey(cacheTag, src, dst, text);
+            if (const std::optional<QString> hit = m_cache->lookup(key)) {
+                merged[i] = *hit;
+                ++m_lastCacheReport.hits;
+            } else {
+                missIndex.append(i);
+                missTexts << text;
+                missKeys << key;
+                ++m_lastCacheReport.misses;
+            }
+        }
+
+        if (!missTexts.isEmpty()) {
+            const core::TranslateOutcome sub =
+                chosen->translate(missTexts, src, QStringList{dst}, req.options);
+            if (!sub.ok) {
+                const QString inner = sub.error.isEmpty() ? QStringLiteral("未知错误") : sub.error;
+                errors << QStringLiteral("[%1] %2").arg(engineId, inner);
+            }
+            const QStringList got = sub.byLang.value(dst);
+            for (int k = 0; k < missTexts.size(); ++k) {
+                const QString translated = k < got.size() ? got.at(k) : QString();
+                merged[missIndex.at(k)] = translated;
+                if (!translated.trimmed().isEmpty()) {
+                    m_cache->store(missKeys.at(k), missTexts.at(k), translated,
+                                   cacheTag, src, dst);
+                }
+            }
+        }
+
+        out.byLang.insert(dst, merged);
+    }
+
+    out.ok = errors.isEmpty();
     if (!out.ok) {
-        const QString inner = out.error.isEmpty() ? QStringLiteral("未知错误") : out.error;
-        out.error = QStringLiteral("[%1] %2").arg(engineId, inner);
+        out.error = errors.join(QStringLiteral("；"));
     }
     return out;
 }

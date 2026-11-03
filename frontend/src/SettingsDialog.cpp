@@ -19,6 +19,7 @@
 #include <QVBoxLayout>
 
 #include <studious/Factory.h>
+#include <studious/cache/TranslationCache.h>
 #include <studious/contract/Types.h>
 #include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
@@ -104,18 +105,22 @@ studious::llm::ModelListResult runListModelsInWorkerThread(const studious::confi
 
 } // namespace
 
-SettingsDialog::SettingsDialog(const AppSettings &current, QWidget *parent)
+SettingsDialog::SettingsDialog(const AppSettings &current,
+                              studious::cache::TranslationCache *cache,
+                              QWidget *parent)
     : QDialog(parent)
     , m_settings(current)
+    , m_cache(cache)
     , m_testWatcher(new QFutureWatcher<LlmTestResult>(this))
     , m_modelsWatcher(new QFutureWatcher<studious::llm::ModelListResult>(this))
 {
     setWindowTitle(QStringLiteral("设置 — LLM 翻译"));
     setModal(true);
-    resize(620, 560);
+    resize(620, 620);
 
     buildUi();
     applyToUi(current.llm);
+    refreshCacheStatus();
 
     connect(m_testWatcher, &QFutureWatcher<LlmTestResult>::finished,
             this, &SettingsDialog::onTestFinished);
@@ -253,6 +258,23 @@ void SettingsDialog::buildUi()
     m_testResult->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     showTestNeutral(QStringLiteral("尚未测试。点「测试连接」会真的发一次翻译请求。"));
     root->addWidget(m_testResult, 1);
+
+    // ---------- 翻译缓存：条数 + 清空 ----------
+    // 只显示条数不显示路径，路径放 tooltip：大多数时候用户只关心"占了多少条"。
+    m_cacheStatus = new QLabel;
+    m_cacheStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_cacheStatus->setStyleSheet(QString::fromLatin1(kStyleNeutral));
+
+    m_clearCacheButton = new QPushButton(QStringLiteral("清空缓存"));
+    m_clearCacheButton->setToolTip(QStringLiteral("删掉缓存库里的全部条目；下次翻译会重新请求接口"));
+
+    auto *cacheRow = new QHBoxLayout;
+    cacheRow->setSpacing(8);
+    cacheRow->addWidget(m_cacheStatus, 1);
+    cacheRow->addWidget(m_clearCacheButton);
+    root->addLayout(cacheRow);
+
+    connect(m_clearCacheButton, &QPushButton::clicked, this, &SettingsDialog::onClearCache);
 
     // ---------- Ok / Cancel / 恢复默认 ----------
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel
@@ -501,4 +523,41 @@ void SettingsDialog::onRestoreDefaults()
     m_showApiKey->setChecked(false);
     m_apiKey->setEchoMode(QLineEdit::Password);
     showTestNeutral(QStringLiteral("已恢复默认值（尚未保存，点「确定」才写回配置）。"));
+}
+
+void SettingsDialog::refreshCacheStatus(const QString &note)
+{
+    if (m_cacheStatus == nullptr) {
+        return;
+    }
+
+    if (m_cache == nullptr) {
+        m_cacheStatus->setText(QStringLiteral("缓存：不可用"));
+        if (m_clearCacheButton != nullptr) {
+            m_clearCacheButton->setEnabled(false);
+        }
+        return;
+    }
+
+    // count() 内部会为当前线程现开一条 SQLite 连接，主线程调是安全的。
+    const qint64 total = m_cache->count();
+    QString text = QStringLiteral("缓存：%1 条").arg(total);
+    if (!note.isEmpty()) {
+        text += QStringLiteral("  ") + note;
+    }
+    m_cacheStatus->setText(text);
+    m_cacheStatus->setToolTip(m_cache->path());
+    if (m_clearCacheButton != nullptr) {
+        m_clearCacheButton->setEnabled(true);
+    }
+}
+
+void SettingsDialog::onClearCache()
+{
+    if (m_cache == nullptr) {
+        return;
+    }
+
+    m_cache->clear();
+    refreshCacheStatus(QStringLiteral("已清空"));
 }

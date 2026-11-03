@@ -19,6 +19,10 @@ class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
 
+namespace studious::cache {
+class TranslationCache;
+}
+
 // 「测试连接」的结果：工作线程只回传纯数据，界面在主线程渲染。
 struct LlmTestResult {
     bool ok = false;
@@ -35,7 +39,11 @@ class SettingsDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(const AppSettings &current, QWidget *parent = nullptr);
+    // cache：进程级共享的翻译缓存（不拥有，可为 nullptr = 缓存不可用）。
+    //   对话框只用它读条数 / 清空，不接管生命周期。
+    explicit SettingsDialog(const AppSettings &current,
+                            studious::cache::TranslationCache *cache,
+                            QWidget *parent = nullptr);
     ~SettingsDialog() override;
 
     // 当前界面上的配置（非 LLM 字段沿用构造时传入的值）。
@@ -47,6 +55,7 @@ private slots:
     void onFetchModelsClicked();
     void onFetchModelsFinished();
     void onRestoreDefaults();
+    void onClearCache();
 
 private:
     void buildUi();
@@ -58,8 +67,12 @@ private:
     void showFetchMessage(const QString &text, bool ok);
     // 按当前模型能力重填「思考等级」下拉（保留原选择，恢复不到就选推荐项）。
     void rebuildReasoningOptions();
+    // 刷新底部「缓存：N 条」文案（读取走缓存实例的 count()）。
+    void refreshCacheStatus(const QString &note = QString());
 
     AppSettings m_settings;   // 只保存非 LLM 字段，LLM 字段由界面控件产出
+
+    studious::cache::TranslationCache *m_cache = nullptr;   // 不拥有
 
     QLineEdit *m_baseUrl = nullptr;
     QLineEdit *m_apiKey = nullptr;
@@ -73,6 +86,11 @@ private:
     QPlainTextEdit *m_systemPrompt = nullptr;
     QPushButton *m_testButton = nullptr;
     QLabel *m_testResult = nullptr;
+
+    // 底部「缓存：N 条  [清空缓存]」
+    QLabel *m_cacheStatus = nullptr;
+    QPushButton *m_clearCacheButton = nullptr;
+
     QDialogButtonBox *m_buttons = nullptr;
 
     // 「获取模型」拿到的能力表；思考等级下拉据此填充。
