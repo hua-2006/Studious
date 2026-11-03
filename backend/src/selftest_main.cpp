@@ -394,10 +394,11 @@ void runLlmMode()
     say(QStringLiteral("=== LLM 真实接入自测 ==="));
     say(QStringLiteral("baseUrl = ") + cfg.baseUrl);
     say(QStringLiteral("model   = ") + cfg.model);
-    say(QStringLiteral("timeout = %1 ms, maxTokens = %2, temperature = %3")
+    say(QStringLiteral("timeout = %1 ms, maxTokens = %2, temperature = %3, reasoningEffort = %4")
             .arg(cfg.timeoutMs)
             .arg(cfg.maxTokens)
-            .arg(cfg.temperature));
+            .arg(cfg.temperature)
+            .arg(cfg.reasoningEffort.isEmpty() ? QStringLiteral("<默认>") : cfg.reasoningEffort));
     say(QString());
 
     studious::net::QtHttpClient http;

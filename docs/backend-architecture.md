@@ -896,8 +896,30 @@ Body:   [{"Text": "..."}]
 Resp:   [{"translations":[{"text":"..."}]}]
 ```
 
-### 17.5 配置持久化约定
-
-- LLM 凭据（`baseUrl` / `apiKey` / `model`）由前端 `QSettings` 保存，**后端只接收注入的 `LlmConfig`，不读配置、不读环境变量**（保持无状态）。
+### 17.5 配置持久化约定- LLM 凭据（`baseUrl` / `apiKey` / `model`）由前端 `QSettings` 保存，**后端只接收注入的 `LlmConfig`，不读配置、不读环境变量**（保持无状态）。
 - 开源仓库中 `AppSettings::defaults()` 带作者本地网关的默认值（内网地址，无泄露风险）。
 - 未来需要加密时，按 §2 的端口-适配器原则加 `ISecretStore` 实现，不改 backend 契约。
+
+### 17.6 思考等级（reasoning_effort）
+
+翻译是确定性任务，推理模型"先想再答"只增加延迟、不提升译文质量。故 `LlmConfig` 新增 `reasoningEffort`，**默认 `"none"`**。
+
+| 取值 | 含义 |
+|---|---|
+| `"none"`（默认） | 彻底关闭思考；同时补发 `thinking:{type:"disabled"}` 兼容 Anthropic 风格网关 |
+| `"minimal"` / `"low"` / `"medium"` / `"high"` | 透传给服务端 |
+| 空串 | 完全不发送该参数，跟随服务端默认（最慢） |
+
+**本机网关实测（deepseek-v4.1-flash，同一句英文→中文）**：
+
+| 请求参数 | reasoning_tokens | 说明 |
+|---|---|---|
+| 不传 | 24~81 | 默认会思考 |
+| `reasoning_effort: "minimal"` | 73 | **无效**，思考照旧 |
+| `enable_thinking: false` | 42 | **无效** |
+| `chat_template_kwargs.enable_thinking: false` | 23 | 部分生效，仍不干净 |
+| `reasoning_effort: "none"` | **0** | ✅ 生效 |
+| `thinking: {type: "disabled"}` | **0** | ✅ 生效 |
+| 两者同时发送 | **0** | ✅ 不报错，故实现里同时发 |
+
+> 延迟方差较大（1.0~2.3s），但 `reasoning_tokens` 是最可靠的判据：**看 token 数，不看秒数**。

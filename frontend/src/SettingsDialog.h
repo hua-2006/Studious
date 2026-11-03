@@ -7,6 +7,7 @@
 #include "AppSettings.h"
 
 class QCheckBox;
+class QComboBox;
 class QDialogButtonBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -57,6 +58,7 @@ private:
     QLineEdit *m_model = nullptr;
     QSpinBox *m_timeoutMs = nullptr;
     QDoubleSpinBox *m_temperature = nullptr;
+    QComboBox *m_reasoningEffort = nullptr;
     QPlainTextEdit *m_systemPrompt = nullptr;
     QPushButton *m_testButton = nullptr;
     QLabel *m_testResult = nullptr;

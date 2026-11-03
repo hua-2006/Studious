@@ -239,6 +239,18 @@ bool LlmTranslator::translateOne(const QString &text,
     payload.insert(QStringLiteral("max_tokens"), m_cfg.maxTokens > 0 ? m_cfg.maxTokens : 2048);
     payload.insert(QStringLiteral("stream"), false);
 
+    // 思考等级：翻译是确定性任务，开思考只涨延迟不涨质量。
+    // "none" 时再补一个 Anthropic 风格的 thinking 字段，兼容只认后者的网关。
+    const QString effort = m_cfg.reasoningEffort.trimmed().toLower();
+    if (!effort.isEmpty()) {
+        payload.insert(QStringLiteral("reasoning_effort"), effort);
+        if (effort == QLatin1String("none")) {
+            QJsonObject thinking;
+            thinking.insert(QStringLiteral("type"), QStringLiteral("disabled"));
+            payload.insert(QStringLiteral("thinking"), thinking);
+        }
+    }
+
     net::HttpRequest req;
     req.url = QUrl(endpoint);
     req.method = QByteArrayLiteral("POST");
