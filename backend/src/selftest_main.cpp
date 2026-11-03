@@ -1,22 +1,37 @@
 // Studious 后端控制台自测。
-// 覆盖：Mock 引擎数据契约、语言码表、Router 强制引擎降级、真实 Web 翻译（允许失败）。
+// 覆盖：Mock 引擎数据契约、语言码表、Router 强制引擎降级、真实 Web 翻译（允许失败）、
+//       Web 来源注册表、LLM 真实接入。
 // 用法：
 //   backend_selftest.exe            包含网络测试
 //   backend_selftest.exe --offline  跳过网络测试
+//   backend_selftest.exe --providers 打印 Web 来源表 + 装配校验
+//   backend_selftest.exe --llm       用本机网关真实翻译两句话（需要网关在 127.0.0.1:3065）
+//                                    可用环境变量临时换网关/Key/模型排查：
+//                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
 
+#include "config/LlmConfig.h"
 #include "contract/LanguageRegistry.h"
 #include "net/QtHttpClient.h"
 #include "router/TranslatorRouter.h"
 #include "translators/LlmTranslator.h"
 #include "translators/LocalMtTranslator.h"
 #include "translators/MockTranslator.h"
+#include "translators/WebProvider.h"
 #include "translators/WebTranslator.h"
 #include "translators/adapters/GoogleFreeAdapter.h"
 #include "translators/adapters/MyMemoryAdapter.h"
 
+#include <QByteArray>
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QUrl>
+#include <QVector>
+#include <QtGlobal>
 
 #include <cstdio>
 #include <memory>
@@ -59,6 +74,20 @@ void check(const QString &name, bool condition, const QString &why)
     } else {
         markFail(name, why);
     }
+}
+
+// 定宽补空格：仅按字符数补，中文按 2 列宽粗略估算，够表格看就行。
+QString pad(const QString &text, int width)
+{
+    int used = 0;
+    for (const QChar &c : text) {
+        used += (c.unicode() > 0x2E80) ? 2 : 1;
+    }
+    QString out = text;
+    for (int i = used; i < width; ++i) {
+        out += QLatin1Char(' ');
+    }
+    return out;
 }
 
 // 把所有需要断言的子条件攒起来，全部通过才算这一项 PASS。
@@ -224,6 +253,220 @@ void testWebNetwork(studious::net::QtHttpClient &http)
     }
 }
 
+// ---------- 5. Web 来源注册表 ----------
+void runProvidersMode(studious::net::QtHttpClient &http)
+{
+    const QVector<translate::WebProviderInfo> all = translate::listWebProviders();
+
+    say(QStringLiteral("=== Web 翻译来源（listWebProviders） ==="));
+    say(pad(QStringLiteral("id"), 10) + QLatin1Char('|') + pad(QStringLiteral("名称"), 26)
+        + QLatin1Char('|') + pad(QStringLiteral("需key"), 8) + QLatin1Char('|')
+        + pad(QStringLiteral("已配置"), 10) + QLatin1Char('|') + QStringLiteral("备注"));
+    for (const translate::WebProviderInfo &info : all) {
+        say(pad(info.id, 10) + QLatin1Char('|') + pad(info.displayName, 26) + QLatin1Char('|')
+            + pad(info.requiresApiKey ? QStringLiteral("是") : QStringLiteral("否"), 8)
+            + QLatin1Char('|')
+            + pad(info.configured ? QStringLiteral("是") : QStringLiteral("否"), 10)
+            + QLatin1Char('|') + info.note);
+    }
+
+    Assertions a;
+    a.expect(all.size() == 3,
+             QStringLiteral("来源数量=%1（期望 google/azure/mymemory 三个）").arg(all.size()));
+    a.expect(all.size() >= 1 && all.first().id == QStringLiteral("google"),
+             QStringLiteral("第一个来源不是 google（默认优先级应以 google 打头）"));
+
+    // 附加：校验真实装配链路 —— 按 "azure,google" 顺序装配，期望 azure 在前且未配置。
+    auto adapters = translate::makeWebAdapters({QStringLiteral("azure"), QStringLiteral("google"),
+                                               QStringLiteral("不存在的来源")});
+    a.expect(adapters.size() == 2,
+             QStringLiteral("makeWebAdapters 装配数量=%1（未知 id 应被忽略）").arg(adapters.size()));
+
+    translate::WebTranslator web(http, adapters);
+    const QVector<translate::WebProviderInfo> active = web.providers();
+    a.expect(active.size() == 2,
+             QStringLiteral("providers() 数量=%1（期望 2）").arg(active.size()));
+    if (active.size() == 2) {
+        a.expect(active.at(0).id == QStringLiteral("azure"),
+                 QStringLiteral("providers()[0].id=%1（期望 azure）").arg(active.at(0).id));
+        a.expect(active.at(0).requiresApiKey,
+                 QStringLiteral("azure 应声明需要 API key"));
+        a.expect(!active.at(0).configured,
+                 QStringLiteral("azure v1 占位应报告未配置"));
+        a.expect(active.at(1).id == QStringLiteral("google"),
+                 QStringLiteral("providers()[1].id=%1（期望 google）").arg(active.at(1).id));
+        a.expect(active.at(1).configured,
+                 QStringLiteral("google 无需 key，应报告已配置"));
+    }
+
+    say(QString());
+    say(QStringLiteral("[INFO] 实际装配顺序: azure -> google（未知 id 已忽略）"));
+    for (const translate::WebProviderInfo &info : active) {
+        say(QStringLiteral("        %1 | %2 | 需key=%3 | 已配置=%4")
+                .arg(info.id, info.displayName,
+                     info.requiresApiKey ? QStringLiteral("是") : QStringLiteral("否"),
+                     info.configured ? QStringLiteral("是") : QStringLiteral("否")));
+    }
+
+    // 空列表 = 默认顺序：google -> mymemory。
+    auto defaults = translate::makeWebAdapters({});
+    a.expect(defaults.size() == 2, QStringLiteral("默认装配数量=%1（期望 2）").arg(defaults.size()));
+    if (defaults.size() == 2) {
+        a.expect(defaults.at(0)->id() == QStringLiteral("google")
+                     && defaults.at(1)->id() == QStringLiteral("mymemory"),
+                 QStringLiteral("默认顺序应是 google -> mymemory，实际 %1 -> %2")
+                     .arg(defaults.at(0)->id(), defaults.at(1)->id()));
+    }
+
+    // 降级实测（联网才有结论，故只 [INFO] 不参与断言）：
+    // azure 在最前但未配置 -> 应被跳过并继续用 google，而不是整体失败。
+    const core::TranslateOutcome degrade = web.translate({QStringLiteral("Hello, world!")},
+                                                         QStringLiteral("auto"),
+                                                         {QStringLiteral("zh")},
+                                                         {});
+    if (degrade.ok) {
+        say(QStringLiteral("[INFO] azure->google 降级实测: ") +
+            degrade.byLang.value(QStringLiteral("zh")).value(0));
+    } else {
+        say(QStringLiteral("[INFO] azure->google 降级实测失败（网络问题不算用例失败）: ") +
+            degrade.error);
+    }
+
+    check(QStringLiteral("providers"), a.ok(), a.details());
+}
+
+// ---------- 6. LLM 真实接入 ----------
+// 失败时把原始 HTTP 响应打出来：网关/模型名/额度问题只能靠原始字节定位，不能瞎猜。
+void dumpRawLlmResponse(const config::LlmConfig &cfg, studious::net::QtHttpClient &http)
+{
+    QJsonObject userMessage;
+    userMessage.insert(QStringLiteral("role"), QStringLiteral("user"));
+    userMessage.insert(QStringLiteral("content"), QStringLiteral("Hello, world!"));
+
+    QJsonArray messages;
+    messages.append(userMessage);
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("model"), cfg.model);
+    payload.insert(QStringLiteral("messages"), messages);
+    payload.insert(QStringLiteral("max_tokens"), 64);
+    payload.insert(QStringLiteral("stream"), false);
+
+    net::HttpRequest req;
+    req.url = QUrl(cfg.baseUrl + QStringLiteral("/chat/completions"));
+    req.method = QByteArrayLiteral("POST");
+    req.body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
+    req.timeoutMs = 30000;
+    req.headers.append(qMakePair(QByteArrayLiteral("Content-Type"),
+                                 QByteArrayLiteral("application/json")));
+    if (!cfg.apiKey.isEmpty()) {
+        req.headers.append(qMakePair(QByteArrayLiteral("Authorization"),
+                                     QByteArrayLiteral("Bearer ") + cfg.apiKey.toUtf8()));
+    }
+
+    const net::HttpResponse resp = http.send(req);
+    say(QStringLiteral("[DEBUG] 原始请求: POST %1  model=%2")
+            .arg(req.url.toString(), cfg.model));
+    say(QStringLiteral("[DEBUG] 原始响应: status=%1 ok=%2 error=%3")
+            .arg(resp.status)
+            .arg(resp.ok ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(resp.error));
+    say(QStringLiteral("[DEBUG] 响应体前 800 字节: ") + QString::fromUtf8(resp.body.left(800)));
+}
+
+void runLlmMode()
+{
+    config::LlmConfig cfg;
+    cfg.baseUrl = QStringLiteral("http://127.0.0.1:3065/v1");
+    cfg.apiKey = QStringLiteral("12345678");
+    cfg.model = QStringLiteral("deepseek-v4.1-flash");
+
+    // 允许用环境变量临时换网关/模型/Key，方便排查（默认值保持不变）：
+    //   STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
+    const auto envOr = [](const char *name, const QString &fallback) {
+        const QString v = qEnvironmentVariable(name).trimmed();
+        return v.isEmpty() ? fallback : v;
+    };
+    cfg.baseUrl = envOr("STUDIOUS_LLM_BASE_URL", cfg.baseUrl);
+    cfg.apiKey = envOr("STUDIOUS_LLM_API_KEY", cfg.apiKey);
+    cfg.model = envOr("STUDIOUS_LLM_MODEL", cfg.model);
+
+    say(QStringLiteral("=== LLM 真实接入自测 ==="));
+    say(QStringLiteral("baseUrl = ") + cfg.baseUrl);
+    say(QStringLiteral("model   = ") + cfg.model);
+    say(QStringLiteral("timeout = %1 ms, maxTokens = %2, temperature = %3")
+            .arg(cfg.timeoutMs)
+            .arg(cfg.maxTokens)
+            .arg(cfg.temperature));
+    say(QString());
+
+    studious::net::QtHttpClient http;
+    translate::LlmTranslator llm(cfg, http);
+
+    Assertions a;
+    a.expect(llm.isReady(), QStringLiteral("isReady()=false，配置被判定无效"));
+    a.expect(llm.id() == QStringLiteral("llm"), QStringLiteral("id() 不是 llm"));
+    a.expect(!llm.resolve(QStringLiteral("auto"), QStringLiteral("zh")).reason.isEmpty(),
+             QStringLiteral("resolve() 没给原因"));
+    a.expect(llm.supports(QStringLiteral("auto"), QStringLiteral("zh")),
+             QStringLiteral("supports(auto,zh) 应为 true"));
+
+    // 逐段独立请求：这样耗时统计就是"每次请求"的真实耗时，也便于定位是哪一段失败。
+    const QStringList paragraphs = {QStringLiteral("Hello, world!"),
+                                    QStringLiteral("This is a test.")};
+    qint64 totalMs = 0;
+    int requests = 0;
+
+    for (int i = 0; i < paragraphs.size(); ++i) {
+        QElapsedTimer timer;
+        timer.start();
+        const core::TranslateOutcome r =
+            llm.translate({paragraphs.at(i)}, QStringLiteral("auto"), {QStringLiteral("zh")}, {});
+        const qint64 elapsed = timer.elapsed();
+        totalMs += elapsed;
+        ++requests;
+
+        const QStringList zh = r.byLang.value(QStringLiteral("zh"));
+        const QString text = zh.isEmpty() ? QString() : zh.first();
+
+        if (!r.ok || text.trimmed().isEmpty()) {
+            // 引擎的 error 自己带"目标语言 X 第 N 段失败"前缀（单段请求，所以 N 恒为 1），原样贴出来即可。
+            a.expect(false,
+                     QStringLiteral("第 %1 段失败（%2 ms），引擎返回：%3")
+                         .arg(i + 1)
+                         .arg(elapsed)
+                         .arg(r.error.isEmpty() ? QStringLiteral("译文为空") : r.error));
+            continue;
+        }
+        say(QStringLiteral("第 %1 段 原文: %2").arg(i + 1).arg(paragraphs.at(i)));
+        say(QStringLiteral("第 %1 段 译文: %2    [耗时 %3 ms]").arg(i + 1).arg(text).arg(elapsed));
+        say(QString());
+
+        // 中文译文的最朴素校验：必须含中日韩统一表意文字。
+        bool hasCjk = false;
+        for (const QChar &c : text) {
+            if (c.unicode() >= 0x4E00 && c.unicode() <= 0x9FFF) {
+                hasCjk = true;
+                break;
+            }
+        }
+        a.expect(hasCjk, QStringLiteral("第 %1 段译文不含中文字符: \"%2\"").arg(i + 1).arg(text));
+    }
+
+    if (a.ok()) {
+        say(QStringLiteral("[INFO] %1 次请求共 %2 ms，平均 %3 ms/次")
+                .arg(requests)
+                .arg(totalMs)
+                .arg(requests > 0 ? totalMs / requests : 0));
+        markPass(QStringLiteral("llm-real"));
+        return;
+    }
+
+    markFail(QStringLiteral("llm-real"), a.details());
+    say(QString());
+    dumpRawLlmResponse(cfg, http);
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -232,6 +475,31 @@ int main(int argc, char *argv[])
 
     const QStringList args = QCoreApplication::arguments();
     const bool offline = args.contains(QStringLiteral("--offline"));
+    const bool providersMode = args.contains(QStringLiteral("--providers"));
+    const bool llmMode = args.contains(QStringLiteral("--llm"));
+
+    // 两种专项模式互斥，先处理它们，互不影响原有两条路径。
+    if (providersMode) {
+        studious::net::QtHttpClient http;
+        runProvidersMode(http);
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("PROVIDERS CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        return 1;
+    }
+
+    if (llmMode) {
+        runLlmMode();
+        say(QString());
+        if (g_failed == 0) {
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        return 1;
+    }
 
     say(QStringLiteral("=== Studious 后端自测 ==="));
     say(QStringLiteral("模式: ") + (offline ? QStringLiteral("离线（跳过网络测试）")

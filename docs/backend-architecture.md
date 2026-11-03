@@ -819,3 +819,85 @@ Qt 的 DLL 在 `Qt\6.12.0\mingw_64\bin`。只把 `mingw_64` 加进 PATH，程序
 - `LocalMtTranslator` / `LlmTranslator` 仍为桩，待 v2
 - 资产系统（`asset/`）、缓存（`cache/`）尚未实现
 - 前端仅为纯文本测试窗口，截图 / OCR / 浮层均未开始
+
+---
+
+## 17. v0.2 增补：云端 LLM 与 Web 多来源
+
+### 17.1 排期调整（重要）
+
+原计划 §7 的本地 LLM（llama-server 子进程 + 资产系统）**降级到 v2**，改为先做云端 LLM。
+
+| | 云端 LLM | 本地 LLM |
+|---|---|---|
+| 代码量 | ~400 行 | ~2000 行（资产系统 + 子进程 + 后端探测） |
+| 依赖 | 一把 API key | 4.7GB 模型 + 显卡 |
+| 单句延迟 | **1.2~2.3s**（实测） | CPU 上 2.5~4s（7B） |
+| 质量 | 最好 | 取决于硬件 |
+| 离线 | ❌ | ✅ |
+| 隐私 | ❌ 文本出本机 | ✅ |
+
+**关键洞察**：云端 LLM 与本地 llama-server、Ollama 走的是**同一套 OpenAI 兼容协议**，因此 `LlmTranslator` 一份实现覆盖三种后端，只换 `baseUrl` / `apiKey` / `model`。
+
+### 17.2 已实现
+
+**`LlmTranslator` 真实实现**（不再是桩）
+
+| 项 | 做法 |
+|---|---|
+| 协议 | `POST {baseUrl}/chat/completions`，`Authorization: Bearer <key>` |
+| 粒度 | **逐段落请求**（方案 A）：失败可精确定位到段，无需批量格式容错 |
+| 取字段 | 只取 `choices[0].message.content`，**显式忽略 `reasoning_content`** |
+| prompt | 强约束 system + `<<< >>>` 原文边界 |
+| 后处理 | 剥除模型偶发的 ``` 代码块与成对引号 |
+| 错误 | HTTP 401/402/429/5xx/超时/解析失败 → 中文可读原因 |
+
+**踩坑 1：弱 prompt 会变成闲聊**
+
+只写「翻译下面文本」时，模型会输出「翻译如下：」或直接回答原文中的问题。实测用疑问句、UI 菜单、剧情长句三组刁钻输入验证，强 system prompt + 边界符后全部只出译文。
+
+**踩坑 2：推理模型的 `reasoning_content`**
+
+`deepseek-v4.1-flash` 等推理模型会同时返回 `content` 与 `reasoning_content`（思考过程，实测 170~344 字符）。**只认 `content`**，否则用户看到的是一段自言自语。
+
+**踩坑 3：非 2xx 时 Qt 只报「网络错误(203)」**
+
+真实原因（如 `model_not_found`）在响应体里。4xx 分支必须把 body 前 200 字节贴进错误信息。
+
+### 17.3 Web 多来源
+
+`IWebAdapter` 扩展三个能力：`displayName()` / `requiresApiKey()` / `isConfigured()`。
+
+由 `WebProvider` 注册表统一管理（`listWebProviders()` / `makeWebAdapters()`），前端按 id 有序装配，**未配置的来源直接跳过不发请求**，失败继续试下一家。
+
+| 来源 | id | 需 key | 状态 |
+|---|---|---|---|
+| Google 在线翻译 | `google` | 否 | ✅ 可用（国内常需代理，高频会 429） |
+| Microsoft Azure | `azure` | 是 | 🚧 **仅占位**（见 17.4） |
+| MyMemory | `mymemory` | 否 | ✅ 可用（不支持 auto 源语言，额度有限） |
+
+### 17.4 微软翻译为何只留占位
+
+实测三家微软相关端点：
+
+| 方案 | 端点 | 实测结果 | 结论 |
+|---|---|---|---|
+| Edge 免费接口 | `edge.microsoft.com/translate/auth` | **404** | 端点已下线/迁移 |
+| Bing 网页版 | `www.bing.com/ttranslatev3` | 三种参数组合全部 `{"statusCode":205}` | 反爬已加强，不可依赖 |
+| Azure 官方 | `api.cognitive.microsofttranslator.com/translate?api-version=3.0` | **401**（端点存活，仅缺 key） | ✅ 唯一正路 |
+
+**结论**：微软只剩 Azure 官方一条路，需订阅 key（F0 免费层约 200 万字符/月）。v1 保留接口与错误提示，等用户提供 key 再接入。
+
+接入契约已写在 `AzureTranslatorAdapter.h` 注释里：
+```
+POST https://api.cognitive.microsofttranslator.com/translate?api-version=3.0
+Header: Ocp-Apim-Subscription-Key / Ocp-Apim-Subscription-Region
+Body:   [{"Text": "..."}]
+Resp:   [{"translations":[{"text":"..."}]}]
+```
+
+### 17.5 配置持久化约定
+
+- LLM 凭据（`baseUrl` / `apiKey` / `model`）由前端 `QSettings` 保存，**后端只接收注入的 `LlmConfig`，不读配置、不读环境变量**（保持无状态）。
+- 开源仓库中 `AppSettings::defaults()` 带作者本地网关的默认值（内网地址，无泄露风险）。
+- 未来需要加密时，按 §2 的端口-适配器原则加 `ISecretStore` 实现，不改 backend 契约。

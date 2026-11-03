@@ -1,8 +1,10 @@
 #include "MainWindow.h"
 
+#include "SettingsDialog.h"
 #include "TranslateJob.h"
 
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -10,12 +12,15 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QSplitter>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 #include <studious/contract/LanguageRegistry.h>
 #include <studious/Factory.h>
 #include <studious/net/QtHttpClient.h>
 #include <studious/router/TranslatorRouter.h>
+#include <studious/translators/WebProvider.h>
 
 #include <utility>
 
@@ -31,11 +36,18 @@ const char *const kSampleText =
 const char *const kStatusOkStyle = "";
 const char *const kStatusErrorStyle = "color: #c0392b; font-weight: 600;";
 
+// 「自动」那一项的说明文案。
+const char *const kAutoProviderNote = "按后端默认优先级依次尝试：Google → MyMemory";
+
 // 临时装配一套组件只为查状态：status() 不联网，但 QtHttpClient 仍必须在当前线程构造。
-QString buildEngineStatusText(const QString &src, const QString &dst, QString *tooltip)
+QString buildEngineStatusText(const QString &src,
+                              const QString &dst,
+                              const studious::config::LlmConfig &llm,
+                              const QStringList &webProviders,
+                              QString *tooltip)
 {
     studious::net::QtHttpClient http;                          // 主线程内构造，与调用同线程
-    auto translators = studious::factory::makeDefaultTranslators(http);
+    auto translators = studious::factory::makeDefaultTranslators(http, llm, webProviders);
     const studious::router::TranslatorRouter router(std::move(translators));
 
     const auto rows = router.status(src, dst);
@@ -59,24 +71,51 @@ QString buildEngineStatusText(const QString &src, const QString &dst, QString *t
     return parts.join(QStringLiteral("  "));
 }
 
+// Qt 没有"禁用单个下拉项"的公开 API，两步走：
+//   1. setItemData(idx, 0, Qt::UserRole - 1)：让默认风格把该项画成灰色（视觉）
+//   2. QStandardItemModel::item(idx)->setEnabled(false)：真正禁止选中（行为）
+// 只做第 1 步是假灰度——键盘仍能选到它。
+void disableComboItem(QComboBox *box, int index)
+{
+    box->setItemData(index, 0, Qt::UserRole - 1);
+    if (auto *model = qobject_cast<QStandardItemModel *>(box->model())) {
+        if (QStandardItem *item = model->item(index)) {
+            item->setEnabled(false);
+        }
+    }
+}
+
+bool isComboItemEnabled(QComboBox *box, int index)
+{
+    if (auto *model = qobject_cast<QStandardItemModel *>(box->model())) {
+        if (const QStandardItem *item = model->item(index)) {
+            return item->isEnabled();
+        }
+    }
+    return true;
+}
+
 QComboBox *newLangBox() { return new QComboBox; }
 
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
+    , m_settings(AppSettings::load())
     , m_job(new TranslateJob(this))
 {
     setWindowTitle(QStringLiteral("Studious — 文本翻译测试"));
-    resize(980, 640);
+    resize(1000, 660);
 
     buildUi();
     populateLanguageBoxes();
     populateEngineBox();
+    populateWebProviderBox();
 
     m_input->setPlainText(QString::fromUtf8(kSampleText));
 
     connect(m_translateButton, &QPushButton::clicked, this, &MainWindow::onTranslateClicked);
+    connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onOpenSettings);
     connect(m_job, &TranslateJob::finished, this, &MainWindow::onTranslationFinished);
 
     // Ctrl+Enter / Ctrl+Return 都能触发。两个不同 keysym 各注册一次，
@@ -94,20 +133,34 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // 关窗即保存：语言 / 引擎 / 来源都随手记住，LLM 设置由对话框保存。
+    m_settings.srcLang = currentSrcLang();
+    m_settings.dstLang = currentDstLang();
+    m_settings.engineId = currentEngine();
+    m_settings.webProviderId = currentWebProviderId();
+    m_settings.save();
+
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::buildUi()
 {
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(10);
+    root->setSpacing(8);
 
-    // ---------- 顶部一行 ----------
+    // ---------- 第一行：语言 / 引擎 / 翻译 ----------
     auto *topBar = new QHBoxLayout;
     topBar->setSpacing(6);
 
     m_srcLangBox = newLangBox();
     m_dstLangBox = newLangBox();
     m_engineBox = newLangBox();
+    // 引擎项可能带后缀（如 "llm（未配置）"），让下拉框自己长宽，避免文字被截成 "llm…配置）"。
+    m_engineBox->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     m_translateButton = new QPushButton(QStringLiteral("翻译"));
     m_translateButton->setDefault(true);
     m_showSourceCheck = new QCheckBox(QStringLiteral("显示原文对照"));
@@ -125,6 +178,21 @@ void MainWindow::buildUi()
     topBar->addWidget(m_showSourceCheck);
     topBar->addWidget(m_translateButton);
     root->addLayout(topBar);
+
+    // ---------- 第二行：Web 来源 + 设置 ----------
+    auto *sourceBar = new QHBoxLayout;
+    sourceBar->setSpacing(6);
+
+    m_webProviderBox = newLangBox();
+    m_webProviderBox->setMinimumWidth(240);
+    m_settingsButton = new QPushButton(QStringLiteral("设置…"));
+    m_settingsButton->setToolTip(QStringLiteral("LLM 网关 / API Key / 模型 / 采样参数"));
+
+    sourceBar->addWidget(new QLabel(QStringLiteral("来源")));
+    sourceBar->addWidget(m_webProviderBox);
+    sourceBar->addStretch(1);
+    sourceBar->addWidget(m_settingsButton);
+    root->addLayout(sourceBar);
 
     // ---------- 中间左右分栏 ----------
     m_input = new QPlainTextEdit;
@@ -184,7 +252,8 @@ void MainWindow::populateLanguageBoxes()
         m_srcLangBox->addItem(
             QStringLiteral("%1 (%2)").arg(LanguageRegistry::displayName(code), code), code);
     }
-    m_srcLangBox->setCurrentIndex(0);   // 默认自动检测
+    int srcIndex = m_srcLangBox->findData(m_settings.srcLang);
+    m_srcLangBox->setCurrentIndex(srcIndex >= 0 ? srcIndex : 0);   // 回落「自动检测」
 
     m_dstLangBox->clear();
     for (const QString &code : LanguageRegistry::allInternal()) {
@@ -194,19 +263,78 @@ void MainWindow::populateLanguageBoxes()
         m_dstLangBox->addItem(
             QStringLiteral("%1 (%2)").arg(LanguageRegistry::displayName(code), code), code);
     }
-    const int zhIndex = m_dstLangBox->findData(QStringLiteral("zh"));
-    m_dstLangBox->setCurrentIndex(zhIndex >= 0 ? zhIndex : 0);
+    int dstIndex = m_dstLangBox->findData(m_settings.dstLang);
+    if (dstIndex < 0) {
+        dstIndex = m_dstLangBox->findData(QStringLiteral("zh"));
+    }
+    m_dstLangBox->setCurrentIndex(dstIndex >= 0 ? dstIndex : 0);
 }
 
 void MainWindow::populateEngineBox()
 {
+    const QString keep = m_settings.engineId;   // 空 = 自动
+
     m_engineBox->clear();
     m_engineBox->addItem(QStringLiteral("自动"), QString());
+    m_engineBox->setItemData(0,
+                             QStringLiteral("按后端优先级自动选择：mock → web → llm → local-mt"),
+                             Qt::ToolTipRole);
+
+    const bool llmConfigured = m_settings.llm.isValid();
     for (const QString &id : {QStringLiteral("web"), QStringLiteral("mock"),
                               QStringLiteral("llm"), QStringLiteral("local-mt")}) {
-        m_engineBox->addItem(id, id);
+        // llm 未配置（baseUrl / model 为空）时置灰：就算选中它也只会拿到 isReady()==false。
+        const bool usable = (id != QLatin1String("llm")) || llmConfigured;
+        const QString text = usable ? id : QStringLiteral("%1（未配置）").arg(id);
+
+        const int index = m_engineBox->count();
+        m_engineBox->addItem(text, id);
+        if (!usable) {
+            disableComboItem(m_engineBox, index);
+            m_engineBox->setItemData(
+                index,
+                QStringLiteral("LLM 未配置：点「设置…」填写 Base URL 与模型名后即可启用"),
+                Qt::ToolTipRole);
+        }
     }
-    m_engineBox->setCurrentIndex(0);
+
+    int index = m_engineBox->findData(keep);
+    if (index < 0 || !isComboItemEnabled(m_engineBox, index)) {
+        index = 0;   // 存着旧引擎但已不可用 -> 回落「自动」
+    }
+    m_engineBox->setCurrentIndex(index);
+}
+
+void MainWindow::populateWebProviderBox()
+{
+    const QString keep = m_settings.webProviderId;   // 空 = 自动
+
+    m_webProviderBox->clear();
+    m_webProviderBox->addItem(QStringLiteral("自动（Google → MyMemory）"), QString());
+    m_webProviderBox->setItemData(0, QString::fromUtf8(kAutoProviderNote), Qt::ToolTipRole);
+
+    const QVector<studious::translate::WebProviderInfo> providers =
+        studious::translate::listWebProviders();
+
+    for (const studious::translate::WebProviderInfo &info : providers) {
+        // requiresApiKey && !configured：后端已声明"需要 key 但没 key"，选它也没意义。
+        const bool usable = !(info.requiresApiKey && !info.configured);
+
+        const int index = m_webProviderBox->count();
+        m_webProviderBox->addItem(
+            usable ? info.displayName : QStringLiteral("%1（未配置）").arg(info.displayName),
+            info.id);
+        m_webProviderBox->setItemData(index, info.note, Qt::ToolTipRole);
+        if (!usable) {
+            disableComboItem(m_webProviderBox, index);
+        }
+    }
+
+    int index = m_webProviderBox->findData(keep);
+    if (index < 0 || !isComboItemEnabled(m_webProviderBox, index)) {
+        index = 0;   // 存着已下架 / 未配置的来源 -> 回落「自动」
+    }
+    m_webProviderBox->setCurrentIndex(index);
 }
 
 QString MainWindow::currentSrcLang() const
@@ -226,11 +354,26 @@ QString MainWindow::currentEngine() const
     return m_engineBox->currentData().toString();   // "自动" 为空串
 }
 
+QString MainWindow::currentWebProviderId() const
+{
+    return m_webProviderBox->currentData().toString();   // "自动" 为空串
+}
+
+QStringList MainWindow::currentWebProviders() const
+{
+    const QString id = currentWebProviderId();
+    // 空 = 自动 = 空列表 = 交给后端默认顺序（google -> mymemory）。
+    return id.isEmpty() ? QStringList{} : QStringList{id};
+}
+
 void MainWindow::refreshEngineStatus()
 {
     QString tooltip;
-    const QString text =
-        buildEngineStatusText(currentSrcLang(), currentDstLang(), &tooltip);
+    const QString text = buildEngineStatusText(currentSrcLang(),
+                                               currentDstLang(),
+                                               m_settings.llm,
+                                               currentWebProviders(),
+                                               &tooltip);
     m_engineStatus->setText(text);
     m_engineStatus->setToolTip(tooltip);
 }
@@ -247,6 +390,27 @@ void MainWindow::setStatusError(const QString &text)
     m_status->setText(text);
 }
 
+void MainWindow::onOpenSettings()
+{
+    SettingsDialog dialog(m_settings, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    m_settings = dialog.settings();
+    m_settings.save();
+
+    // 改完 LLM 配置后立刻重建两个下拉：llm / azure 的可用性都取决于配置。
+    populateEngineBox();
+    populateWebProviderBox();
+    refreshEngineStatus();
+
+    setStatusOk(m_settings.llm.isValid()
+                    ? QStringLiteral("设置已保存（LLM：%1 / %2）")
+                          .arg(m_settings.llm.model, m_settings.llm.baseUrl)
+                    : QStringLiteral("设置已保存（LLM 未配置，将不会参与自动降级）"));
+}
+
 void MainWindow::onTranslateClicked()
 {
     if (m_job->isRunning()) {
@@ -260,14 +424,22 @@ void MainWindow::onTranslateClicked()
         return;
     }
 
-    studious::core::TranslateRequest req;
+    // 顺手记住当前界面状态，关窗时就能原样存回 QSettings。
+    m_settings.srcLang = currentSrcLang();
+    m_settings.dstLang = currentDstLang();
+    m_settings.engineId = currentEngine();
+    m_settings.webProviderId = currentWebProviderId();
+
+    TranslateJobRequest req;
     req.paragraphs = paragraphs;
-    req.srcLang = currentSrcLang();
-    req.dstLangs = QStringList{currentDstLang()};
-    req.preferredEngine = currentEngine();
+    req.srcLang = m_settings.srcLang;
+    req.dstLang = m_settings.dstLang;
+    req.engineId = m_settings.engineId;
+    req.webProviders = currentWebProviders();
+    req.llm = m_settings.llm;   // 配置快照：翻译过程中改不了，线程内也无需回读界面
 
     m_lastSrcParagraphs = paragraphs;
-    m_lastEngineId = req.preferredEngine.isEmpty() ? QStringLiteral("自动") : req.preferredEngine;
+    m_lastEngineId = req.engineId.isEmpty() ? QStringLiteral("自动") : req.engineId;
 
     m_translateButton->setEnabled(false);
     m_output->clear();

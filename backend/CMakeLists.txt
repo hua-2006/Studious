@@ -22,6 +22,8 @@ add_library(backend STATIC
     src/net/QtHttpClient.cpp
     src/translators/adapters/GoogleFreeAdapter.cpp
     src/translators/adapters/MyMemoryAdapter.cpp
+    src/translators/adapters/AzureTranslatorAdapter.cpp
+    src/translators/WebProvider.cpp
     src/translators/WebTranslator.cpp
     src/translators/MockTranslator.cpp
     src/translators/LocalMtTranslator.cpp

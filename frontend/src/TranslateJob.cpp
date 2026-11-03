@@ -18,12 +18,23 @@ namespace {
 //   QNetworkAccessManager 只能在创建它的线程使用（Qt 文档明确要求），
 //   跨线程共享会踩 "Cannot create children for a parent in a different thread"
 //   以及请求随机不回调。所以每次翻译都现造一套，代价只有几微秒。
-studious::core::TranslateOutcome translateInWorkerThread(
-    const studious::core::TranslateRequest &req)
+studious::core::TranslateOutcome translateInWorkerThread(const TranslateJobRequest &job)
 {
     studious::net::QtHttpClient http;   // 工作线程内构造
-    auto translators = studious::factory::makeDefaultTranslators(http);
+
+    // 装配参数（LLM 配置 / Web 来源顺序）在这里落地：
+    //   空 LlmConfig -> llm 组件未就绪，Router 自动跳过；
+    //   空 webProviders -> web 组件走默认 google -> mymemory。
+    auto translators =
+        studious::factory::makeDefaultTranslators(http, job.llm, job.webProviders);
     studious::router::TranslatorRouter router(std::move(translators));
+
+    // 后端契约只认段落 + 语言对 + 引擎偏好，装配参数不进 TranslateRequest。
+    studious::core::TranslateRequest req;
+    req.paragraphs = job.paragraphs;
+    req.srcLang = job.srcLang;
+    req.dstLangs = QStringList{job.dstLang};
+    req.preferredEngine = job.engineId;
     return router.translate(req);
 }
 
@@ -85,13 +96,14 @@ bool TranslateJob::isRunning() const
     return m_watcher->isRunning();
 }
 
-void TranslateJob::start(const studious::core::TranslateRequest &req)
+void TranslateJob::start(const TranslateJobRequest &req)
 {
     if (m_watcher->isRunning()) {
         return;
     }
 
     m_timer.start();
+    // 按值拷贝进线程：req 是纯数据，跨线程不能带引用。
     m_watcher->setFuture(QtConcurrent::run(&translateInWorkerThread, req));
 }
 
