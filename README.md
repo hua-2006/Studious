@@ -5,7 +5,7 @@
 > **当前阶段：v0.6 —— 翻译链路完整可用（Web / 云端 LLM / 本地 LLM / 本地 MT + 多语言兜底），前端为可测试 demo。**
 > 截图、OCR、浮层尚未开始。
 >
-> 📄 进度报告：[`docs/progress-report.md`](docs/progress-report.md) ｜ 测试报告：[`docs/test-report-2026-11-05.md`](docs/test-report-2026-11-05.md) ｜ **接手先读**：[`docs/HANDOFF.md`](docs/HANDOFF.md)
+> 📄 内部文档（架构 / 测试报告 / 交接说明）保留在本地 `docs/` 目录，**不随仓库公开**。
 
 ---
 
@@ -351,10 +351,20 @@ cmake --build frontend/build
 
 ## 文档
 
-- [`docs/HANDOFF.md`](docs/HANDOFF.md) —— **交接文档**（下一个接手的人先读这个）
-- [`docs/test-report-2026-11-05.md`](docs/test-report-2026-11-05.md) —— 后端接口测试报告（63 条断言）
-- [`docs/progress-report.md`](docs/progress-report.md) —— 进度报告（当前状态、实测数据、问题清单）
-- [`docs/backend-architecture.md`](docs/backend-architecture.md) —— 架构、契约、20 条 ADR、全部踩坑记录
+内部文档只在本地，不随仓库公开：
+
+| 文件 | 内容 |
+|---|---|
+| `docs/HANDOFF.md` | 交接说明（环境、架构、契约、15 条坑、下一步） |
+| `docs/backend-architecture.md` | 架构、契约、ADR、踩坑记录 |
+| `docs/test-report-2026-11-05.md` | 后端接口测试报告 |
+| `docs/progress-report.md` | 进度与实测数据 |
+
+公开文档：
+
+- [`backend/README.md`](backend/README.md) —— 后端模块与自测说明
+- [`frontend/README.md`](frontend/README.md) —— 前端界面、线程模型、冒烟参数
+- [`CONTRIBUTORS.md`](CONTRIBUTORS.md)
 - [`backend/README.md`](backend/README.md) —— 后端模块与自测说明
 - [`frontend/README.md`](frontend/README.md) —— 前端界面、线程模型、冒烟参数
 - [`CONTRIBUTORS.md`](CONTRIBUTORS.md)
