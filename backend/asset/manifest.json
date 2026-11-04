@@ -91,7 +91,7 @@
           "https://cdn.studious.app/runtime/onnxruntime-win-x64-1.20.1.zip"
         ],
         "files": [
-          "onnxruntime.dll"
+          "lib/onnxruntime.dll"
         ],
         "requiresRamGB": 2,
         "note": "待发布时填入真实 sha256；本地 MT（OPUS-MT）引擎的运行时"
@@ -171,10 +171,11 @@
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-zh/resolve/main/opus-mt-en-zh.zip"
         ],
         "files": [
-          "encoder_model.onnx",
-          "decoder_model.onnx",
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
           "source.spm",
-          "target.spm"
+          "target.spm",
+          "vocab.json"
         ],
         "requiresRamGB": 2,
         "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT），内存仅约 250 MB、单句约 100~200 ms，不需要显卡。质量低于上面的 LLM，但胜在轻与快；适合低配机器或追求极低延迟的场景。"
@@ -196,10 +197,11 @@
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-zh-en/resolve/main/opus-mt-zh-en.zip"
         ],
         "files": [
-          "encoder_model.onnx",
-          "decoder_model.onnx",
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
           "source.spm",
-          "target.spm"
+          "target.spm",
+          "vocab.json"
         ],
         "requiresRamGB": 2,
         "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）语言对，内存约 250 MB、单句约 100~200 ms，不需要显卡。质量低于 LLM，胜在轻与快。"
@@ -221,10 +223,11 @@
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-jap/resolve/main/opus-mt-en-jap.zip"
         ],
         "files": [
-          "encoder_model.onnx",
-          "decoder_model.onnx",
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
           "source.spm",
-          "target.spm"
+          "target.spm",
+          "vocab.json"
         ],
         "requiresRamGB": 2,
         "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）语言对，内存约 250 MB、单句约 100~200 ms，不需要显卡。质量低于 LLM，胜在轻与快。（日文）"
@@ -246,10 +249,11 @@
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-ja-en/resolve/main/opus-mt-ja-en.zip"
         ],
         "files": [
-          "encoder_model.onnx",
-          "decoder_model.onnx",
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
           "source.spm",
-          "target.spm"
+          "target.spm",
+          "vocab.json"
         ],
         "requiresRamGB": 2,
         "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）日→英语言对，内存约 250 MB、单句约 100~200 ms。"
