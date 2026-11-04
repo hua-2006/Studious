@@ -57,6 +57,21 @@ bool looksDegenerate(const QString &output, const QString &source)
         return false;
     }
 
+    // 碎片化：小模型退化时会吐成 "quick に くしゃ が こ う そ に …" 这种
+    // 大量单字符片段。正常中文/日文不用空格，英文不会把单词拆成单字母。
+    const QStringList pieces = output.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (pieces.size() >= 8) {
+        int single = 0;
+        for (const QString &piece : pieces) {
+            if (piece.size() <= 1) {
+                ++single;
+            }
+        }
+        if (single * 100 / pieces.size() >= 35) {
+            return true;
+        }
+    }
+
     const QString tail = output.right(12);
     if (tail.trimmed().size() < 4) {
         return false;   // 纯标点/空白结尾，不足以判断
@@ -113,6 +128,74 @@ bool targetUsesCjk(const QString &dstLang)
 {
     return dstLang == QLatin1String("zh") || dstLang == QLatin1String("zh-TW")
            || dstLang == QLatin1String("ja") || dstLang == QLatin1String("ko");
+}
+
+// 目标语言是日文时，正常译文一定含假名；只有汉字的输出多半是中文。
+bool hasKana(const QString &text)
+{
+    for (const QChar ch : text) {
+        const ushort u = ch.unicode();
+        if (u >= 0x3040 && u <= 0x30FF) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasHangul(const QString &text)
+{
+    for (const QChar ch : text) {
+        const ushort u = ch.unicode();
+        if (u >= 0xAC00 && u <= 0xD7AF) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasLatinLetter(const QString &text)
+{
+    for (const QChar ch : text) {
+        if (ch.isLetter() && ch.unicode() < 0x0250) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 判断输出是否"像"目标语言。
+//
+// 这是业务底线：宁可报错让用户换模型，也不要把意大利语当成中文显示出来。
+// 判据只用字符集（不引语言检测模型），所以对拉丁语系之间（英/法/德/意）
+// 无法区分——那超出了字符集能判断的范围，需要真正的语言识别。
+bool matchesTargetScript(const QString &text, const QString &dstLang)
+{
+    int latinLetters = 0;
+    int allLetters = 0;
+    for (const QChar ch : text) {
+        if (ch.isLetter()) {
+            ++allLetters;
+            if (ch.unicode() < 0x0250) {
+                ++latinLetters;
+            }
+        }
+    }
+    // 目标语言是中日韩，却有一半以上是拉丁字母 —— 说明只翻了半句
+    // （实测 0.5B/1.5B 英文→日文会输出 "quick brown foxがさぼったogeを跳び越える。"）。
+    const bool tooMuchLatin = allLetters > 0 && latinLetters * 100 / allLetters > 50;
+
+    if (dstLang == QLatin1String("zh") || dstLang == QLatin1String("zh-TW")) {
+        return containsCjk(text) && !tooMuchLatin;
+    }
+    if (dstLang == QLatin1String("ja")) {
+        // 日文正常含假名；纯汉字输出更可能是中文，判为不符。
+        return hasKana(text) && !tooMuchLatin;
+    }
+    if (dstLang == QLatin1String("ko")) {
+        return hasHangul(text) && !tooMuchLatin;
+    }
+    // 拉丁语系（en/fr/de/es/it/pt…）：必须是拉丁字母，且不得混入中日韩文字。
+    return hasLatinLetter(text) && !containsCjk(text);
 }
 
 } // namespace
@@ -439,102 +522,104 @@ bool LlmTranslator::translateOne(const QString &text,
     const int configured = m_cfg.maxTokens > 0 ? m_cfg.maxTokens : 2048;
     const int maxTokens = qBound(64, qMin(configured, text.size() * 2 + 48), configured);
 
-    const QString prompt = buildUserPrompt(text, dstLang);
-
-    QString content;
-    QString err;
-    if (!postChat(effectiveSystemPrompt(), prompt, m_cfg.temperature, maxTokens, content, err)) {
-        outError = err;
-        return false;
-    }
-
-    // 复读检测：小模型（0.5B 级）偶发把同一短语重复上百次。
-    // 先降温度重试一次，仍复读就把多余部分截掉——宁可给半句，也不要刷屏。
-    if (looksDegenerate(content, text)) {
-        QString retry;
-        QString retryErr;
-        if (postChat(effectiveSystemPrompt(),
-                     prompt + QStringLiteral("\n\n只输出一次译文，不要重复任何内容。"),
-                     0.0,
-                     maxTokens,
-                     retry,
-                     retryErr)
-            && !retry.isEmpty()) {
-            content = retry;
-        }
-        if (looksDegenerate(content, text)) {
-            content = truncateRepetition(content);
-        }
-    }
-
-    // 部分照抄：目标语言是拉丁语系，译文里却还残留中日韩文字。
-    //
-    // 实测（0.5B + Vulkan）「中文指令 + <<< >>> 分隔符」这种中英混排 prompt
-    // 反而会诱导模型复读原文，且 temperature=0 也照旧；
-    // 换成「纯英文指令 + 明确禁止输出源语言字符」立刻正常。
-    // 所以这里换一套 prompt 重试，而不是简单再问一遍。
-    if (!targetUsesCjk(dstLang) && containsCjk(content)) {
-        const QString dstNameForRetry = core::LanguageRegistry::displayName(dstLang);
-        QString retry;
-        QString retryErr;
-        const QString englishPrompt =
-            QStringLiteral("Translate the following text into %1. "
-                           "Output only the translation, with no characters from the source language.")
-                .arg(dstNameForRetry);
-        if (postChat(QStringLiteral("You are a professional translation engine. "
-                                    "Output only the translation, nothing else."),
-                     englishPrompt + QStringLiteral("\n\n") + text,
-                     0.0,
-                     maxTokens,
-                     retry,
-                     retryErr)
-            && !retry.isEmpty() && !containsCjk(retry)) {
-            content = retry;
-        }
-        if (containsCjk(content)) {
-            outError = i18n::s("模型没有完成翻译（译文中仍含有原文文字）。可以换成更大的模型。",
-                               "The model did not finish translating: the output still contains source-language "
-                               "characters. Try a larger model.");
-            return false;
-        }
-    }
-
-    if (content.isEmpty()) {
-        outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
-        return false;
-    }
-
-    // 模型把原文原样吐回来 = 没翻译。先重试一次，仍如此则明确报错，
-    // 而不是把原文当译文显示（用户会以为"翻译坏了却没人告诉他"）。
+    const QString dstName = core::LanguageRegistry::displayName(dstLang);
     const QString srcNormalized = core::LanguageRegistry::normalize(m_activeSrcLang);
     const bool sameLanguage = !srcNormalized.isEmpty() && srcNormalized == dstLang;
-    if (!sameLanguage && isUntranslatedOutput(content, text)) {
-        QString retry;
-        QString retryErr;
-        if (postChat(effectiveSystemPrompt(),
-                     prompt + QStringLiteral("\n\n注意：必须翻译成目标语言，禁止返回原文。"),
-                     0.0,
-                     maxTokens,
-                     retry,
-                     retryErr)
-            && !retry.isEmpty()) {
-            content = retry;
+
+    const QString standardPrompt = buildUserPrompt(text, dstLang);
+
+    // 最多 5 次尝试，每次换一种策略。
+    //
+    // 为什么换策略而不是"再问一遍"：小模型一旦卡进某种失败模式
+    // （照抄原文 / 译成别的语言 / 复读），同一条 prompt 重问往往得到同样的结果。
+    // 实测把「中文指令 + <<<>>> 分隔符」换成「纯英文指令」能跳出很多坑。
+    QString lastError;
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        QString systemPrompt = effectiveSystemPrompt();
+        QString userPrompt = standardPrompt;
+        double temperature = m_cfg.temperature;
+
+        switch (attempt) {
+        case 2:
+            userPrompt += i18n::s("\n\n注意：必须翻译成目标语言，禁止返回原文。",
+                                  "\n\nNote: translate into the target language. Never return the source text.");
+            temperature = 0.0;
+            break;
+        case 3:
+            systemPrompt = QStringLiteral(
+                "You are a professional translation engine. Output only the translation, nothing else.");
+            userPrompt = QStringLiteral("Translate the following text into %1. "
+                                        "Output only the translation, with no characters from the source language."
+                                        "\n\n%2")
+                             .arg(dstName, text);
+            temperature = 0.0;
+            break;
+        case 4:
+            systemPrompt = QStringLiteral("Translate to %1. Output only the translated text.").arg(dstName);
+            userPrompt = QStringLiteral("%1\n---\n%2").arg(dstName, text);
+            temperature = 0.3;
+            break;
+        case 5:
+            systemPrompt = QStringLiteral("You are a translator.");
+            userPrompt = QStringLiteral("请把下面内容翻译成%1，只输出译文：\n%2").arg(dstName, text);
+            temperature = 0.6;
+            break;
+        default:
+            break;
         }
-        if (isUntranslatedOutput(content, text)) {
-            outError = i18n::s("模型没有翻译（把原文原样返回了）。可以换成更大的模型，或手动指定源语言。",
-                               "The model returned the source text unchanged instead of translating. "
-                               "Try a larger model, or set the source language explicitly.");
-            return false;
+
+        QString content;
+        QString err;
+        if (!postChat(systemPrompt, userPrompt, temperature, maxTokens, content, err)) {
+            lastError = err;
+            continue;
         }
+
+        // 本地小模型的两种噪声（语言标签行 / 译文后的括注）先清掉再判定。
+        if (m_cfg.stripModelNotes) {
+            content = stripAnnotationLines(content);
+        }
+
+        if (content.isEmpty()) {
+            lastError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
+            continue;
+        }
+
+        // 复读：先截断；截完仍离谱就换策略。
+        if (looksDegenerate(content, text)) {
+            content = truncateRepetition(content);
+            if (looksDegenerate(content, text)) {
+                lastError = i18n::s("模型输出重复内容", "The model produced repeated output.");
+                continue;
+            }
+        }
+
+        // 源语言与目标语言相同时，原文就是正确结果，不做语种校验。
+        if (!sameLanguage) {
+            // 照抄原文。
+            if (isUntranslatedOutput(content, text)) {
+                lastError = i18n::s("模型没有翻译（返回了原文）",
+                                    "The model returned the source text unchanged.");
+                continue;
+            }
+
+            // 语种不符：译成了别的语言（实测 1.5B 会把中文目标译成意大利语）。
+            if (!matchesTargetScript(content, dstLang)) {
+                lastError = i18n::s("译文语种与目标语言不符",
+                                    "The output is not in the target language.");
+                continue;
+            }
+        }
+
+        outText = content;
+        return true;
     }
-    // 本地小模型常见的两种噪声（语言标签行 / 译文后的括注）在这里兜掉；
-    // 云端配置不开这个开关，已实测通过的输出一个字都不动。
-    outText = m_cfg.stripModelNotes ? stripAnnotationLines(content) : content;
-    if (outText.isEmpty()) {
-        outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
-        return false;
-    }
-    return true;
+
+    outError = i18n::sf("翻译失败（已重试 5 次）：%1。可以换成更大的模型，或手动指定源语言。",
+                        "Translation failed after 5 attempts: %1. "
+                        "Try a larger model, or set the source language explicitly.",
+                        {lastError.isEmpty() ? i18n::s("未给出原因", "no reason given") : lastError});
+    return false;
 }
 
 bool LlmTranslator::postChat(const QString &systemPrompt,
