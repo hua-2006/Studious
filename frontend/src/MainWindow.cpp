@@ -40,6 +40,8 @@ const char *const kSampleText =
 
 const char *const kStatusOkStyle = "";
 const char *const kStatusErrorStyle = "color: #c0392b; font-weight: 600;";
+// 非阻断提示：翻译成功但有话要说（源语言可疑、同语言原样返回）。用琥珀色区别于错误红。
+const char *const kStatusWarnStyle = "color: #b9770e;";
 
 // 「自动」那一项的说明文案。
 const char *const kAutoProviderNote = "按后端默认优先级依次尝试：Google → MyMemory";
@@ -660,6 +662,17 @@ void MainWindow::setStatusError(const QString &text)
     m_status->setText(text);
 }
 
+// 在已有状态文本后追加一条非阻断提示（琥珀色），保留原有的引擎/耗时信息。
+void MainWindow::appendStatusWarning(const QString &warning)
+{
+    if (warning.isEmpty()) {
+        return;
+    }
+    m_status->setStyleSheet(QString::fromLatin1(kStatusWarnStyle));
+    m_status->setText(m_status->text() + QStringLiteral("    ⚠ ") + warning);
+    m_status->setToolTip(warning);
+}
+
 void MainWindow::onOpenSettings()
 {
     SettingsDialog dialog(m_settings, m_cache, this);
@@ -876,7 +889,16 @@ void MainWindow::onTranslationFinished(const TranslateJobResult &result, qint64 
         status += QStringLiteral("｜缓存命中 %1/%2").arg(result.cacheHits).arg(total);
     }
 
+    // 非阻断提示（黄字）：例如"源语言可疑""同语言已原样返回"。
+    // 翻译是成功的，所以不报错；但必须让用户知道，否则会以为翻译坏了。
+    if (result.outcome.passthrough) {
+        status += QStringLiteral("｜原样返回");
+    }
     setStatusOk(status);
+
+    if (!result.outcome.warning.isEmpty()) {
+        appendStatusWarning(result.outcome.warning);
+    }
 
     refreshEngineStatus();
 }

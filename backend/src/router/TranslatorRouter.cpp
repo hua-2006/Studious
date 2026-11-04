@@ -3,6 +3,8 @@
 #include "cache/TranslationCache.h"
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
+#include "i18n/LanguageDetector.h"
+#include "i18n/L10n.h"
 
 #include <utility>
 
@@ -57,6 +59,27 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         dsts = {QStringLiteral("zh")};
     }
 
+    // 源语言可疑：用户明确选了某种语言，但识别结果与之不符。
+    //
+    // 这里**不改变行为**（仍按用户选择去翻）——LLM/Web 实测都能自纠，
+    // MT（v2）则会按检测值强制走。这里只负责"告诉用户一声"，
+    // 免得他觉得"我选了日语怎么翻出来怪怪的"。
+    QString sourceWarning;
+    if (src != QLatin1String("auto") && !req.paragraphs.isEmpty()) {
+        const QString sample = req.paragraphs.first().left(300);
+        const i18n::DetectedLanguage detected = i18n::detectLanguage(sample);
+        if (!detected.code.isEmpty() && detected.confidence >= 0.7 && detected.code != src) {
+            sourceWarning =
+                i18n::sf("检测到原文可能是%1，与所选源语言%2不一致；已按所选继续翻译。"
+                         "若结果异常，请把源语言改为「%1」或「自动检测」。",
+                         "The text looks like %1 but the selected source language is %2. "
+                         "Translation continued anyway; if the result looks wrong, switch the source "
+                         "language to %1 or auto-detect.",
+                         {core::LanguageRegistry::displayName(detected.code),
+                          core::LanguageRegistry::displayName(src)});
+        }
+    }
+
     // 业务规则：源语言 == 目标语言时不做任何翻译，原样返回。
     //
     // 用户手动选了 zh -> zh，说明他只想"回填原文"（或选错了）。此时调用引擎
@@ -75,6 +98,10 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
     if (dsts.isEmpty()) {
         out.ok = true;
         out.byLang = passthrough;
+        out.passthrough = true;
+        out.warning = i18n::s("源语言与目标语言相同，已原样返回（未翻译）。",
+                              "Source and target languages are the same; the text was returned "
+                              "unchanged without translation.");
         m_lastCacheReport = CacheReport{};
         return out;
     }
@@ -187,6 +214,8 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
             const QString inner =
                 out.error.isEmpty() ? i18n::s("未知错误", "unknown error") : out.error;
             out.error = QStringLiteral("[%1] %2").arg(engineId, inner);
+        } else {
+            out.warning = sourceWarning;
         }
         m_lastCacheReport = CacheReport{};
         return out;
@@ -255,6 +284,9 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
     }
 
     out.ok = errors.isEmpty();
+    if (out.ok && !sourceWarning.isEmpty()) {
+        out.warning = sourceWarning;
+    }
     if (!out.ok) {
         out.error = errors.join(i18n::s("；", "; "));
     }

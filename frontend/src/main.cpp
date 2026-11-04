@@ -412,11 +412,17 @@ int runSmoke(const QStringList &args)
                                  roundCode = 1;
                              } else {
                                  const QStringList lines = result.outcome.byLang.value(to);
-                                 say(QStringLiteral("译文:"));
+                                 if (result.outcome.passthrough) {
+    say(QStringLiteral("passthrough=true（同语言，未翻译）"));
+}
+say(QStringLiteral("译文:"));
                                  for (const QString &line : lines) {
                                      say(line);
                                  }
-                                 roundCode = 0;
+                                 if (!result.outcome.warning.isEmpty()) {
+                                    say(QStringLiteral("[WARN] ") + result.outcome.warning);
+                                }
+                                roundCode = 0;
                              }
                              loop.quit();
                          });
