@@ -48,6 +48,8 @@ private slots:
 private:
     void buildUi();
     void populateLanguageBoxes();
+    // 源语言与目标语言互斥：一侧选中后，另一侧同名条目置灰。
+    void enforceLanguageExclusivity();
     void populateEngineBox();
     void populateWebProviderBox();
     void populateLocalBackendBox();
@@ -101,4 +103,6 @@ private:
     QStringList m_lastSrcParagraphs;   // 最近一次请求的段落，用于"原文对照"
     QString m_lastEngineId;            // 最近一次实际生效的引擎（自动模式下未必等于下拉框值）
     bool m_lastCacheEnabled = false;   // 发请求那一刻的缓存开关（勾选框可能在等待期间被改）
+    bool m_languageLock = false;             // 互斥逻辑防重入
+    bool m_languageExclusiveWired = false;   // 信号只连一次
 };

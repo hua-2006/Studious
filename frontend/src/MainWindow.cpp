@@ -329,6 +329,94 @@ void MainWindow::populateLanguageBoxes()
         dstIndex = m_dstLangBox->findData(QStringLiteral("zh"));
     }
     m_dstLangBox->setCurrentIndex(dstIndex >= 0 ? dstIndex : 0);
+
+    // 两个下拉填完后再应用互斥规则（源语言不能等于目标语言）。
+    // 信号连接放在 populate 里只会连一次的话会重复触发，所以用 m_languageLock 防重入。
+    if (!m_languageExclusiveWired) {
+        m_languageExclusiveWired = true;
+        connect(m_srcLangBox, &QComboBox::currentIndexChanged, this,
+                [this](int) { enforceLanguageExclusivity(); });
+        connect(m_dstLangBox, &QComboBox::currentIndexChanged, this,
+                [this](int) { enforceLanguageExclusivity(); });
+    }
+    enforceLanguageExclusivity();
+}
+
+// 源语言与目标语言互斥。
+//
+// 业务规则：同一个语言"翻译成自己"没有意义（引擎只会复读或改写），
+// 所以在一侧选中之后，把另一侧的同名条目置灰；万一当前选中的正好被禁，
+// 自动跳到第一个可用项，避免出现"选着禁用项"的非法状态。
+void MainWindow::enforceLanguageExclusivity()
+{
+    if (m_languageLock || !m_srcLangBox || !m_dstLangBox) {
+        return;
+    }
+    m_languageLock = true;
+
+    // 冲突时保留**目标语言**（用户更在意"翻成什么"），把源语言退回「自动检测」。
+    // 反过来的做法会把用户选的目标语言也改掉，等于一次操作丢两个设置。
+    const QString srcCode = m_srcLangBox->currentData().toString();
+    const QString dstCode = m_dstLangBox->currentData().toString();
+    if (srcCode != QLatin1String("auto") && srcCode == dstCode) {
+        const int autoIndex = m_srcLangBox->findData(QStringLiteral("auto"));
+        if (autoIndex >= 0) {
+            m_srcLangBox->setCurrentIndex(autoIndex);
+        }
+    }
+
+    const QString effectiveSrc = m_srcLangBox->currentData().toString();
+    const QString effectiveDst = m_dstLangBox->currentData().toString();
+
+    const auto disableMatching = [](QComboBox *box, const QString &forbidden) {
+        auto *model = qobject_cast<QStandardItemModel *>(box->model());
+        if (model == nullptr) {
+            return;
+        }
+        for (int i = 0; i < box->count(); ++i) {
+            QStandardItem *item = model->item(i);
+            if (item == nullptr) {
+                continue;
+            }
+            const QString code = item->data(Qt::UserRole).toString();
+            // "auto" 永远可选：它表示"不指定源语言"，不存在等于目标语言的问题。
+            const bool shouldDisable = !forbidden.isEmpty() && code == forbidden
+                                       && code != QLatin1String("auto");
+            item->setEnabled(!shouldDisable);
+        }
+    };
+
+    disableMatching(m_srcLangBox, effectiveDst);
+    disableMatching(m_dstLangBox, effectiveSrc);
+
+    // 正常情况下上面的冲突已经被"源退回 auto"化解，这里只是兜底：
+    // 万一当前项仍被禁（例如程序化设值），跳到第一个可用项。
+    const auto jumpIfDisabled = [](QComboBox *box) {
+        auto *model = qobject_cast<QStandardItemModel *>(box->model());
+        if (model == nullptr) {
+            return;
+        }
+        QStandardItem *current = model->item(box->currentIndex());
+        if (current != nullptr && current->isEnabled()) {
+            return;
+        }
+        for (int i = 0; i < box->count(); ++i) {
+            QStandardItem *item = model->item(i);
+            if (item != nullptr && item->isEnabled()) {
+                box->setCurrentIndex(i);
+                return;
+            }
+        }
+    };
+
+    jumpIfDisabled(m_srcLangBox);
+    jumpIfDisabled(m_dstLangBox);
+
+    // 记录用户当前选择，关窗时保存。
+    m_settings.srcLang = m_srcLangBox->currentData().toString();
+    m_settings.dstLang = m_dstLangBox->currentData().toString();
+
+    m_languageLock = false;
 }
 
 void MainWindow::populateEngineBox()
@@ -706,27 +794,38 @@ void MainWindow::onTranslateClicked()
     req.cacheEnabled = m_settings.cacheEnabled;
 
     if (m_settings.useLocalEngine) {
-        // 线程约束：ensureStarted() 阻塞约 1 秒且内部是 QProcess（主线程亲和），
-        // 必须在**提交任务之前**在主线程跑完；工作线程只拿 baseUrl 快照。
-        setStatusOk(QStringLiteral("正在启动本地引擎（%1，首次 1~3 秒）…")
-                        .arg(localTargetLabel()));
-        // 只放行重绘，屏蔽用户输入：启动期间按钮再被点是纯粹的麻烦。
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        // 源语言与目标语言相同：Router 会直接把原文回填，根本不会用到引擎。
+        // 这时候去起 llama-server（约 1 秒；停掉还要 3 秒）纯属浪费，直接跳过。
+        const QString srcCode = studious::core::LanguageRegistry::normalize(req.srcLang);
+        const QString dstCode = studious::core::LanguageRegistry::normalize(req.dstLang);
+        const bool sameLanguage = !srcCode.isEmpty()
+                                  && srcCode != QLatin1String("auto")
+                                  && srcCode == dstCode;
+        if (sameLanguage) {
+            req.engineId = QStringLiteral("llm");
+        } else {
+            // 线程约束：ensureStarted() 阻塞约 1 秒且内部是 QProcess（主线程亲和），
+            // 必须在**提交任务之前**在主线程跑完；工作线程只拿 baseUrl 快照。
+            setStatusOk(QStringLiteral("正在启动本地引擎（%1，首次 1~3 秒）…")
+                            .arg(localTargetLabel()));
+            // 只放行重绘，屏蔽用户输入：启动期间按钮再被点是纯粹的麻烦。
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
-        QString localError;
-        if (!applyLocalEngineConfig(&req.llm, &localError)) {
-            QMessageBox::critical(this,
-                                  QStringLiteral("本地引擎启动失败"),
-                                  localError.isEmpty()
-                                      ? QStringLiteral("本地引擎启动失败（未给出原因）")
-                                      : localError);
-            // 回滚勾选：toggled 里会保存 false、重建引擎下拉、停掉半死的进程。
-            m_localCheck->setChecked(false);
-            setStatusError(QStringLiteral("本地引擎启动失败：%1")
-                               .arg(localError.section(QLatin1Char('\n'), 0, 0)));
-            return;
+            QString localError;
+            if (!applyLocalEngineConfig(&req.llm, &localError)) {
+                QMessageBox::critical(this,
+                                      QStringLiteral("本地引擎启动失败"),
+                                      localError.isEmpty()
+                                          ? QStringLiteral("本地引擎启动失败（未给出原因）")
+                                          : localError);
+                // 回滚勾选：toggled 里会保存 false、重建引擎下拉、停掉半死的进程。
+                m_localCheck->setChecked(false);
+                setStatusError(QStringLiteral("本地引擎启动失败：%1")
+                                   .arg(localError.section(QLatin1Char('\n'), 0, 0)));
+                return;
+            }
+            req.engineId = QStringLiteral("llm");   // 本地引擎只能配 llm 组件
         }
-        req.engineId = QStringLiteral("llm");   // 本地引擎只能配 llm 组件
     }
 
     m_lastSrcParagraphs = paragraphs;
