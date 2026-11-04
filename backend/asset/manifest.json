@@ -164,8 +164,8 @@
           "en",
           "zh"
         ],
-        "size": 314572800,
-        "sha256": "",
+        "size": 123629196,
+        "sha256": "925d3b0ccb42369920be6fde4e2a7fca6c01683cc0245b2d382fe662c2b82d95",
         "archive": "zip",
         "urls": [
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-zh/resolve/main/opus-mt-en-zh.zip"
@@ -190,8 +190,8 @@
           "zh",
           "en"
         ],
-        "size": 314572800,
-        "sha256": "",
+        "size": 123958398,
+        "sha256": "e0694c20f2cdc79790f8b682478793400f63ac626900b9bbdf5431734698c526",
         "archive": "zip",
         "urls": [
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-zh-en/resolve/main/opus-mt-zh-en.zip"
@@ -216,8 +216,8 @@
           "en",
           "ja"
         ],
-        "size": 314572800,
-        "sha256": "",
+        "size": 99913125,
+        "sha256": "9faa9f105b8b2c3845f9ce05f19e8dd98c30280f0d5401337c28a7fb3eed33b0",
         "archive": "zip",
         "urls": [
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-jap/resolve/main/opus-mt-en-jap.zip"
@@ -242,8 +242,8 @@
           "ja",
           "en"
         ],
-        "size": 314572800,
-        "sha256": "",
+        "size": 102673294,
+        "sha256": "2256ab25adfcc7a1abcc7f5fcfef6047e1a52476dd9614c8f16008513b69430e",
         "archive": "zip",
         "urls": [
           "https://hf-mirror.com/Helsinki-NLP/opus-mt-ja-en/resolve/main/opus-mt-ja-en.zip"

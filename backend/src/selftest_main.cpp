@@ -11,8 +11,12 @@
 //   backend_selftest.exe --llm       用本机网关真实翻译两句话（需要网关在 127.0.0.1:3065）
 //                                    可用环境变量临时换网关/Key/模型排查：
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
-//   backend_selftest.exe --mt        本地 OPUS-MT（en→zh）最小闭环：加载 ONNX + 翻三句英文
-//   backend_selftest.exe --mt "<英文句子>"  同上，只翻这一句
+//   backend_selftest.exe --mt        本地 OPUS-MT：四个语言对各一句（en→zh / zh→en / en→ja / ja→en）
+//   backend_selftest.exe --mt "<句子>"  同上，只翻这一句（en→zh）
+//   backend_selftest.exe --mt-bench  MT 延迟基准：同进程三段 A(非cache贪心)/B(cache贪心)/C(cache+beam)
+//                                    每对每段 5 次，打印 min/avg 与加速比
+//   环境变量：STUDIOUS_MT_BEAMS=n 覆盖 beam 数（1=贪心）；STUDIOUS_MT_NO_CACHE=1 强制走非 cache 老路径；
+//            STUDIOUS_MT_DEBUG=1 打印 ONNX 张量表 / 每步耗时 / 生成 token id
 
 #include "Factory.h"
 #include "asset/AssetRegistry.h"
@@ -64,12 +68,14 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <utility>
+#include <vector>
 
 using namespace studious;
 
@@ -1839,71 +1845,426 @@ bool hasHan(const QString &text)
     return false;
 }
 
-// --mt：本地 OPUS-MT（en→zh）最小闭环。
-// 模型目录固定取 <AppData>/assets/models/mt.opus.en-zh，与资产包的安装位置一致。
+// 日文必须出现假名（平假名/片假名）。只有汉字不算——中文输出也全是汉字。
+bool hasKana(const QString &text)
+{
+    for (const QChar &c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x3040 && u <= 0x309F) || (u >= 0x30A0 && u <= 0x30FF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 英文方向必须出现拉丁字母（否则多半是吐了源语言或一堆符号）。
+bool hasLatinLetter(const QString &text)
+{
+    for (const QChar &c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --mt 的四个语言对用例（每个方向一句）。句子内容固定，方便横向比耗时。
+struct MtCase {
+    QString src;
+    QString dst;
+    QString text;
+};
+
+std::vector<MtCase> mtCases()
+{
+    return {
+        {QStringLiteral("en"), QStringLiteral("zh"),
+         QStringLiteral("The quick brown fox jumps over the lazy dog.")},
+        {QStringLiteral("zh"), QStringLiteral("en"),
+         QStringLiteral("今天的天气很好，我们去公园散步吧。")},
+        {QStringLiteral("en"), QStringLiteral("ja"),
+         QStringLiteral("Please save your progress before quitting the game.")},
+        {QStringLiteral("ja"), QStringLiteral("en"),
+         QStringLiteral("先輩、ちょっと待ってください。")},
+    };
+}
+
+// 目标语言 → 该方向译文必须满足的脚本检查。
+bool scriptCheckOk(const QString &dst, const QString &text)
+{
+    if (dst == QStringLiteral("zh")) {
+        return hasHan(text);
+    }
+    if (dst == QStringLiteral("ja")) {
+        return hasKana(text);
+    }
+    return hasLatinLetter(text);
+}
+
+QString scriptCheckHint(const QString &dst)
+{
+    if (dst == QStringLiteral("zh")) {
+        return QStringLiteral("译文里没有任何汉字");
+    }
+    if (dst == QStringLiteral("ja")) {
+        return QStringLiteral("译文里没有任何假名");
+    }
+    return QStringLiteral("译文里没有任何拉丁字母");
+}
+
+// 展示用：模型目录 + config.json 里的 num_beams（自测进程不直接持有 MtModel）。
+QString mtModelsRoot()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+        .filePath(QStringLiteral("assets/models"));
+}
+
+int configNumBeams(const QString &modelsRoot, const QString &src, const QString &dst)
+{
+    const QString path = QDir(modelsRoot)
+                             .filePath(QStringLiteral("mt.opus.%1-%2/config.json").arg(src, dst));
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+    const QJsonObject obj = QJsonDocument::fromJson(file.readAll()).object();
+    return obj.value(QStringLiteral("num_beams")).toInt(0);
+}
+
+QString effectiveBeamsNote(const QString &modelsRoot, const QString &src, const QString &dst)
+{
+    const QString env = qEnvironmentVariable("STUDIOUS_MT_BEAMS").trimmed();
+    const int cfg = configNumBeams(modelsRoot, src, dst);
+    if (!env.isEmpty()) {
+        return QStringLiteral("STUDIOUS_MT_BEAMS=%1（config=%2）").arg(env).arg(cfg);
+    }
+    return QStringLiteral("config=%1").arg(cfg);
+}
+
+// --mt：四个语言对各一句（en→zh / zh→en / en→ja / ja→en）。
+// 走的是真实生产路径 LocalMtTranslator：显式源语言 → 直连优先 → 缺失时英文中转。
 void runMtMode(const QString &singleText)
 {
-    const QString modelDir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                 .filePath(QStringLiteral("assets/models/mt.opus.en-zh"));
+    const QString modelsRoot = mtModelsRoot();
 
-    say(QStringLiteral("=== 本地 MT：OPUS-MT en→zh ==="));
-    say(QStringLiteral("模型目录: ") + modelDir);
+    say(QStringLiteral("=== 本地 MT：OPUS-MT（本地 ONNX 推理） ==="));
+    say(QStringLiteral("模型目录: ") + modelsRoot);
+
+    translate::LocalMtTranslator translator(modelsRoot);
+    say(QStringLiteral("已安装语言对: ")
+        + (translator.installedPairs().isEmpty() ? QStringLiteral("<无>")
+                                                 : translator.installedPairs().join(QStringLiteral(", "))));
     say(QString());
 
-    studious::mt::MtPaths paths;
-    paths.encoderOnnx = QDir(modelDir).filePath(QStringLiteral("encoder_model_quantized.onnx"));
-    paths.decoderOnnx = QDir(modelDir).filePath(QStringLiteral("decoder_model_quantized.onnx"));
-    paths.sourceSpm = QDir(modelDir).filePath(QStringLiteral("source.spm"));
-    paths.targetSpm = QDir(modelDir).filePath(QStringLiteral("target.spm"));
-    paths.configJson = QDir(modelDir).filePath(QStringLiteral("config.json"));
-    paths.vocabJson = QDir(modelDir).filePath(QStringLiteral("vocab.json"));
-
-    studious::mt::MtModel model;
-    QString error;
-    QElapsedTimer timer;
-    timer.start();
-    if (!model.load(paths, &error)) {
-        markFail(QStringLiteral("mt.load"), error);
-        return;
-    }
-    const qint64 loadMs = timer.elapsed();
-    say(QStringLiteral("模型加载耗时: %1 ms").arg(loadMs));
-    markPass(QStringLiteral("mt.load"));
-    say(QString());
-
-    QStringList sentences;
-    if (singleText.trimmed().isEmpty()) {
-        sentences << QStringLiteral("The quick brown fox jumps over the lazy dog.")
-                  << QStringLiteral("Please save your progress before quitting the game.")
-                  << QStringLiteral("Thank you very much for your help.");
-    } else {
-        sentences << singleText;
+    std::vector<MtCase> cases = mtCases();
+    if (!singleText.trimmed().isEmpty()) {
+        // 单句模式沿用 en→zh 方向，方便临时排查。
+        cases = {MtCase{QStringLiteral("en"), QStringLiteral("zh"), singleText}};
     }
 
     int index = 0;
-    for (const QString &sentence : sentences) {
+    for (const MtCase &c : cases) {
         ++index;
-        timer.restart();
-        QString translated;
-        QString translateError;
-        const bool ok = model.translate(sentence, translated, translateError);
-        const qint64 elapsed = timer.elapsed();
+        const QString tag = QStringLiteral("%1→%2").arg(c.src, c.dst);
 
-        if (!ok) {
-            markFail(QStringLiteral("mt.translate #%1").arg(index), translateError);
+        if (!translator.supports(c.src, c.dst)) {
+            markFail(QStringLiteral("mt.%1").arg(tag),
+                     QStringLiteral("该语言对不可用：%1")
+                         .arg(translator.resolve(c.src, c.dst).reason));
             continue;
         }
 
-        say(QStringLiteral("EN: %1").arg(sentence));
-        say(QStringLiteral("ZH: %1").arg(translated));
-        say(QStringLiteral("    单句耗时: %1 ms").arg(elapsed));
+        // 第一次调用含模型/会话加载，单独记时；再跑一次拿稳态耗时。
+        QElapsedTimer timer;
+        timer.start();
+        const core::TranslateOutcome first =
+            translator.translate({c.text}, c.src, {c.dst}, QJsonObject());
+        const qint64 firstMs = timer.elapsed();
+
+        timer.restart();
+        const core::TranslateOutcome steady =
+            translator.translate({c.text}, c.src, {c.dst}, QJsonObject());
+        const qint64 steadyMs = timer.elapsed();
+
+        const QStringList steadyTexts = steady.byLang.value(c.dst);
+        const QString text = steadyTexts.isEmpty() ? QString() : steadyTexts.first();
+
+        say(QStringLiteral("[%1] 原文: %2").arg(tag, c.text));
+        if (!steady.ok || text.isEmpty()) {
+            say(QStringLiteral("[%1] 失败: %2")
+                    .arg(tag, steady.error.isEmpty() ? QStringLiteral("译文为空") : steady.error));
+            if (!first.ok) {
+                say(QStringLiteral("[%1] 首次调用也失败: %2").arg(tag, first.error));
+            }
+            markFail(QStringLiteral("mt.%1").arg(tag),
+                     steady.error.isEmpty() ? QStringLiteral("译文为空") : steady.error);
+            continue;
+        }
+
+        say(QStringLiteral("[%1] 译文: %2").arg(tag, text));
+        say(QStringLiteral("[%1] 耗时: %2 ms（首次含模型加载 %3 ms） | 英文中转: %4 | %5")
+                .arg(tag)
+                .arg(steadyMs)
+                .arg(firstMs)
+                .arg(translator.pivotsThroughEnglish(c.src, c.dst) ? QStringLiteral("是")
+                                                                  : QStringLiteral("否"))
+                .arg(effectiveBeamsNote(modelsRoot, c.src, c.dst)));
         say(QString());
 
-        if (hasHan(translated)) {
-            markPass(QStringLiteral("mt.translate #%1").arg(index));
+        Assertions a;
+        a.expect(scriptCheckOk(c.dst, text),
+                 QStringLiteral("%1: \"%2\"").arg(scriptCheckHint(c.dst), text));
+        if (singleText.trimmed().isEmpty() && c.src == QStringLiteral("en")
+            && c.dst == QStringLiteral("zh") && index == 1) {
+            // 质量回归：Sprint 1 的贪心只吐出「棕色狐狸跳过懒狗」，
+            // beam search 应该补出「快速/敏捷」这类修饰语。
+            const bool hasSpeedModifier = text.contains(QStringLiteral("快速"))
+                                          || text.contains(QStringLiteral("敏捷"))
+                                          || text.contains(QStringLiteral("飞快"))
+                                          || text.contains(QStringLiteral("迅速"));
+            a.expect(text.contains(QStringLiteral("懒")) && text.size() >= 10,
+                     QStringLiteral("译文比预期短（期望带修饰语的完整句）: \"%1\"").arg(text));
+            a.expect(hasSpeedModifier,
+                     QStringLiteral("未出现速度修饰语（快速/敏捷/飞快/迅速）: \"%1\"").arg(text));
+        }
+        if (a.ok()) {
+            markPass(QStringLiteral("mt.%1").arg(tag));
         } else {
-            markFail(QStringLiteral("mt.translate #%1").arg(index),
-                     QStringLiteral("译文里没有任何汉字：%1").arg(translated));
+            markFail(QStringLiteral("mt.%1").arg(tag), a.details());
+        }
+    }
+}
+
+// --mt-bench：同进程三段 A/B/C，每个语言对每段跑 5 次取 min/avg/max。
+//   A) 非 cache + 贪心  —— 等价于 Sprint 1 的老路径（STUDIOUS_MT_NO_CACHE=1）
+//   B) KV cache + 贪心  —— 只换了 cache，译文必须和 A 逐条相同
+//   C) KV cache + config 里的 num_beams（beam search）
+// 三段同进程顺序跑：模型权重每段用完就释放（不会三份权重同时驻留），
+// 也避免"两个 exe 隔几分钟跑"被机器状态漂移带偏。
+struct BenchRow {
+    QString tag;
+    qint64 minMs = 0;
+    qint64 avgMs = 0;
+    qint64 maxMs = 0;
+    QString sample;
+};
+
+struct BenchPhase {
+    QString label;
+    std::vector<BenchRow> rows;
+    QStringList texts;   // 与 mtCases() 同序，用于跨段比对
+    bool ok = true;
+};
+
+BenchPhase benchPhase(const QString &label,
+                      const QString &beamsValue,
+                      bool noCache,
+                      const QString &modelsRoot)
+{
+    constexpr int kRuns = 5;
+
+    BenchPhase phase;
+    phase.label = label;
+
+    // 这两个开关是 MtModel::load() 读的，所以要在建 translator / 首次翻译之前设好。
+    if (noCache) {
+        qputenv("STUDIOUS_MT_NO_CACHE", "1");
+    } else {
+        qunsetenv("STUDIOUS_MT_NO_CACHE");
+    }
+    if (beamsValue.isEmpty()) {
+        qunsetenv("STUDIOUS_MT_BEAMS");
+    } else {
+        qputenv("STUDIOUS_MT_BEAMS", beamsValue.toUtf8());
+    }
+
+    {
+        // translator 出了作用域就销毁 → 连带释放这一段的 ONNX 会话，下一段重新加载。
+        translate::LocalMtTranslator translator(modelsRoot);
+
+        for (const MtCase &c : mtCases()) {
+            const QString tag = QStringLiteral("%1→%2").arg(c.src, c.dst);
+            phase.texts << QString();
+
+            if (!translator.supports(c.src, c.dst)) {
+                phase.ok = false;
+                markFail(QStringLiteral("mt-bench %1 %2").arg(label, tag),
+                         QStringLiteral("语言对不可用"));
+                continue;
+            }
+
+            // 预热：把模型加载 / ORT 图优化 / 首次分配都排除在计时外。
+            const core::TranslateOutcome warm = translator.translate({c.text}, c.src, {c.dst}, {});
+            if (!warm.ok) {
+                phase.ok = false;
+                markFail(QStringLiteral("mt-bench %1 %2").arg(label, tag), warm.error);
+                continue;
+            }
+
+            std::vector<qint64> times;
+            times.reserve(kRuns);
+            QStringList outs;
+            bool allOk = true;
+
+            for (int i = 0; i < kRuns; ++i) {
+                QElapsedTimer timer;
+                timer.start();
+                const core::TranslateOutcome out = translator.translate({c.text}, c.src, {c.dst}, {});
+                times.push_back(timer.elapsed());
+                const QStringList texts = out.byLang.value(c.dst);
+                const QString text = texts.isEmpty() ? QString() : texts.first();
+                if (!out.ok || text.isEmpty()) {
+                    allOk = false;
+                    break;
+                }
+                outs << text;
+            }
+
+            if (!allOk || times.empty()) {
+                phase.ok = false;
+                markFail(QStringLiteral("mt-bench %1 %2").arg(label, tag),
+                         QStringLiteral("第 %1 次跑失败").arg(times.size() + 1));
+                continue;
+            }
+
+            qint64 total = 0;
+            for (const qint64 t : times) {
+                total += t;
+            }
+
+            BenchRow row;
+            row.tag = tag;
+            row.minMs = *std::min_element(times.begin(), times.end());
+            row.maxMs = *std::max_element(times.begin(), times.end());
+            row.avgMs = total / static_cast<qint64>(times.size());
+            row.sample = outs.first();
+            phase.rows.push_back(row);
+            phase.texts.last() = row.sample;
+
+            Assertions a;
+            a.expect(scriptCheckOk(c.dst, row.sample),
+                     QStringLiteral("%1: \"%2\"").arg(scriptCheckHint(c.dst), row.sample));
+            // 5 次结果必须完全一致：RNG 不参与解码，抖动的只能是耗时。
+            a.expect(outs.size() == kRuns
+                         && std::all_of(outs.begin(), outs.end(),
+                                        [&](const QString &s) { return s == outs.first(); }),
+                     QStringLiteral("5 次译文不一致"));
+            if (a.ok()) {
+                markPass(QStringLiteral("mt-bench %1 %2").arg(label, tag));
+            } else {
+                phase.ok = false;
+                markFail(QStringLiteral("mt-bench %1 %2").arg(label, tag), a.details());
+            }
+        }
+    }
+
+    qunsetenv("STUDIOUS_MT_NO_CACHE");
+    qunsetenv("STUDIOUS_MT_BEAMS");
+    return phase;
+}
+
+void runMtBenchMode()
+{
+    const QString modelsRoot = mtModelsRoot();
+
+    say(QStringLiteral("=== 本地 MT 延迟基准（同进程三段，每对每段 5 次，已排除加载/预热） ==="));
+    say(QStringLiteral("模型目录: ") + modelsRoot);
+    const QString env = qEnvironmentVariable("STUDIOUS_MT_BEAMS").trimmed();
+    say(QStringLiteral("命令行带入的 STUDIOUS_MT_BEAMS = ")
+        + (env.isEmpty() ? QStringLiteral("<无，取 config.json>") : env)
+        + QStringLiteral("（基准模式按段覆盖，跑完恢复）"));
+    say(QString());
+
+    // 命令行带入的 beam 覆盖值要在跑 A/B 之前取走：A/B 段会临时改写这个环境变量。
+    const QString beamsOverride = qEnvironmentVariable("STUDIOUS_MT_BEAMS").trimmed();
+
+    const BenchPhase noCache =
+        benchPhase(QStringLiteral("A:非cache贪心"), QStringLiteral("1"), true, modelsRoot);
+    const BenchPhase cached =
+        benchPhase(QStringLiteral("B:cache贪心"), QStringLiteral("1"), false, modelsRoot);
+    // C 段：命令行给了 STUDIOUS_MT_BEAMS 就用它调参，没给就用 config.json 的 num_beams。
+    const BenchPhase beam = benchPhase(
+        beamsOverride.isEmpty() ? QStringLiteral("C:cache+beam") : QStringLiteral("C:cache+beam(n=%1)").arg(beamsOverride),
+        beamsOverride,
+        false,
+        modelsRoot);
+
+    // A vs B：KV cache 只是加速，不能改变结果（同为贪心），逐条比对。
+    {
+        Assertions a;
+        a.expect(noCache.texts.size() == cached.texts.size(),
+                 QStringLiteral("段落数不一致：%1 vs %2")
+                     .arg(noCache.texts.size())
+                     .arg(cached.texts.size()));
+        for (int i = 0; i < noCache.texts.size() && i < cached.texts.size(); ++i) {
+            a.expect(noCache.texts.at(i) == cached.texts.at(i),
+                     QStringLiteral("第 %1 条译文不同：非cache=\"%2\" cache=\"%3\"")
+                         .arg(i + 1)
+                         .arg(noCache.texts.at(i), cached.texts.at(i)));
+        }
+        if (a.ok()) {
+            markPass(QStringLiteral("mt-bench cache 等价性（贪心逐条一致）"));
+        } else {
+            markFail(QStringLiteral("mt-bench cache 等价性（贪心逐条一致）"), a.details());
+        }
+    }
+
+    const auto findRow = [](const BenchPhase &p, const QString &tag) -> const BenchRow * {
+        for (const BenchRow &r : p.rows) {
+            if (r.tag == tag) {
+                return &r;
+            }
+        }
+        return nullptr;
+    };
+    const auto cell = [](const BenchRow *r) {
+        return r == nullptr ? QStringLiteral("-")
+                            : QStringLiteral("%1/%2").arg(r->minMs).arg(r->avgMs);
+    };
+
+    say(QString());
+    say(pad(QStringLiteral("方向"), 8) + pad(QStringLiteral("A 非cache贪心"), 16)
+        + pad(QStringLiteral("B cache贪心"), 16) + pad(QStringLiteral("B/A"), 8)
+        + pad(QStringLiteral("C cache+beam"), 16));
+    say(pad(QStringLiteral(""), 8) + pad(QStringLiteral("min/avg ms"), 16)
+        + pad(QStringLiteral("min/avg ms"), 16) + pad(QStringLiteral("加速"), 8)
+        + pad(QStringLiteral("min/avg ms"), 16));
+
+    for (const MtCase &c : mtCases()) {
+        const QString tag = QStringLiteral("%1→%2").arg(c.src, c.dst);
+        const BenchRow *a = findRow(noCache, tag);
+        const BenchRow *b = findRow(cached, tag);
+        const BenchRow *cc = findRow(beam, tag);
+
+        QString speedup = QStringLiteral("-");
+        if (a != nullptr && b != nullptr && b->avgMs > 0) {
+            speedup = QStringLiteral("%1x").arg(double(a->avgMs) / double(b->avgMs), 0, 'f', 2);
+        }
+        say(pad(tag, 8) + pad(cell(a), 16) + pad(cell(b), 16) + pad(speedup, 8)
+            + pad(cell(cc), 16));
+    }
+
+    say(QString());
+    for (const MtCase &c : mtCases()) {
+        const QString tag = QStringLiteral("%1→%2").arg(c.src, c.dst);
+        const BenchRow *a = findRow(noCache, tag);
+        const BenchRow *b = findRow(cached, tag);
+        const BenchRow *cc = findRow(beam, tag);
+
+        say(QStringLiteral("[%1] 原文: %2").arg(tag, c.text));
+        if (a != nullptr) {
+            say(QStringLiteral("        A 非cache贪心: ") + a->sample);
+        }
+        if (b != nullptr) {
+            say(QStringLiteral("        B cache贪心  : ") + b->sample);
+        }
+        if (cc != nullptr) {
+            say(QStringLiteral("        C cache+beam : %1    (%2)")
+                    .arg(cc->sample,
+                         beamsOverride.isEmpty()
+                             ? effectiveBeamsNote(modelsRoot, c.src, c.dst)
+                             : QStringLiteral("STUDIOUS_MT_BEAMS=%1").arg(beamsOverride)));
         }
     }
 }
@@ -1923,12 +2284,29 @@ int main(int argc, char *argv[])
     const bool i18nMode = args.contains(QStringLiteral("--i18n"));
     const bool assetsMode = args.contains(QStringLiteral("--assets"));
 
-    // --mt 后面可以跟一句英文；不跟就翻内置的三句。
+    // --mt 后面可以跟一句英文；不跟就翻内置的 4 个语言对用例。
     const int mtIndex = args.indexOf(QStringLiteral("--mt"));
     const bool mtMode = mtIndex >= 0;
     QString mtText;
     if (mtMode && mtIndex + 1 < args.size() && !args.at(mtIndex + 1).startsWith(QStringLiteral("--"))) {
         mtText = args.at(mtIndex + 1);
+    }
+    const bool mtBenchMode = args.contains(QStringLiteral("--mt-bench"));
+
+    if (mtBenchMode) {
+        // 资产装在 <AppData>/studious/assets 下（和 GUI 一致），自测进程要对齐 applicationName。
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        runMtBenchMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MT BENCH PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
     }
 
     if (mtMode) {

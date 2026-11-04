@@ -17,7 +17,34 @@
 | 语言检测 | ✅ 可用 | 14 种语言，零依赖 |
 | 错误提示双语 | ✅ 后端 | 前端仅资产模块 |
 | **截图 / OCR / 浮层** | ❌ 未开始 | 产品主线，最大缺口 |
-| 本地 MT（OPUS-MT） | ⏸ 预留接口 | v2 计划 |
+| 本地 MT（OPUS-MT） | ✅ 可用（Sprint 2 完成） | 4 个语言对，238~751 ms/句，无需显卡 |
+
+---
+
+## 三、本地 MT 专项（Sprint 1 + 2）
+
+### 能力
+
+| 方向 | 译文示例 | 耗时 |
+|---|---|---|
+| en→zh | 快速棕色狐狸跳过懒狗 | 373 ms |
+| zh→en | It's a nice day. Let's go for a walk in the park. | 751 ms |
+| en→ja | どう か , あなた の 定め を 堅 く 置 い て くださ い .（模型本身弱） | 437 ms |
+| ja→en | Hey, wait a minute! | 237 ms |
+
+- 直连优先；缺对时走英文中转（A→en→B）
+- 模型 id 空间是 `vocab.json`（65001 项），spm 只负责切词/反分词 —— 这是最关键的一条
+- KV cache（merged 模型）+ beam search（config 里的 num_beams）
+
+### 关键取舍（实测）
+
+| 配置 | 延迟 | 质量 |
+|---|---|---|
+| 非 cache + 贪心（Sprint 1） | 266 ms | 棕色狐狸跳过懒狗 |
+| cache + 贪心 | 246 ms（**1.09x**） | 同上（逐 token 一致） |
+| cache + beam=4 | 364 ms | **快速**棕色狐狸跳过懒狗 |
+
+**KV cache 只快 1.1x 的原因已定位**：merged 模型每步 Run 有 ~22 ms 固定开销（ORT 对 control-flow 子图的执行成本，与 past 长度、线程数无关），把算法收益吃掉了。要真正吃到，需用 onnx 工具把 `If` 的 then 分支抽成独立图（当前环境无 python onnx，未做）。
 
 ---
 

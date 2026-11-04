@@ -133,6 +133,20 @@ bool LocalMtTranslator::supports(const QString &src, const QString &dst) const
            && pairAvailable(QStringLiteral("en"), d);
 }
 
+bool LocalMtTranslator::pivotsThroughEnglish(const QString &src, const QString &dst) const
+{
+    const QString s = core::LanguageRegistry::normalize(src);
+    const QString d = core::LanguageRegistry::normalize(dst);
+    if (s.isEmpty() || d.isEmpty() || s == QLatin1String("auto") || s == d) {
+        return false;
+    }
+    if (pairAvailable(s, d)) {
+        return false;
+    }
+    return s != QLatin1String("en") && d != QLatin1String("en")
+           && pairAvailable(s, QStringLiteral("en")) && pairAvailable(QStringLiteral("en"), d);
+}
+
 core::ResolveResult LocalMtTranslator::resolve(const QString &src, const QString &dst) const
 {
     core::ResolveResult r;
@@ -184,6 +198,7 @@ mt::MtModel *LocalMtTranslator::modelFor(const QString &src, const QString &dst)
     mt::MtPaths paths;
     paths.encoderOnnx = QDir(dir).filePath(QStringLiteral("encoder_model_quantized.onnx"));
     paths.decoderOnnx = QDir(dir).filePath(QStringLiteral("decoder_model_quantized.onnx"));
+    paths.decoderMergedOnnx = QDir(dir).filePath(QStringLiteral("decoder_model_merged_quantized.onnx"));
     paths.sourceSpm = QDir(dir).filePath(QStringLiteral("source.spm"));
     paths.targetSpm = QDir(dir).filePath(QStringLiteral("target.spm"));
     paths.vocabJson = QDir(dir).filePath(QStringLiteral("vocab.json"));
