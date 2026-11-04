@@ -42,6 +42,7 @@ private slots:
     void onOpenSettings();
     void onOpenAssets();
     void onLocalEngineToggled(bool checked);
+    void onLocalBackendSelectionChanged();
     void onTranslationFinished(const TranslateJobResult &result, qint64 elapsedMs);
 
 private:
@@ -49,13 +50,20 @@ private:
     void populateLanguageBoxes();
     void populateEngineBox();
     void populateWebProviderBox();
+    void populateLocalBackendBox();
+    void updateLocalControls();
     void refreshEngineStatus();
     void setStatusOk(const QString &text);
     void setStatusError(const QString &text);
 
     // 把 req.llm 覆盖成本地引擎的连接参数；返回 false 表示引擎没起来（error 已填好）。
-    // 必须在主线程调用（会阻塞约 1 秒拉起进程），翻译本身仍交给工作线程。
+    // 必须在主线程调用（会阻塞数百毫秒到数秒拉起进程），翻译本身仍交给工作线程。
     bool applyLocalEngineConfig(studious::config::LlmConfig *cfg, QString *error);
+
+    // 界面当前选择 -> LocalEngineConfig（模型文件名 / 是否优先 GPU）。
+    LocalEngineConfig localConfigFromUi() const;
+    // "Vulkan·qwen2.5-0.5b" 这类给人看的组合标签（未运行时按当前选择推算）。
+    QString localTargetLabel() const;
 
     QString currentSrcLang() const;
     QString currentDstLang() const;
@@ -75,6 +83,8 @@ private:
     QCheckBox *m_showSourceCheck = nullptr;
     QCheckBox *m_cacheCheck = nullptr;   // 「启用缓存」
     QCheckBox *m_localCheck = nullptr;   // 「本地引擎」：本机 llama.cpp 离线翻译
+    QComboBox *m_localModelBox = nullptr;   // 本地模型（models/ 下扫描出来的文件名）
+    QCheckBox *m_gpuCheck = nullptr;        // 「GPU (Vulkan)」：用 vulkan 运行时 + -ngl 99
     QPlainTextEdit *m_input = nullptr;
     QPlainTextEdit *m_output = nullptr;
     QLabel *m_status = nullptr;

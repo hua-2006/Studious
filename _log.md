@@ -110,3 +110,47 @@
   不用区分「列表选中」与「手输」。
 - **`findData("")` 能命中 value 为空串的项**：`applyToUi()` 恢复「跟随模型默认」靠的就是这个，
   但首次填充（`count()==0`）要走「选 recommended」分支，否则会误选到最后一项。
+
+## 2026-11-04 本地模型热切换 + GPU(Vulkan) 后端选择（backend/ + frontend/）
+
+### 成功路线
+1. `LlamaServerOptions` 加 `int gpuLayers = 0`：非 0 才往命令行追 `-ngl <n>`（0 = 一个参数都不多传，
+   CPU 路径与之前完全一致）。实测 Vulkan 构建**必须** `-ngl 99`，只换 exe 不传 -ngl 时它照样用 CPU 算。
+2. `LocalEngine` 重写成「后端解析 + 模型解析 + 幂等启动」：
+   - `availableModels()` 扫 `<root>/models/` 的普通文件，按文件名（大小写不敏感）排序——不用 mtime：
+     重下一次资产就会让下拉顺序乱跳，用户点错的代价是几秒重启。
+   - `isGpuAvailable()/isCpuAvailable()` = 运行时目录里有没有 `llama-server.exe`（零成本，不查显卡）。
+   - `ensureStarted(cfg)`：先算 (backend, modelFile)，与当前运行值全等且进程活着 -> 直接返回
+     （`lastStartupMs()==0`）；否则**先 shutdown() 再走资产检查**，任何失败路径都再过一遍 shutdown()，
+     所以不存在「旧服务还在 + 新服务起不来」的孤儿组合。
+   - 线程只信快照：`ensureStarted()` 只在主线程，工作线程只拿 `baseUrl()` 字符串。
+3. `AppSettings` 加 `localModelFileName`（settings/llm/localModel，空 = 第一个可用）与
+   `localUseGpu`（settings/llm/localUseGpu，默认 true）。
+4. 主窗口第二行加 `QComboBox localModelBox`（userData = 真实文件名，显示用 `shortModelName`）与
+   `QCheckBox gpuBox`；两者只在「本地引擎」勾选时可用，GPU 选项在 `!isGpuAvailable()` 时置灰并说明缺哪个资产。
+   **切换只写设置 + 状态栏提示「下次翻译将切换到 X / Y」**，重启留给下一次翻译前的 `ensureStarted`
+   （否则拖一下拉就白等 1~2 秒重载权重）。
+5. 状态栏：`引擎: llm（本地·Vulkan·qwen2.5-0.5b）    耗时: 185 ms    段落数: 3`。
+6. CLI：`--local-model <文件名>` / `--local-gpu <on|off>`（默认 on）/ `--switch-demo`
+   （同一进程内逐个换模型各翻一遍，每轮打 `后端 / 模型 / pid / 启动耗时`）。
+
+### 实测（RTX 4060 Laptop，0.5B，同一句英译中，`--cache off`）
+| 场景 | 后端 | 启动 | 单句 |
+|---|---|---|---|
+| `--local-gpu on` | vulkan | 834 ms | **102 ms**（着色器缓存预热后 47 ms） |
+| `--local-gpu off` | cpu | 517 ms | 503 ms |
+| `--switch-demo` 第 2 轮 1.5B | vulkan | 1131 ms | 151 ms（pid 变了 = 真的重启） |
+
+### 踩坑
+- **Vulkan 首次推理 11.7 秒**：日志 `prompt eval time = 11735 ms / 216 tokens`。
+  不是算力问题，是 NVIDIA 驱动第一次编译 Vulkan pipeline（同一次运行的生成速度仍有 251 tok/s）。
+  驱动着色器缓存热了之后同一份 prompt 变 `70.66 ms / 216 tokens`（3056 tok/s）。
+  验收别用「第一次」的数字下结论，也别把 CPU/GPU 的绝对耗时写进代码。
+- **`--switch-demo` 忘了 `--smoke` 会直接进 GUI**：进程挂在 `app.exec()`，零输出、也不起 llama-server，
+  看起来像「本地引擎卡死」。CLI 演示参数必须挂在 `--smoke` 后面。
+- **`frontend/build/studious.exe` 被上一个 GUI 实例占用时链接报 `Permission denied`**：
+  不是代码问题，先关掉在跑的实例（`CloseMainWindow()` 走 closeEvent，`llama-server` 由析构回收）。
+- **1.5B 在 Vulkan 下偶尔照抄原文**（同一句 CPU 能给译文）：直连 `POST /v1/chat/completions`
+  同一后端同一模型能正确翻译（124 ms），所以是抽样敏感度不是后端损坏；要稳就调低 temperature 或换 0.5B。
+- **`say()` 零输出 = 还没走到第一条**：冒烟排障先确认 `main()` 走的是 `runSmoke` 而不是 GUI 分支。
+

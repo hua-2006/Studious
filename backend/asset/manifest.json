@@ -27,25 +27,37 @@
         "note": "本机测试用的真实资产：Qwen2.5-0.5B-Instruct Q4_K_M（约 468 MB）。用于验证下载 / 续传 / sha256 校验 / 安装 / 删除整条链路，不是正式发布的翻译模型。"
       },
       {
+        "id": "model.qwen2.5-1.5b-instruct.q4km",
+        "type": "model",
+        "family": "qwen2.5",
+        "quant": "Q4_K_M",
+        "size": 1117320736,
+        "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+        "urls": [
+          "https://www.modelscope.cn/models/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/master/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+        ],
+        "requiresRamGB": 4,
+        "note": "本机测试用的第二档模型：Qwen2.5-1.5B-Instruct Q4_K_M（约 1.07 GB）。质量明显好于 0.5B，速度约为其 1/8（CPU）；有显卡时走 Vulkan 更快。"
+      },
+      {
         "id": "runtime.llama.vulkan.win-x64",
         "type": "runtime",
         "op": "windows",
         "arch": "x64",
         "backend": "vulkan",
-        "version": "b4200",
-        "size": 262144000,
-        "sha256": "",
+        "version": "b12102",
+        "size": 37660949,
+        "sha256": "b322f7d6ce8b2a31cf16980aa38986a6a27da2e55e406e770f0221621c38de08",
         "archive": "zip",
         "urls": [
-          "https://cdn.studious.app/runtime/llama-vulkan-win-x64-b4200.zip"
+          "https://github.com/ggml-org/llama.cpp/releases/download/b12102/llama-b12102-bin-win-vulkan-x64.zip"
         ],
         "files": [
           "llama-server.exe",
-          "llama-cli.exe",
           "ggml-vulkan.dll"
         ],
-        "requiresVramGB": 4,
-        "note": "待发布时填入真实 sha256；需要支持 Vulkan 的独立显卡"
+        "requiresVramGB": 2,
+        "note": "llama.cpp 官方 Vulkan 构建 b12102（约 35.9 MB）。跨 NVIDIA/AMD/Intel 通用，不依赖 CUDA；有显卡时优先于 CPU 版使用"
       },
       {
         "id": "runtime.llama.cpu.win-x64",

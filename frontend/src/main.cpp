@@ -93,6 +93,9 @@ void printUsage()
     say(QStringLiteral("  studious.exe --smoke \"文本\" --to zh --engine web    # 无界面冒烟"));
     say(QStringLiteral("  可选: --to <lang> (默认 zh) / --engine <mock|web|llm|local-mt> (默认自动)"));
     say(QStringLiteral("        --local            # 用本机 llama.cpp（资产页下载的 runtime + GGUF）翻译"));
+    say(QStringLiteral("        --local-model <文件名>  # 本地用哪个模型（不给 = 设置里的 / 第一个可用）"));
+    say(QStringLiteral("        --local-gpu <on|off>   # 本地后端是否用 GPU（默认 on；没装 vulkan 运行时自动回落 CPU）"));
+    say(QStringLiteral("        --switch-demo      # 同一进程内逐个换模型各翻一遍（验证热切换，建议配 --cache off）"));
     say(QStringLiteral("        --repeat <n>       # 同一请求连跑 n 次（验证本地引擎复用，配合 --cache off）"));
     say(QStringLiteral("        --cache <on|off> (默认 on，走进程级 SQLite 翻译缓存)"));
     say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
@@ -120,6 +123,11 @@ int runSmoke(const QStringList &args)
     QString llmModel;
     // 本地引擎：只改"从哪拿译文"，其余流程与云端完全一致（同一个 TranslateJob / Router）。
     bool useLocalEngine = false;
+    // 本地模型与后端：命令行显式给了就覆盖设置。
+    // --local-gpu 默认 on（与界面的「GPU (Vulkan)」默认勾选一致）；没装 vulkan 运行时会自动回落 CPU。
+    QString localModelFile;   // 空 = 设置里的 / 第一个可用模型
+    bool localGpu = true;
+    bool switchDemo = false;   // 同一进程内挨个换模型翻译：验证热切换
     int repeat = 1;
     // 缓存开关默认与 GUI 一致（AppSettings::defaults() 里是 true）。
     bool cacheEnabled = AppSettings::defaults().cacheEnabled;
@@ -140,6 +148,22 @@ int runSmoke(const QStringList &args)
             engine = args.at(++i);
         } else if (arg == QLatin1String("--local")) {
             useLocalEngine = true;
+        } else if (arg == QLatin1String("--local-model") && hasNext) {
+            localModelFile = args.at(++i).trimmed();
+        } else if (arg == QLatin1String("--local-gpu") && hasNext) {
+            const QString mode = args.at(++i).trimmed().toLower();
+            if (mode == QLatin1String("on") || mode == QLatin1String("1")
+                || mode == QLatin1String("true")) {
+                localGpu = true;
+            } else if (mode == QLatin1String("off") || mode == QLatin1String("0")
+                       || mode == QLatin1String("false")) {
+                localGpu = false;
+            } else {
+                say(QStringLiteral("[FAIL] --local-gpu 只接受 on / off，收到：") + mode);
+                return 1;
+            }
+        } else if (arg == QLatin1String("--switch-demo")) {
+            switchDemo = true;
         } else if (arg == QLatin1String("--repeat") && hasNext) {
             bool ok = false;
             const int parsed = args.at(++i).trimmed().toInt(&ok);
@@ -172,6 +196,11 @@ int runSmoke(const QStringList &args)
             printUsage();
             return 0;
         }
+    }
+
+    // --switch-demo 演示的就是"本地引擎换模型"，没写 --local 也按本地理。
+    if (switchDemo) {
+        useLocalEngine = true;
     }
 
     if (text.trimmed().isEmpty()) {
@@ -207,28 +236,42 @@ int runSmoke(const QStringList &args)
         req.llm.model = llmModel;
     }
 
-    // 本地引擎：主线程拉起 llama-server（阻塞约 1 秒），再把 baseUrl 快照塞进 req.llm。
+    // 本地引擎：主线程拉起 llama-server（阻塞数百毫秒到数秒），再把 baseUrl 快照塞进 req.llm。
     // 顺序很关键——必须在 job.start() 之前完成，工作线程只认这份快照。
     LocalEngine localEngine;
-    if (useLocalEngine) {
-        say(QStringLiteral("[local] 启动本地引擎…"));
-        QString startError;
-        if (!localEngine.ensureStarted(&startError)) {
-            say(QStringLiteral("[FAIL] ")
-                + (startError.isEmpty() ? QStringLiteral("本地引擎启动失败（未给出原因）")
-                                        : startError));
+
+    // --switch-demo：同一进程内挨个换模型各翻一遍（路径：第 1 轮模型 A -> 第 2 轮模型 B）。
+    // 这是热切换的验收方式：每轮都打 pid / 启动耗时 / 后端，
+    // 换模型那轮 lastStartupMs > 0 且 pid 变了，就是服务真的被 stop() + start() 了。
+    QStringList demoRotation;
+    if (useLocalEngine && switchDemo) {
+        demoRotation = LocalEngine::availableModels();
+        // 起点：--local-model > 设置 > 目录顺序第一个。
+        const QString preferred =
+            localModelFile.isEmpty() ? AppSettings::load().localModelFileName : localModelFile;
+        if (!preferred.isEmpty() && demoRotation.contains(preferred)) {
+            demoRotation.removeAll(preferred);
+            demoRotation.prepend(preferred);
+        }
+        if (demoRotation.size() < 2) {
+            say(QStringLiteral("[FAIL] --switch-demo 需要至少 2 个已安装模型（当前 %1 个）")
+                    .arg(demoRotation.size()));
             say(QStringLiteral("[OK] exit 1"));
             return 1;
         }
-        say(QStringLiteral("[local] llama-server 就绪：%1（端口 %2，启动耗时 %3 ms）")
-                .arg(localEngine.baseUrl(),
-                     QString::number(localEngine.port()),
-                     QString::number(localEngine.lastStartupMs())));
+        demoRotation = demoRotation.mid(0, 3);   // 最多 3 个：演示不是压测
+    }
 
+    // 普通模式用哪个模型：--local-model > 设置 > 空（空 = LocalEngine 自己取第一个可用）。
+    // switchDemo 模式下由 demoRotation 逐轮决定，这里不用管。
+    const QString localModelChoice = localModelFile.isEmpty() && !switchDemo
+                                         ? AppSettings::load().localModelFileName
+                                         : localModelFile;
+
+    if (useLocalEngine) {
         // 本地模式覆盖云端三项：baseUrl 指向 127.0.0.1:<port>/v1，key 不需要
         // （llama-server 不校验），model 只是占位（服务端忽略这个字段）。
         // reasoningEffort 清空 = 请求里不再带 reasoning_effort / thinking。
-        req.llm.baseUrl = localEngine.baseUrl();
         req.llm.apiKey.clear();
         req.llm.model = QStringLiteral("local");
         req.llm.reasoningEffort.clear();
@@ -259,31 +302,82 @@ int runSmoke(const QStringList &args)
                  req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
                                             : req.webProviders.join(QLatin1Char(',')))
             .arg(req.paragraphs.size()));
+    // 本地模式下 baseUrl 要等 ensureStarted 才知道（端口是启动时挑的），别在这里写死"未配置"。
+    const QString llmBaseShown =
+        req.llm.baseUrl.isEmpty()
+            ? (useLocalEngine ? QStringLiteral("<本地 llama-server，启动后分配端口>")
+                              : QStringLiteral("<未配置>"))
+            : req.llm.baseUrl;
     say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4  think=%5")
             .arg(req.llm.model.isEmpty() ? QStringLiteral("<未配置>") : req.llm.model,
-                 req.llm.baseUrl.isEmpty() ? QStringLiteral("<未配置>") : req.llm.baseUrl,
+                 llmBaseShown,
                  QString::number(req.llm.timeoutMs),
                  QString::number(req.llm.temperature),
                  req.llm.reasoningEffort.isEmpty() ? QStringLiteral("<默认>")
                                                    : req.llm.reasoningEffort));
+    if (useLocalEngine) {
+        say(QStringLiteral("local=%1  gpu=%2")
+                .arg(localModelChoice.isEmpty() ? QStringLiteral("<第一个可用模型>")
+                                                : localModelChoice,
+                     localGpu ? QStringLiteral("on") : QStringLiteral("off")));
+    }
+
+    // 轮次：普通模式 = repeat 次同样的请求；--switch-demo = 每个模型一轮。
+    const int totalRounds = switchDemo ? static_cast<int>(demoRotation.size()) : repeat;
 
     int exitCode = 1;
-    for (int round = 1; round <= repeat; ++round) {
-        if (repeat > 1) {
+    for (int round = 1; round <= totalRounds; ++round) {
+        const QString roundModel = switchDemo ? demoRotation.value(round - 1) : localModelChoice;
+
+        if (switchDemo) {
+            say(QStringLiteral("--- 第 %1/%2 轮：切到 %3 ---")
+                    .arg(round)
+                    .arg(totalRounds)
+                    .arg(roundModel));
+        } else if (repeat > 1) {
             say(QStringLiteral("--- 第 %1/%2 次 ---").arg(round).arg(repeat));
         }
 
-        if (useLocalEngine && round > 1) {
-            // 复用验证：再调一次 ensureStarted()。lastStartupMs() == 0 说明拿的是
-            // 已经在跑的服务，没有重新加载模型（这条结论靠时间戳，不靠感觉）。
-            QString ignored;
-            localEngine.ensureStarted(&ignored);
-            if (localEngine.lastStartupMs() == 0) {
-                say(QStringLiteral("[local] 复用已在运行的服务（未重新加载模型）"));
-            } else {
-                say(QStringLiteral("[local] 服务被重新拉起，耗时 %1 ms")
-                        .arg(localEngine.lastStartupMs()));
+        if (useLocalEngine) {
+            LocalEngineConfig cfg;
+            if (!roundModel.isEmpty()) {
+                cfg.modelPath = QDir(LocalEngine::modelsDir()).filePath(roundModel);
             }
+            cfg.preferGpu = localGpu;
+
+            if (round == 1) {
+                say(QStringLiteral("[local] 启动本地引擎…（GPU %1，模型 %2）")
+                        .arg(localGpu ? QStringLiteral("on") : QStringLiteral("off"),
+                             roundModel.isEmpty() ? QStringLiteral("<第一个可用>") : roundModel));
+            }
+
+            // 幂等 + 热切换都在 ensureStarted 内部：模型 / 后端变了就先停旧进程再起新的。
+            QString startError;
+            if (!localEngine.ensureStarted(cfg, &startError)) {
+                say(QStringLiteral("[FAIL] ")
+                    + (startError.isEmpty() ? QStringLiteral("本地引擎启动失败（未给出原因）")
+                                            : startError));
+                localEngine.shutdown();   // 双保险：失败路径也绝不留残留进程
+                say(QStringLiteral("[OK] exit 1"));
+                return 1;
+            }
+
+            const bool restarted = localEngine.lastStartupMs() > 0;
+            say(QStringLiteral("[local] 后端=%1  模型=%2  pid=%3")
+                    .arg(localEngine.currentBackend(),
+                         localEngine.currentModel(),
+                         QString::number(localEngine.processId())));
+            if (restarted) {
+                say(QStringLiteral("[local] 服务已重新拉起，耗时 %1 ms")
+                        .arg(localEngine.lastStartupMs()));
+            } else {
+                say(QStringLiteral("[local] 复用已在运行的服务（未重新加载模型）"));
+            }
+            say(QStringLiteral("[local] baseUrl=%1（端口 %2）")
+                    .arg(localEngine.baseUrl(), QString::number(localEngine.port())));
+
+            // 每一轮都重新取快照：热切换后端口可能变，旧快照会指向已死的服务。
+            req.llm.baseUrl = localEngine.baseUrl();
         }
 
         TranslateJob job;

@@ -8,6 +8,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -116,6 +117,8 @@ MainWindow::MainWindow(studious::cache::TranslationCache *cache, QWidget *parent
     populateLanguageBoxes();
     populateEngineBox();
     populateWebProviderBox();
+    populateLocalBackendBox();
+    updateLocalControls();
 
     m_input->setPlainText(QString::fromUtf8(kSampleText));
 
@@ -123,6 +126,12 @@ MainWindow::MainWindow(studious::cache::TranslationCache *cache, QWidget *parent
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onOpenSettings);
     connect(m_assetsButton, &QPushButton::clicked, this, &MainWindow::onOpenAssets);
     connect(m_localCheck, &QCheckBox::toggled, this, &MainWindow::onLocalEngineToggled);
+    // 模型 / GPU 只改设置，**不**在这里重启服务：真正切换发生在下一次翻译前的 ensureStarted()。
+    connect(m_localModelBox,
+            &QComboBox::currentIndexChanged,
+            this,
+            &MainWindow::onLocalBackendSelectionChanged);
+    connect(m_gpuCheck, &QCheckBox::toggled, this, &MainWindow::onLocalBackendSelectionChanged);
     connect(m_job, &TranslateJob::finished, this, &MainWindow::onTranslationFinished);
 
     // Ctrl+Alt+A 打开资产对话框：菜单栏没有「工具」这类入口，给个快捷键省得摸鼠标。
@@ -153,6 +162,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     m_settings.webProviderId = currentWebProviderId();
     m_settings.cacheEnabled = m_cacheCheck->isChecked();
     m_settings.useLocalEngine = m_localCheck->isChecked();
+    m_settings.localModelFileName = m_localModelBox->currentData().toString();
+    m_settings.localUseGpu = m_gpuCheck->isChecked();
     m_settings.save();
 
     // llama-server 的回收放在析构（m_localEngine 的析构函数）里，不在这里做：
@@ -221,13 +232,24 @@ void MainWindow::buildUi()
     m_localCheck = new QCheckBox(QStringLiteral("本地引擎"));
     m_localCheck->setChecked(m_settings.useLocalEngine);
     m_localCheck->setToolTip(QStringLiteral(
-        "用本机 llama.cpp + 已下载的 GGUF 离线翻译，需要先在「资产」里下载 "
-        "runtime.llama.cpu.win-x64 与 model.qwen2.5-0.5b-instruct.q4km"));
+        "用本机 llama.cpp + 已下载的模型离线翻译，需要先在「资产」里下载运行时与模型"));
+
+    // 本地模型下拉：内容来自 LocalEngine::availableModels()（扫 models/ 目录，不是清单）。
+    // 切换它只会写设置 + 提示，服务在下一次翻译前才重建（见 onLocalBackendSelectionChanged）。
+    m_localModelBox = new QComboBox;
+    m_localModelBox->setMinimumWidth(200);
+    m_localModelBox->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+
+    // GPU 开关：勾着 = 用 vulkan 运行时并带 -ngl 99（实测 0.5B 单句 43ms vs CPU 183ms）。
+    m_gpuCheck = new QCheckBox(QStringLiteral("GPU (Vulkan)"));
+    m_gpuCheck->setChecked(m_settings.localUseGpu);
 
     sourceBar->addWidget(new QLabel(QStringLiteral("来源")));
     sourceBar->addWidget(m_webProviderBox);
     sourceBar->addStretch(1);
     sourceBar->addWidget(m_localCheck);
+    sourceBar->addWidget(m_localModelBox);
+    sourceBar->addWidget(m_gpuCheck);
     sourceBar->addWidget(m_cacheCheck);
     sourceBar->addWidget(m_assetsButton);
     sourceBar->addWidget(m_settingsButton);
@@ -379,6 +401,106 @@ void MainWindow::populateWebProviderBox()
     m_webProviderBox->setCurrentIndex(index);
 }
 
+void MainWindow::populateLocalBackendBox()
+{
+    const QStringList models = LocalEngine::availableModels();
+
+    m_localModelBox->clear();
+    for (const QString &file : models) {
+        // 显示短名（qwen2.5-0.5b），userData 存**真实文件名**——路径拼接只认真实文件名。
+        m_localModelBox->addItem(LocalEngine::shortModelName(file), file);
+        m_localModelBox->setItemData(m_localModelBox->count() - 1, file, Qt::ToolTipRole);
+    }
+
+    if (models.isEmpty()) {
+        // 占位项：下拉框还看得见（灰的），但选不出任何有效模型。
+        m_localModelBox->addItem(QStringLiteral("（无模型）"));
+        m_localModelBox->setToolTip(QStringLiteral("请先在「资产」里下载模型"));
+        m_localModelBox->setEnabled(false);
+        m_settings.localModelFileName.clear();
+    } else {
+        int index = m_localModelBox->findData(m_settings.localModelFileName);
+        if (index < 0) {
+            index = 0;   // 空 / 记录的模型已被删除 -> 第一个可用模型
+        }
+        m_localModelBox->setCurrentIndex(index);
+        m_settings.localModelFileName = m_localModelBox->itemData(index).toString();
+        m_localModelBox->setToolTip(
+            QStringLiteral("本地模型（已安装 %1 个；切换后下一次翻译前重建服务）")
+                .arg(models.size()));
+    }
+
+    // GPU 勾选框：默认勾选；vulkan 运行时没装就置灰，tooltip 说清缺哪个资产。
+    const bool gpuAvailable = LocalEngine::isGpuAvailable();
+    m_gpuCheck->setChecked(gpuAvailable && m_settings.localUseGpu);
+    if (gpuAvailable) {
+        m_gpuCheck->setToolTip(QStringLiteral(
+            "用 runtime.llama.vulkan.win-x64（-ngl 99）把模型放到显卡上；"
+            "实测 0.5B 单句 43 ms，CPU 约 183 ms"));
+    } else {
+        m_gpuCheck->setToolTip(QStringLiteral("需先下载 runtime.llama.vulkan.win-x64"));
+    }
+}
+
+void MainWindow::updateLocalControls()
+{
+    // 两个控件只在「本地引擎」勾选时可用；各自还有自己的前置条件。
+    const bool local = m_localCheck->isChecked();
+    const bool hasModels = !m_localModelBox->currentData().toString().isEmpty();
+    m_localModelBox->setEnabled(local && hasModels);
+    m_gpuCheck->setEnabled(local && LocalEngine::isGpuAvailable());
+}
+
+LocalEngineConfig MainWindow::localConfigFromUi() const
+{
+    LocalEngineConfig cfg;
+    const QString file = m_localModelBox->currentData().toString();
+    // 空串交给 LocalEngine 回落"第一个可用模型"（与设置里"空 = 第一个"的约定一致）。
+    cfg.modelPath = file.isEmpty() ? QString() : QDir(LocalEngine::modelsDir()).filePath(file);
+    cfg.preferGpu = m_gpuCheck->isChecked();
+    return cfg;
+}
+
+QString MainWindow::localTargetLabel() const
+{
+    if (m_localEngine.isRunning()) {
+        return QStringLiteral("%1·%2")
+            .arg(LocalEngine::backendLabel(m_localEngine.currentBackend()),
+                 LocalEngine::shortModelName(m_localEngine.currentModel()));
+    }
+
+    const LocalEngineConfig cfg = localConfigFromUi();
+    const QString backend = LocalEngine::backendLabel(
+        (cfg.preferGpu && LocalEngine::isGpuAvailable()) ? QStringLiteral("vulkan")
+                                                         : QStringLiteral("cpu"));
+    const QString file = m_localModelBox->currentData().toString();
+    return QStringLiteral("%1·%2")
+        .arg(backend,
+             file.isEmpty() ? QStringLiteral("<无模型>") : LocalEngine::shortModelName(file));
+}
+
+void MainWindow::onLocalBackendSelectionChanged()
+{
+    // 只记设置 + 提示，**不**重启服务：每次改下拉都重启会白等几秒（1.5B 要重新加载 1GB）。
+    // 真正的切换发生在下一次翻译前的 ensureStarted()：它比对模型 / 后端，不同就 stop() 再 start()。
+    m_settings.localModelFileName = m_localModelBox->currentData().toString();
+    m_settings.localUseGpu = m_gpuCheck->isChecked();
+    m_settings.save();
+
+    if (!m_localCheck->isChecked()) {
+        return;   // 本地引擎没启用：静默保存就够了，别用状态栏打扰用户
+    }
+
+    const QString file = m_settings.localModelFileName;
+    const QString model =
+        file.isEmpty() ? QStringLiteral("<无模型>") : LocalEngine::shortModelName(file);
+    const QString backend = LocalEngine::backendLabel(
+        (m_settings.localUseGpu && LocalEngine::isGpuAvailable()) ? QStringLiteral("vulkan")
+                                                                 : QStringLiteral("cpu"));
+    setStatusOk(QStringLiteral("下次翻译将切换到 %1 / %2").arg(model, backend));
+    refreshEngineStatus();
+}
+
 QString MainWindow::currentSrcLang() const
 {
     const QString code = m_srcLangBox->currentData().toString();
@@ -425,8 +547,14 @@ void MainWindow::refreshEngineStatus()
                                         llm,
                                         currentWebProviders(),
                                         &tooltip);
-    if (m_settings.useLocalEngine && !m_localEngine.isRunning()) {
-        text += QStringLiteral("｜本地引擎未启动（首次翻译时自动启动）");
+    if (m_settings.useLocalEngine) {
+        if (m_localEngine.isRunning()) {
+            // 后端 + 模型是热切换的直接证据，放在常驻状态行里最省事。
+            text += QStringLiteral("｜本地：%1").arg(localTargetLabel());
+        } else {
+            text += QStringLiteral("｜本地引擎未启动（首次翻译时自动启动，将用 %1）")
+                        .arg(localTargetLabel());
+        }
     }
     m_engineStatus->setText(text);
     m_engineStatus->setToolTip(tooltip);
@@ -471,8 +599,10 @@ void MainWindow::onOpenAssets()
     AssetDialog dialog(this);
     dialog.exec();
 
-    // 资产可能刚被下载 / 删除：若本地引擎正在跑，让它下次翻译重新校验一遍资产。
+    // 资产可能刚被下载 / 删除：重扫 models/ 目录，把新模型放进下拉。
     // （这里不主动停服务——用户只是看了一眼资产页就把正在用的引擎打断，体验更差。）
+    populateLocalBackendBox();
+    updateLocalControls();
     if (m_settings.useLocalEngine) {
         refreshEngineStatus();
     }
@@ -492,10 +622,12 @@ void MainWindow::onLocalEngineToggled(bool checked)
 
     // 重建下拉：勾上后 llm 项要从「（未配置）」灰态变可用，取消勾选则恢复。
     populateEngineBox();
+    updateLocalControls();
     refreshEngineStatus();
 
     if (checked) {
-        setStatusOk(QStringLiteral("已启用本地引擎：首次翻译时会自动启动 llama-server（约 1 秒）"));
+        setStatusOk(QStringLiteral("已启用本地引擎（%1）：首次翻译时会自动启动 llama-server")
+                        .arg(localTargetLabel()));
     } else if (m_localEngine.isRunning()) {
         // 用户明确关掉了本地引擎，就顺手把进程停掉，别让 500MB 模型在后台占内存。
         // stop() 最长要等 3 秒（terminate 对没有窗口的控制台子进程无效），
@@ -512,7 +644,9 @@ void MainWindow::onLocalEngineToggled(bool checked)
 bool MainWindow::applyLocalEngineConfig(studious::config::LlmConfig *cfg, QString *error)
 {
     QString startError;
-    if (!m_localEngine.ensureStarted(&startError)) {
+    // ensureStarted 是幂等的：模型 / 后端没变就复用现有服务（lastStartupMs()==0），
+    // 变了就内部 stop() + start()，所以"热切换"不需要这里写任何分支。
+    if (!m_localEngine.ensureStarted(localConfigFromUi(), &startError)) {
         if (error != nullptr) {
             *error = startError;
         }
@@ -558,6 +692,8 @@ void MainWindow::onTranslateClicked()
     m_settings.webProviderId = currentWebProviderId();
     m_settings.cacheEnabled = m_cacheCheck->isChecked();
     m_settings.useLocalEngine = m_localCheck->isChecked();
+    m_settings.localModelFileName = m_localModelBox->currentData().toString();
+    m_settings.localUseGpu = m_gpuCheck->isChecked();
 
     TranslateJobRequest req;
     req.paragraphs = paragraphs;
@@ -572,7 +708,8 @@ void MainWindow::onTranslateClicked()
     if (m_settings.useLocalEngine) {
         // 线程约束：ensureStarted() 阻塞约 1 秒且内部是 QProcess（主线程亲和），
         // 必须在**提交任务之前**在主线程跑完；工作线程只拿 baseUrl 快照。
-        setStatusOk(QStringLiteral("正在启动本地引擎（首次约 1 秒）…"));
+        setStatusOk(QStringLiteral("正在启动本地引擎（%1，首次 1~3 秒）…")
+                        .arg(localTargetLabel()));
         // 只放行重绘，屏蔽用户输入：启动期间按钮再被点是纯粹的麻烦。
         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
@@ -595,7 +732,9 @@ void MainWindow::onTranslateClicked()
     m_lastSrcParagraphs = paragraphs;
     m_lastEngineId = req.engineId.isEmpty() ? QStringLiteral("自动") : req.engineId;
     if (m_settings.useLocalEngine) {
-        m_lastEngineId += QStringLiteral("（本地）");
+        // 状态栏要能看清"这次到底跑在哪个后端 / 哪个模型上"：
+        //   引擎: llm（本地·Vulkan·qwen2.5-0.5b）    耗时: 43 ms    段落数: 1
+        m_lastEngineId = QStringLiteral("llm（本地·%1）").arg(localTargetLabel());
     }
     m_lastCacheEnabled = req.cacheEnabled;
 
