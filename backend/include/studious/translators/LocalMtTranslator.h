@@ -45,6 +45,10 @@ public:
     // 当前已安装的语言对（"en-zh" 形式），供 UI 展示。
     QStringList installedPairs() const;
 
+    // src→dst 是否要走英文中转（直连模型可用时返回 false）。
+    // 只是把 translate() 内部的选择结果提前暴露出来，供 UI/自测展示。
+    bool pivotsThroughEnglish(const QString &src, const QString &dst) const;
+
 private:
     QString pairDir(const QString &src, const QString &dst) const;
     bool pairAvailable(const QString &src, const QString &dst) const;
