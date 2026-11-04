@@ -153,6 +153,21 @@ QVector<int> MtTokenizer::encode(const QString &text) const
     return out;
 }
 
+QStringList MtTokenizer::encodePieces(const QString &text) const
+{
+    QStringList out;
+    if (!m_impl->loaded) {
+        return out;
+    }
+
+    const QByteArray utf8 = text.toUtf8();
+    const std::string_view view(utf8.constData(), static_cast<size_t>(utf8.size()));
+    for (const std::string &piece : m_impl->processor.EncodeAsPieces(view)) {
+        out << QString::fromStdString(piece);
+    }
+    return out;
+}
+
 QString MtTokenizer::decode(const QVector<int> &ids) const
 {
     if (!m_impl->loaded) {
@@ -230,6 +245,24 @@ std::string MtTokenizer::pieceOf(int id) const
         return {};
     }
     return m_impl->processor.IdToPiece(id);
+}
+
+int MtTokenizer::pieceToId(const QString &piece) const
+{
+    if (!m_impl->loaded || piece.isEmpty()) {
+        return -1;
+    }
+    if (m_impl->hasVocab) {
+        return m_impl->pieceToId.value(piece, -1);
+    }
+
+    // 没有 vocab.json 时退回 spm 自己的 id 空间：spm 对未知 piece 会返回 unk，
+    // 那对"手工拼特殊 token"来说等于没找到，按 -1 报。
+    const int id = m_impl->processor.PieceToId(piece.toStdString());
+    if (id < 0 || m_impl->processor.IsUnknown(id)) {
+        return -1;
+    }
+    return id;
 }
 
 } // namespace studious::mt

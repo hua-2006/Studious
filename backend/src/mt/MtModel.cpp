@@ -1237,7 +1237,8 @@ bool MtModel::Impl::generate(const std::vector<float> &encHidden,
     return true;
 }
 
-bool MtModel::translate(const QString &text, QString &outText, QString &error)
+bool MtModel::translate(const QString &text, QString &outText, QString &error,
+                        const QString &targetLangToken)
 {
     outText.clear();
     error.clear();
@@ -1254,13 +1255,51 @@ bool MtModel::translate(const QString &text, QString &outText, QString &error)
         return false;
     }
 
+    // 多语言模型的目标语言 token：形如 "zho_Hans"，内部补成 ">>zho_Hans<<"。
+    // 注意这条**不能**走 encode()——spm 的 source.spm 里根本没这个 piece（已实测），
+    // 只能拿 vocab.json 里的 id 手工拼。找不到 id 说明模型真的不支持该目标，直接报错。
+    int langTokenId = -1;
+    QString langPiece;
+    if (!targetLangToken.trimmed().isEmpty()) {
+        const QString bare = targetLangToken.trimmed();
+        langPiece = (bare.startsWith(QLatin1String(">>")) && bare.endsWith(QLatin1String("<<")))
+                        ? bare
+                        : QStringLiteral(">>%1<<").arg(bare);
+        langTokenId = m.sourceTok.pieceToId(langPiece);
+        if (langTokenId < 0) {
+            error = i18n::sf("模型词表里没有目标语言 token：%1",
+                             "The model vocabulary has no target-language token: %1",
+                             {langPiece});
+            return false;
+        }
+        qInfo().noquote() << QStringLiteral("[mt] 目标语言 token %1 = id %2").arg(langPiece).arg(langTokenId);
+    }
+
     // 编码侧补 </s>：Marian 的 encoder 必须看见句尾符。id 由**模型词表**决定
     // （合并词表里 </s>=0），不是 spm 自己的 eos（那是 2，在合并词表里是逗号）。
+    // 目标语言 token 也要占位置：截断时先给它和 </s> 留出名额，再按剩余空间截正文。
     const int srcEos = m.sourceTok.eosId();
-    if (srcIds.size() + 1 > std::min(m.maxLength, kMaxPositionEmbeddings)) {
-        srcIds.resize(std::min(m.maxLength, kMaxPositionEmbeddings) - 1);
+    const int limit = std::min(m.maxLength, kMaxPositionEmbeddings) - 1;   // -1: 给 </s>
+    const int prefixCount = langTokenId >= 0 ? 1 : 0;
+    if (srcIds.size() + prefixCount > limit) {
+        srcIds.resize(std::max(1, limit - prefixCount));
     }
     srcIds.append(srcEos);
+    if (langTokenId >= 0) {
+        // 手工拼到最前面：Marian 多语言模型约定 ">>lang<<" 是 encoder 输入的第一个 token。
+        srcIds.prepend(langTokenId);
+    }
+
+    if (qEnvironmentVariableIsSet("STUDIOUS_MT_DEBUG")) {
+        QStringList head;
+        for (int i = 0; i < srcIds.size() && i < 5; ++i) {
+            head << QStringLiteral("%1=%2").arg(srcIds.at(i)).arg(
+                QString::fromStdString(m.sourceTok.pieceOf(srcIds.at(i))));
+        }
+        qInfo().noquote() << QStringLiteral("[mt][debug] encoder input_ids 前几个: %1（共 %2 个）")
+                                 .arg(head.join(QStringLiteral("  ")))
+                                 .arg(srcIds.size());
+    }
 
     Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
 

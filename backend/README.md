@@ -255,6 +255,10 @@ backend_selftest.exe --manifest  # 清单解析 + ed25519 验签
 backend_selftest.exe --i18n      # 错误文案中英双语（离线）
 backend_selftest.exe --assets    # 下载/续传/failover/取消/校验/zip/zip-slip/卸载（本地 HTTP 服务器）
 backend_selftest.exe --cache     # 翻译缓存（需要本机 LLM 网关）
+backend_selftest.exe --mt        # 本地 OPUS-MT：en↔zh / en↔ja 四个直连对
+backend_selftest.exe --mt-bench  # 本地 MT 延迟基准（A 非cache贪心 / B cache贪心 / C cache+beam）
+backend_selftest.exe --mt-mul    # 多语言模型（mul）：en-mul 目标 token 注入 + mul-en 自动识别源语言
+backend_selftest.exe --mt-tok    # 分词诊断：spm piece -> 模型 id（含 <unk> 统计）
 ```
 
 `--assets` 完全不碰外网：`QTcpServer` 起在 `127.0.0.1` 随机端口，`/file` 返回 512 KiB 确定性数据

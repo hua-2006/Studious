@@ -98,6 +98,30 @@ const QHash<QString, QString> &primaryTable()
     return table;
 }
 
+// Marian（OPUS-MT）语言 token 表。key 是内部码，value 是 vocab.json 里的 piece 名（不含 >> <<）。
+// 只有多语言模型 mt.opus.en-mul 的词表里有这些 token（194 个），单对各模型不需要也不认识。
+// ko 故意不在这里：en-mul 的 vocab.json 里没有 >>kor<< / >>kor_Hang<< 之类的任何韩语 token，
+// 硬塞一个不存在的 id 只会产出垃圾，所以这里如实返回空串，由调用方报错。
+const QHash<QString, QString> &marianTable()
+{
+    static const QHash<QString, QString> table = {
+        {QStringLiteral("zh"),    QStringLiteral("zho_Hans")},
+        {QStringLiteral("zh-TW"), QStringLiteral("zho_Hant")},
+        {QStringLiteral("ja"),    QStringLiteral("jpn")},
+        {QStringLiteral("fr"),    QStringLiteral("fra")},
+        {QStringLiteral("de"),    QStringLiteral("deu")},
+        {QStringLiteral("es"),    QStringLiteral("spa")},
+        {QStringLiteral("pt"),    QStringLiteral("por")},
+        {QStringLiteral("pt-BR"), QStringLiteral("por")},
+        {QStringLiteral("ru"),    QStringLiteral("rus")},
+        {QStringLiteral("it"),    QStringLiteral("ita")},
+        {QStringLiteral("ar"),    QStringLiteral("ara")},
+        {QStringLiteral("th"),    QStringLiteral("tha")},
+        {QStringLiteral("hi"),    QStringLiteral("hin")},
+    };
+    return table;
+}
+
 const QHash<QString, QString> &displayTable()
 {
     static const QHash<QString, QString> table = {
@@ -214,6 +238,31 @@ QString LanguageRegistry::toMyMemory(const QString &internal)
         return QStringLiteral("auto");
     }
     return n;
+}
+
+QString LanguageRegistry::toMarianToken(const QString &internal)
+{
+    const QString n = normalize(internal);
+    if (n.isEmpty() || n == QLatin1String("auto")) {
+        return QString();
+    }
+
+    const auto &table = marianTable();
+    const auto it = table.constFind(n);
+    if (it != table.constEnd()) {
+        return it.value();
+    }
+
+    // 表里没有的带区域码写法（ar-SA / th-TH / hi-IN 之类）：退回主语言子标签再查一次。
+    // normalize() 只认内置别名表，ar / th / hi 还没进别名表，这里兜住即可。
+    const int dash = n.indexOf(QLatin1Char('-'));
+    if (dash > 0) {
+        const auto pit = table.constFind(n.left(dash));
+        if (pit != table.constEnd()) {
+            return pit.value();
+        }
+    }
+    return QString();
 }
 
 QStringList LanguageRegistry::allInternal()

@@ -25,6 +25,12 @@ public:
     // 映射到 MyMemory 的语言码：zh -> zh-CN
     static QString toMyMemory(const QString &internal);
 
+    // 内部语言码 -> Marian 语言 token（**不含**尖括号）。例：zh -> "zho_Hans"、ja -> "jpn"。
+    // 这些 token 只存在于多语言模型（mt.opus.en-mul）的 vocab.json 里，spm 切不出来，
+    // 所以调用方要拿这个名字去 vocab.json 查 id 再手工拼到 input_ids 最前面。
+    // 多语言模型覆盖不了的语言（例如 ko：en-mul 里没有任何韩语 token）返回空串。
+    static QString toMarianToken(const QString &internal);
+
     // 全部内部语言码（含 auto），按 UI 展示顺序。
     static QStringList allInternal();
 

@@ -40,6 +40,11 @@ public:
     // 模型 id -> 文本。跳过控制符（<unk>/<s>/</s>/<pad>）和越界 id，不抛、不崩。
     QString decode(const QVector<int> &ids) const;
 
+    // spm 切出来的**原始 piece**（还没映射到模型词表）。
+    // 排查用：某个 piece 在 vocab.json 里不存在时，encode() 会把它落成 <unk>，
+    // 只有看到原始 piece 才知道是"spm 切碎了"还是"词表对不上"。
+    QStringList encodePieces(const QString &text) const;
+
     bool isLoaded() const;
 
     // eos 的 id 由词表自己说了算：加载了 vocab.json 就是 0，只有 spm 时是 spm 的 eos（2）。
@@ -48,6 +53,11 @@ public:
 
     // id -> piece 原文，仅用于排查（越界返回空串）。
     std::string pieceOf(int id) const;
+
+    // piece -> id。直接查 vocab.json（模型词表），用于 ">>zho_Hans<<" 这类
+    // **不在 spm 里**的特殊 token：它们切不出来，只能按 piece 名换 id 再手工拼进 input_ids。
+    // 找不到（含未加载 vocab.json）返回 -1。
+    int pieceToId(const QString &piece) const;
 
 private:
     bool loadImpl(const QString &spmPath, const QString &vocabJsonPath, QString *error);

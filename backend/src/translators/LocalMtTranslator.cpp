@@ -27,6 +27,48 @@ QString defaultModelsRoot()
         .filePath(QStringLiteral("assets/models"));
 }
 
+// 多语言资产目录里的伪语言标签：mt.opus.mul-en / mt.opus.en-mul。
+// 它不是用户能选的语言，只是目录名里表示"多语言"的占位：
+// 必须挡在语言码解析之外，否则 mt.opus.en-mul 会被 pairAvailable("en","mul") 当成
+// "en→mul 直连"匹配上，把任何 en→X 的请求都抢成 mul 路径。
+bool isMulTag(const QString &code)
+{
+    return code == QLatin1String("mul");
+}
+
+// 韩语等"多语言模型没有 token"的语言，专门给一条能看懂的原因。
+// en-mul 的 vocab.json 里 194 个 >>xx<< token 全查过，一个韩语 token 都没有；
+// 而且 mul-en 的词表切不出完整韩文（实测 안녕/날씨/좋네 都落成 <unk>），
+// 与其静默产出垃圾，不如明确说不支持。
+QString mulTargetError(const QString &dst)
+{
+    if (dst == QLatin1String("ko")) {
+        return i18n::s("多语言模型不支持韩语作为目标语言（mt.opus.en-mul 的 vocab.json 里没有任何韩语 token）",
+                       "The multilingual model cannot use Korean as the target language "
+                       "(mt.opus.en-mul's vocab.json has no Korean token at all)");
+    }
+    return i18n::sf("多语言模型不支持目标语言 %1（mt.opus.en-mul 的 vocab.json 里没有它的语言 token）",
+                    "The multilingual model cannot use %1 as the target language "
+                    "(mt.opus.en-mul's vocab.json has no language token for it)",
+                    {dst});
+}
+
+// 源语言侧的同一套措辞（韩语单独点名，其余按语言码说）。
+QString mulSourceError(const QString &src)
+{
+    if (src == QLatin1String("ko")) {
+        return i18n::s("多语言模型不支持韩语作为源语言"
+                       "（mt.opus.en-mul 的 vocab.json 里没有任何韩语 token，mul-en 也切不出完整韩文）",
+                       "The multilingual model cannot use Korean as the source language "
+                       "(mt.opus.en-mul's vocab.json has no Korean token, and mul-en cannot "
+                       "tokenize Korean without <unk> holes)");
+    }
+    return i18n::sf("多语言模型不支持源语言 %1（mt.opus.en-mul 的 vocab.json 里没有它的语言 token）",
+                    "The multilingual model cannot use %1 as the source language "
+                    "(mt.opus.en-mul's vocab.json has no language token for it)",
+                    {src});
+}
+
 } // namespace
 
 LocalMtTranslator::LocalMtTranslator(const QString &modelsRoot)
@@ -45,7 +87,18 @@ QString LocalMtTranslator::cacheTag() const
 {
     // 本地 MT 的译文取决于装了哪些语言对；把已装词组进 tag，
     // 这样"装了新对之后"不会误命中旧缓存。
-    return QStringLiteral("local-mt|%1").arg(installedPairs().join(QLatin1Char(',')));
+    // 多语言模型（mul-en / en-mul）一旦参与，同一句话的走法和译文都会变，
+    // 所以单独再打一个 mul 段（内容就是 en-mul / mul-en 的目录名），便于排障时一眼看出来。
+    const QStringList pairs = installedPairs();
+    QStringList mulPairs;
+    for (const QString &pair : pairs) {
+        if (pair.endsWith(QLatin1String("-mul")) || pair.startsWith(QLatin1String("mul-"))) {
+            mulPairs << pair;
+        }
+    }
+    return QStringLiteral("local-mt|%1|mul:%2")
+        .arg(pairs.join(QLatin1Char(',')),
+             mulPairs.isEmpty() ? QStringLiteral("-") : mulPairs.join(QLatin1Char(',')));
 }
 
 QString LocalMtTranslator::pairDir(const QString &src, const QString &dst) const
@@ -97,6 +150,10 @@ QStringList LocalMtTranslator::supportedTargetLangs() const
         const int dash = pair.indexOf(QLatin1Char('-'));
         if (dash > 0) {
             const QString dst = pair.mid(dash + 1);
+            // "mul" 是伪语言标签（en-mul 的目标侧），不是用户能选的目标语言，别列给 UI。
+            if (isMulTag(dst)) {
+                continue;
+            }
             if (!targets.contains(dst)) {
                 targets << dst;
             }
@@ -105,11 +162,192 @@ QStringList LocalMtTranslator::supportedTargetLangs() const
     return targets;
 }
 
+const QSet<QString> &LocalMtTranslator::mulTokens() const
+{
+    if (m_mulTokensLoaded) {
+        return m_mulTokens;
+    }
+    m_mulTokensLoaded = true;
+
+    // mt.opus.en-mul/vocab.json 是"多语言模型会哪些语言"的唯一权威名单：
+    // 里面每个 >>xx<< 就是一个可指定的语言，去掉尖括号正好等于 toMarianToken() 的返回值。
+    const QString path =
+        QDir(pairDir(QStringLiteral("en"), QStringLiteral("mul"))).filePath(QStringLiteral("vocab.json"));
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return m_mulTokens;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    if (!doc.isObject()) {
+        return m_mulTokens;
+    }
+    const QJsonObject obj = doc.object();
+    m_mulTokens.reserve(obj.size());
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const QString key = it.key();
+        if (key.size() > 4 && key.startsWith(QLatin1String(">>")) && key.endsWith(QLatin1String("<<"))) {
+            m_mulTokens.insert(key.mid(2, key.size() - 4));
+        }
+    }
+    return m_mulTokens;
+}
+
+bool LocalMtTranslator::mulCoversLanguage(const QString &internal) const
+{
+    const QString n = core::LanguageRegistry::normalize(internal);
+    if (n == QLatin1String("en")) {
+        return true;   // mul-en 的源端 / en-mul 的中转语言就是英语本身
+    }
+
+    const QString token = core::LanguageRegistry::toMarianToken(n);
+    if (token.isEmpty()) {
+        return false;   // 表里就没有（ko 之类），肯定不支持
+    }
+
+    const QSet<QString> &tokens = mulTokens();
+    if (tokens.isEmpty()) {
+        // 词表读不到（资产没装全）：不拦，退回旧行为，别因为读不到文件就误判"不支持"。
+        return true;
+    }
+    return tokens.contains(token);
+}
+
+QString LocalMtTranslator::mulUnsupportedReason(const QString &internal, bool asTarget) const
+{
+    const QString n = core::LanguageRegistry::normalize(internal);
+    return asTarget ? mulTargetError(n) : mulSourceError(n);
+}
+
+LocalMtTranslator::Plan LocalMtTranslator::planFor(const QString &src, const QString &dst) const
+{
+    Plan plan;
+
+    const QString s = core::LanguageRegistry::normalize(src);
+    const QString d = core::LanguageRegistry::normalize(dst);
+    if (s.isEmpty() || d.isEmpty() || s == d) {
+        return plan;
+    }
+    if (isMulTag(s) || isMulTag(d)) {
+        return plan;   // "mul" 不是真语言，任何方向都不该按它选路
+    }
+
+    // 1) 直连：装了就用，质量最好，也绝不能被 mul 抢走。
+    if (pairAvailable(s, d)) {
+        plan.kind = RouteKind::Direct;
+        return plan;
+    }
+
+    // 源侧能不能到英文：en 本身不需要模型，其余看有没有 <src>-en。
+    const bool reachesEnglish = (s == QLatin1String("en")) || pairAvailable(s, QStringLiteral("en"));
+    const bool englishReachesTarget = pairAvailable(QStringLiteral("en"), d);
+    const bool enMulReady = pairAvailable(QStringLiteral("en"), QStringLiteral("mul"));
+    const bool mulEnReady = pairAvailable(QStringLiteral("mul"), QStringLiteral("en"));
+
+    // 2) 英文中转：A→en→B，两次推理，单对各模型够用就不用 mul。
+    if (s != QLatin1String("en") && d != QLatin1String("en") && reachesEnglish
+        && englishReachesTarget) {
+        plan.kind = RouteKind::EnglishPivot;
+        return plan;
+    }
+
+    // 3) en-mul 兜底：A→en，再由多语言模型产出 B（目标靠 >>token<< 指定）。
+    if (d != QLatin1String("en") && reachesEnglish && enMulReady) {
+        if (mulCoversLanguage(d)) {
+            plan.kind = RouteKind::EnMul;
+            plan.targetToken = core::LanguageRegistry::toMarianToken(d);
+            return plan;
+        }
+        // 目标语言不在多语言词表里（例如 ko）：先记下原因，继续试后面的路，
+        // 全都不通时 resolve() 就能报出"多语言模型不支持韩语作为目标语言"。
+        plan.error = mulUnsupportedReason(d, /*asTarget=*/true);
+    }
+
+    // 4) mul-en 兜底：源侧自动识别（mul-en 词表里没有任何语言 token，不需要前缀）
+    //    → en，再走 en-dst。**源语言必须真的在多语言词表里**，否则 spm 切出来全是 <unk>，
+    //    模型只会吐出垃圾（实测韩语就是这样），宁可拒绝。
+    if (s != QLatin1String("en") && d != QLatin1String("en") && mulEnReady
+        && englishReachesTarget) {
+        if (mulCoversLanguage(s)) {
+            plan.kind = RouteKind::MulEn;
+            plan.error.clear();
+            return plan;
+        }
+        if (plan.error.isEmpty()) {
+            plan.error = mulUnsupportedReason(s, /*asTarget=*/false);
+        }
+    }
+
+    // 5) mul 全兜底：mul-en 出英文，再交给 en-mul 出目标（目标加 >>token<<）。
+    if (s != QLatin1String("en") && d != QLatin1String("en") && mulEnReady && enMulReady) {
+        const bool srcOk = mulCoversLanguage(s);
+        const bool dstOk = mulCoversLanguage(d);
+        if (srcOk && dstOk) {
+            plan.kind = RouteKind::MulBoth;
+            plan.targetToken = core::LanguageRegistry::toMarianToken(d);
+            plan.error.clear();
+            return plan;
+        }
+        if (plan.error.isEmpty()) {
+            plan.error = mulUnsupportedReason(srcOk ? d : s, /*asTarget=*/srcOk);
+        }
+    }
+
+    return plan;
+}
+
+QString LocalMtTranslator::routeId(const QString &src, const QString &dst) const
+{
+    switch (planFor(src, dst).kind) {
+    case RouteKind::Direct:
+        return QStringLiteral("direct");
+    case RouteKind::EnglishPivot:
+        return QStringLiteral("pivot-en");
+    case RouteKind::EnMul:
+        return QStringLiteral("en-mul");
+    case RouteKind::MulEn:
+        return QStringLiteral("mul-en");
+    case RouteKind::MulBoth:
+        return QStringLiteral("mul-en+en-mul");
+    case RouteKind::None:
+        break;
+    }
+    return QString();
+}
+
+QString LocalMtTranslator::routeDescription(const QString &src, const QString &dst) const
+{
+    const Plan plan = planFor(src, dst);
+    const QString s = core::LanguageRegistry::normalize(src);
+    const QString d = core::LanguageRegistry::normalize(dst);
+
+    switch (plan.kind) {
+    case RouteKind::Direct:
+        return i18n::sf("直连（mt.opus.%1-%2）", "Direct (mt.opus.%1-%2)", {s, d});
+    case RouteKind::EnglishPivot:
+        return i18n::sf("英文中转（%1→en→%2）", "English pivot (%1→en→%2)", {s, d});
+    case RouteKind::EnMul:
+        return i18n::sf("多语言模型 en-mul（%1→en→>>%2<<）",
+                        "Multilingual en-mul (%1→en→>>%2<<)",
+                        {s, plan.targetToken});
+    case RouteKind::MulEn:
+        return i18n::sf("多语言模型 mul-en（自动识别源语言→en→%1）",
+                        "Multilingual mul-en (source auto-detected→en→%1)",
+                        {d});
+    case RouteKind::MulBoth:
+        return i18n::sf("多语言模型 mul-en + en-mul（自动识别源语言→en→>>%1<<）",
+                        "Multilingual mul-en + en-mul (source auto-detected→English→>>%1<<)",
+                        {plan.targetToken});
+    case RouteKind::None:
+        break;
+    }
+    return plan.error;
+}
+
 bool LocalMtTranslator::supports(const QString &src, const QString &dst) const
 {
     const QString s = core::LanguageRegistry::normalize(src);
     const QString d = core::LanguageRegistry::normalize(dst);
-    if (d.isEmpty() || s == d) {
+    if (d.isEmpty() || s == d || isMulTag(d) || isMulTag(s)) {
         return false;
     }
 
@@ -121,16 +359,11 @@ bool LocalMtTranslator::supports(const QString &src, const QString &dst) const
                 return true;
             }
         }
-        return false;
+        // 没有直连 / en-d 时，多语言模型也能兜住（目标必须在多语言词表里有 token）。
+        return pairAvailable(QStringLiteral("en"), QStringLiteral("mul")) && mulCoversLanguage(d);
     }
 
-    if (pairAvailable(s, d)) {
-        return true;
-    }
-    // 英文中转：A->en 和 en->B 都在才可行
-    return s != QLatin1String("en") && d != QLatin1String("en")
-           && pairAvailable(s, QStringLiteral("en"))
-           && pairAvailable(QStringLiteral("en"), d);
+    return planFor(s, d).kind != RouteKind::None;
 }
 
 bool LocalMtTranslator::pivotsThroughEnglish(const QString &src, const QString &dst) const
@@ -141,6 +374,9 @@ bool LocalMtTranslator::pivotsThroughEnglish(const QString &src, const QString &
         return false;
     }
     if (pairAvailable(s, d)) {
+        return false;
+    }
+    if (isMulTag(s) || isMulTag(d)) {
         return false;
     }
     return s != QLatin1String("en") && d != QLatin1String("en")
@@ -160,29 +396,38 @@ core::ResolveResult LocalMtTranslator::resolve(const QString &src, const QString
         return r;
     }
 
-    if (pairAvailable(s, d)) {
+    // 文案必须反映**实际会走的路径**：直连 / 英文中转 / 多语言模型。
+    const Plan plan = planFor(s, d);
+    if (plan.kind != RouteKind::None) {
         r.ready = true;
-        r.reason = i18n::s("已安装该语言对", "The language pair is installed");
+        r.reason = routeDescription(s, d);
         return r;
     }
 
-    // 直连缺失：检查能否走英文中转
-    const bool canPivot = s != QLatin1String("en") && d != QLatin1String("en")
-                          && pairAvailable(s, QStringLiteral("en"))
-                          && pairAvailable(QStringLiteral("en"), d);
-    if (canPivot) {
-        r.ready = true;
-        r.reason = i18n::sf("将经英文中转（%1→en→%2）",
-                            "Will pivot through English (%1→en→%2)",
-                            {s, d});
+    if (!plan.error.isEmpty()) {
+        r.ready = false;
+        r.reason = plan.error;
         return r;
     }
 
     r.ready = false;
-    r.reason = i18n::sf("缺少本地翻译模型：需要 %1 或「%2→en + en→%3」",
-                        "Missing local MT models: need %1, or %2→en plus en→%3",
+    r.reason = i18n::sf("缺少本地翻译模型：需要 %1，或「%2→en + en→%3」，或多语言模型 mt.opus.mul-en / mt.opus.en-mul",
+                        "Missing local MT models: need %1, or %2→en plus en→%3, "
+                        "or the multilingual models mt.opus.mul-en / mt.opus.en-mul",
                         {QStringLiteral("mt.opus.%1-%2").arg(s, d), s, d});
     r.missingAssets = {QStringLiteral("mt.opus.%1-%2").arg(s, d)};
+    if (!pairAvailable(s, QStringLiteral("en"))) {
+        r.missingAssets << QStringLiteral("mt.opus.%1-en").arg(s);
+    }
+    if (!pairAvailable(QStringLiteral("en"), d)) {
+        r.missingAssets << QStringLiteral("mt.opus.en-%1").arg(d);
+    }
+    if (!pairAvailable(QStringLiteral("mul"), QStringLiteral("en"))) {
+        r.missingAssets << QStringLiteral("mt.opus.mul-en");
+    }
+    if (!pairAvailable(QStringLiteral("en"), QStringLiteral("mul"))) {
+        r.missingAssets << QStringLiteral("mt.opus.en-mul");
+    }
     return r;
 }
 
@@ -221,25 +466,114 @@ bool LocalMtTranslator::translateOne(const QString &text,
                                      QString &outText,
                                      QString &error)
 {
-    if (mt::MtModel *direct = (pairAvailable(src, dst) ? modelFor(src, dst) : nullptr)) {
-        return direct->translate(text, outText, error);
+    const Plan plan = planFor(src, dst);
+
+    const auto loadOrFail = [&](const QString &s, const QString &d) -> mt::MtModel * {
+        mt::MtModel *model = modelFor(s, d);
+        if (model == nullptr) {
+            error = i18n::sf("本地 MT 模型加载失败：mt.opus.%1-%2",
+                             "Failed to load the local MT model: mt.opus.%1-%2",
+                             {s, d});
+        }
+        return model;
+    };
+
+    switch (plan.kind) {
+    case RouteKind::Direct:
+        if (mt::MtModel *direct = loadOrFail(src, dst)) {
+            return direct->translate(text, outText, error);
+        }
+        return false;
+
+    case RouteKind::EnMul: {
+        // A -> en（源侧若是 en 就不用跑模型）-> en-mul（目标加 >>token<<）
+        QString middle = text;
+        if (core::LanguageRegistry::normalize(src) != QLatin1String("en")) {
+            mt::MtModel *toEn = loadOrFail(src, QStringLiteral("en"));
+            if (toEn == nullptr) {
+                return false;
+            }
+            QString firstError;
+            if (!toEn->translate(text, middle, firstError)) {
+                error = firstError;
+                return false;
+            }
+        }
+        mt::MtModel *toTarget = loadOrFail(QStringLiteral("en"), QStringLiteral("mul"));
+        if (toTarget == nullptr) {
+            return false;
+        }
+        return toTarget->translate(middle, outText, error, plan.targetToken);
     }
 
-    // 英文中转：A -> en -> B
-    mt::MtModel *toEn = modelFor(src, QStringLiteral("en"));
-    mt::MtModel *fromEn = modelFor(QStringLiteral("en"), dst);
-    if (toEn == nullptr || fromEn == nullptr) {
-        error = i18n::s("缺少英文中转所需的模型", "Models required for English pivoting are missing");
-        return false;
+    case RouteKind::MulEn: {
+        // mul-en 自动识别源语言（词表里没有任何 >>xx<< token，所以**不带**语言前缀），
+        // 出英文后再走 en-dst。
+        mt::MtModel *toEn = loadOrFail(QStringLiteral("mul"), QStringLiteral("en"));
+        if (toEn == nullptr) {
+            return false;
+        }
+        QString middle;
+        QString firstError;
+        if (!toEn->translate(text, middle, firstError)) {
+            error = firstError;
+            return false;
+        }
+        mt::MtModel *toTarget = loadOrFail(QStringLiteral("en"), dst);
+        if (toTarget == nullptr) {
+            return false;
+        }
+        return toTarget->translate(middle, outText, error);
     }
 
-    QString middle;
-    QString firstError;
-    if (!toEn->translate(text, middle, firstError)) {
-        error = firstError;
-        return false;
+    case RouteKind::MulBoth: {
+        mt::MtModel *toEn = loadOrFail(QStringLiteral("mul"), QStringLiteral("en"));
+        if (toEn == nullptr) {
+            return false;
+        }
+        QString middle;
+        QString firstError;
+        if (!toEn->translate(text, middle, firstError)) {
+            error = firstError;
+            return false;
+        }
+        mt::MtModel *toTarget = loadOrFail(QStringLiteral("en"), QStringLiteral("mul"));
+        if (toTarget == nullptr) {
+            return false;
+        }
+        return toTarget->translate(middle, outText, error, plan.targetToken);
     }
-    return fromEn->translate(middle, outText, error);
+
+    case RouteKind::EnglishPivot: {
+        // 英文中转：A -> en -> B
+        mt::MtModel *toEn = loadOrFail(src, QStringLiteral("en"));
+        mt::MtModel *fromEn = loadOrFail(QStringLiteral("en"), dst);
+        if (toEn == nullptr || fromEn == nullptr) {
+            if (error.isEmpty()) {
+                error = i18n::s("缺少英文中转所需的模型", "Models required for English pivoting are missing");
+            }
+            return false;
+        }
+        QString middle;
+        QString firstError;
+        if (!toEn->translate(text, middle, firstError)) {
+            error = firstError;
+            return false;
+        }
+        return fromEn->translate(middle, outText, error);
+    }
+
+    case RouteKind::None:
+        break;
+    }
+
+    error = plan.error.isEmpty()
+                ? i18n::sf("没有可用的本地翻译路径：%1→%2",
+                           "No usable local MT route for %1→%2",
+                           {core::LanguageRegistry::normalize(src),
+                            core::LanguageRegistry::normalize(dst)})
+                : plan.error;
+    return false;
 }
 
 core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraphs,

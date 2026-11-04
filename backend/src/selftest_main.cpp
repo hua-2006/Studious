@@ -13,6 +13,10 @@
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
 //   backend_selftest.exe --mt        本地 OPUS-MT：四个语言对各一句（en→zh / zh→en / en→ja / ja→en）
 //   backend_selftest.exe --mt "<句子>"  同上，只翻这一句（en→zh）
+//   backend_selftest.exe --mt-mul   本地多语言模型（mul）：zh→fr / zh→de / ja→fr / ru→zh / es→zh
+//                                    断言路径（直连/英文中转/en-mul/mul-en）+ 译文脚本 + 退化输出门槛
+//                                    + 韩语（源/目标）必须明确报错
+//   backend_selftest.exe --mt-tok   分词诊断：多语言模型的 spm piece -> 模型 id（含 <unk> 统计）
 //   backend_selftest.exe --mt-bench  MT 延迟基准：同进程三段 A(非cache贪心)/B(cache贪心)/C(cache+beam)
 //                                    每对每段 5 次，打印 min/avg 与加速比
 //   环境变量：STUDIOUS_MT_BEAMS=n 覆盖 beam 数（1=贪心）；STUDIOUS_MT_NO_CACHE=1 强制走非 cache 老路径；
@@ -30,6 +34,7 @@
 #include "llm/LlmModelInfo.h"
 #include "contract/LanguageRegistry.h"
 #include "mt/MtModel.h"
+#include "mt/MtTokenizer.h"
 #include "net/QtHttpClient.h"
 #include "router/TranslatorRouter.h"
 #include "translators/LlmTranslator.h"
@@ -57,6 +62,8 @@
 #include <QJsonObject>
 #include <QList>
 #include <QPair>
+#include <QRegularExpression>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QStandardPaths>
@@ -1991,6 +1998,11 @@ void runMtMode(const QString &singleText)
         const QString text = steadyTexts.isEmpty() ? QString() : steadyTexts.first();
 
         say(QStringLiteral("[%1] 原文: %2").arg(tag, c.text));
+        say(QStringLiteral("[%1] 路径: %2（%3）")
+                .arg(tag,
+                     translator.routeId(c.src, c.dst).isEmpty() ? QStringLiteral("<无>")
+                                                                : translator.routeId(c.src, c.dst),
+                     translator.resolve(c.src, c.dst).reason));
         if (!steady.ok || text.isEmpty()) {
             say(QStringLiteral("[%1] 失败: %2")
                     .arg(tag, steady.error.isEmpty() ? QStringLiteral("译文为空") : steady.error));
@@ -2013,6 +2025,9 @@ void runMtMode(const QString &singleText)
         say(QString());
 
         Assertions a;
+        // 回归重点：这四个方向都装了单对直连模型，绝不能被多语言兜底抢走。
+        a.expect(translator.routeId(c.src, c.dst) == QStringLiteral("direct"),
+                 QStringLiteral("直连被抢：实际路径=%1").arg(translator.routeId(c.src, c.dst)));
         a.expect(scriptCheckOk(c.dst, text),
                  QStringLiteral("%1: \"%2\"").arg(scriptCheckHint(c.dst), text));
         if (singleText.trimmed().isEmpty() && c.src == QStringLiteral("en")
@@ -2033,6 +2048,342 @@ void runMtMode(const QString &singleText)
         } else {
             markFail(QStringLiteral("mt.%1").arg(tag), a.details());
         }
+    }
+}
+
+// --mt-mul 的用例：这四个方向都只有靠多语言模型（en-mul / mul-en）才走得通——
+// 资产里只装了 en/zh/ja/ko 的单对，法语/德语没有任何单对模型。
+struct MtMulCase {
+    QString src;
+    QString dst;
+    QString text;
+    QString expectRoute;   // 期望路径，取值见 LocalMtTranslator::routeId()
+};
+
+std::vector<MtMulCase> mtMulCases()
+{
+    return {
+        {QStringLiteral("zh"), QStringLiteral("fr"),
+         QStringLiteral("今天的天气很好，我们去公园散步吧。"), QStringLiteral("en-mul")},
+        {QStringLiteral("zh"), QStringLiteral("de"),
+         QStringLiteral("请保存你的进度。"), QStringLiteral("en-mul")},
+        {QStringLiteral("ja"), QStringLiteral("fr"),
+         QStringLiteral("先輩、ちょっと待ってください。"), QStringLiteral("en-mul")},
+        // 没有 ->en 单对的语言只能靠 mul-en 自动识别源语言，再由 en-zh 出中文。
+        // 注意：韩语走不通（多语言词表里没有韩语 token / 切词会落 <unk>），见下面的反面用例。
+        {QStringLiteral("ru"), QStringLiteral("zh"),
+         QStringLiteral("Сегодня хорошая погода, пойдём гулять в парк."), QStringLiteral("mul-en")},
+        {QStringLiteral("es"), QStringLiteral("zh"),
+         QStringLiteral("Hoy hace buen tiempo, vamos a pasear por el parque."), QStringLiteral("mul-en")},
+    };
+}
+
+// 整句是否"全是中日韩字符"。拉丁语系目标（fr/de/…）命中这条 = 模型根本没切到目标语言。
+bool isAllCjk(const QString &text)
+{
+    int counted = 0;
+    for (const QChar &c : text) {
+        const ushort u = c.unicode();
+        if (u == u' ' || u == u'\t' || u == u'\n') {
+            continue;
+        }
+        ++counted;
+        const bool cjk = (u >= 0x3000 && u <= 0x303F)     // CJK 标点
+                         || (u >= 0x3040 && u <= 0x30FF)  // 假名
+                         || (u >= 0x3400 && u <= 0x4DBF)  // 扩展 A
+                         || (u >= 0x4E00 && u <= 0x9FFF)  // 基本汉字
+                         || (u >= 0xF900 && u <= 0xFAFF); // 兼容汉字
+        if (!cjk) {
+            return false;
+        }
+    }
+    return counted > 0;
+}
+
+// 最低质量门槛：译文不能是同一个词/字反复重复——那是模型退化的典型表现
+// （实测 ko 走 mul-en 就是 "嘿,嘿,嘿,嘿。" 这种，只判"非空"会误判 PASS）。
+bool hasWordVariety(const QString &text, const QString &dst)
+{
+    if (dst == QStringLiteral("zh") || dst == QStringLiteral("ja")) {
+        // 中日韩：按字符看，至少 2 个不同的实义字符（标点/空白不计）。
+        QSet<QChar> distinct;
+        for (const QChar &c : text) {
+            const ushort u = c.unicode();
+            const bool content = (u >= 0x3040 && u <= 0x30FF) || (u >= 0x3400 && u <= 0x4DBF)
+                                 || (u >= 0x4E00 && u <= 0x9FFF);
+            if (content) {
+                distinct.insert(c);
+            }
+        }
+        return distinct.size() >= 2;
+    }
+
+    // 拉丁等空格分词语言：至少 2 个空格分隔的词，且不能全是同一个词。
+    QStringList words;
+    for (const QString &raw : text.split(QRegularExpression(QStringLiteral("\\s+")),
+                                         Qt::SkipEmptyParts)) {
+        QString w = raw.toLower();
+        w.remove(QRegularExpression(QStringLiteral("[^\\p{L}\\p{N}']")));
+        if (!w.isEmpty()) {
+            words << w;
+        }
+    }
+    if (words.size() < 2) {
+        return false;
+    }
+    QSet<QString> distinct;
+    for (const QString &w : words) {
+        distinct.insert(w);
+    }
+    return distinct.size() >= 2;
+}
+
+QString hasWordVarietyHint(const QString &dst)
+{
+    if (dst == QStringLiteral("zh") || dst == QStringLiteral("ja")) {
+        return QStringLiteral("译文里不同的实义字符少于 2 个（像退化输出）");
+    }
+    return QStringLiteral("译文不足 2 个词，或全是同一个词重复（像退化输出）");
+}
+
+// --mt-mul：多语言模型自测（语言 token 注入 + 兜底路径选择）。
+void runMtMulMode()
+{
+    const QString modelsRoot = mtModelsRoot();
+
+    say(QStringLiteral("=== 本地 MT：多语言模型（mul）自测（--mt-mul） ==="));
+    say(QStringLiteral("模型目录: ") + modelsRoot);
+
+    translate::LocalMtTranslator translator(modelsRoot);
+    say(QStringLiteral("已安装语言对: ")
+        + (translator.installedPairs().isEmpty() ? QStringLiteral("<无>")
+                                                 : translator.installedPairs().join(QStringLiteral(", "))));
+    say(QStringLiteral("cacheTag: ") + translator.cacheTag());
+    say(QString());
+
+    for (const MtMulCase &c : mtMulCases()) {
+        const QString tag = QStringLiteral("%1→%2").arg(c.src, c.dst);
+        const QString route = translator.routeId(c.src, c.dst);
+        const core::ResolveResult rr = translator.resolve(c.src, c.dst);
+
+        say(QStringLiteral("[%1] 原文: %2").arg(tag, c.text));
+        say(QStringLiteral("[%1] 路径: %2（%3）")
+                .arg(tag, route.isEmpty() ? QStringLiteral("<无可用路径>") : route, rr.reason));
+
+        if (!translator.supports(c.src, c.dst)) {
+            markFail(QStringLiteral("mt-mul.%1").arg(tag),
+                     QStringLiteral("该语言对不可用：%1").arg(rr.reason));
+            continue;
+        }
+
+        // 首次调用含模型加载（可能连加载两三个模型），单独记；再跑一次拿稳态耗时。
+        QElapsedTimer timer;
+        timer.start();
+        const core::TranslateOutcome first =
+            translator.translate({c.text}, c.src, {c.dst}, QJsonObject());
+        const qint64 firstMs = timer.elapsed();
+
+        timer.restart();
+        const core::TranslateOutcome steady =
+            translator.translate({c.text}, c.src, {c.dst}, QJsonObject());
+        const qint64 steadyMs = timer.elapsed();
+
+        const QStringList texts = steady.byLang.value(c.dst);
+        const QString text = texts.isEmpty() ? QString() : texts.first();
+        const QStringList firstTexts = first.byLang.value(c.dst);
+        const QString firstText = firstTexts.isEmpty() ? QString() : firstTexts.first();
+
+        if (!steady.ok || text.isEmpty()) {
+            say(QStringLiteral("[%1] 失败: %2")
+                    .arg(tag, steady.error.isEmpty() ? QStringLiteral("译文为空") : steady.error));
+            if (!first.ok) {
+                say(QStringLiteral("[%1] 首次调用也失败: %2").arg(tag, first.error));
+            }
+            markFail(QStringLiteral("mt-mul.%1").arg(tag),
+                     steady.error.isEmpty() ? QStringLiteral("译文为空") : steady.error);
+            continue;
+        }
+
+        say(QStringLiteral("[%1] 译文: %2").arg(tag, text));
+        say(QStringLiteral("[%1] 耗时: %2 ms（首次含模型加载 %3 ms）").arg(tag).arg(steadyMs).arg(firstMs));
+        say(QString());
+
+        Assertions a;
+        // 路径必须与预期一致：直连没被 mul 抢走、ko 必须落到 mul-en。
+        a.expect(route == c.expectRoute,
+                 QStringLiteral("路径=%1（期望 %2）").arg(route, c.expectRoute));
+        a.expect(!rr.reason.isEmpty(), QStringLiteral("resolve() 没给原因"));
+        a.expect(rr.ready, QStringLiteral("resolve() 说不可用：%1").arg(rr.reason));
+        a.expect(first.ok && !firstText.trimmed().isEmpty(),
+                 QStringLiteral("首次调用失败/译文为空（error=%1）").arg(first.error));
+        a.expect(scriptCheckOk(c.dst, text),
+                 QStringLiteral("%1: \"%2\"").arg(scriptCheckHint(c.dst), text));
+        // 拉丁语系目标：不能全是中日韩字符（那就是把源语言原样吐回来了）。
+        if (c.dst != QStringLiteral("zh") && c.dst != QStringLiteral("ja")) {
+            a.expect(!isAllCjk(text),
+                     QStringLiteral("译文全是中日韩字符（目标 %1 应为拉丁语系）: \"%2\"").arg(c.dst, text));
+        }
+        // 最低质量门槛：拒绝"同一个词/字反复重复"的退化输出。
+        a.expect(hasWordVariety(text, c.dst),
+                 QStringLiteral("%1: \"%2\"").arg(hasWordVarietyHint(c.dst), text));
+        if (a.ok()) {
+            markPass(QStringLiteral("mt-mul.%1").arg(tag));
+        } else {
+            markFail(QStringLiteral("mt-mul.%1").arg(tag), a.details());
+        }
+    }
+
+    // 反面用例：韩语（源或目标）必须**明确报错**，不能硬翻出垃圾。
+    // 实测证据：en-mul 的 vocab.json 里 194 个 >>xx<< 没有一个韩语 token；
+    // mul-en 切 "안녕하세요, 오늘 날씨가 좋네요." 会落 4 个 <unk>（--mt-tok 可复现），
+    // 硬翻出来就是 "嘿,嘿,嘿,嘿。"。所以这里断言"拒绝 + 说清原因"。
+    {
+        struct NegCase {
+            QString src;
+            QString dst;
+            QString what;
+        };
+        const std::vector<NegCase> negatives = {
+            {QStringLiteral("ko"), QStringLiteral("zh"), QStringLiteral("韩语源语言")},
+            {QStringLiteral("zh"), QStringLiteral("ko"), QStringLiteral("韩语目标")},
+        };
+
+        for (const NegCase &n : negatives) {
+            const QString tag = QStringLiteral("%1→%2").arg(n.src, n.dst);
+            const bool supported = translator.supports(n.src, n.dst);
+            const core::ResolveResult rr = translator.resolve(n.src, n.dst);
+            say(QStringLiteral("[%1] 路径: <应不可用>（%2）").arg(tag, rr.reason));
+
+            Assertions a;
+            a.expect(!supported, QStringLiteral("supports(%1,%2) 应为 false").arg(n.src, n.dst));
+            a.expect(!rr.ready, QStringLiteral("resolve(%1,%2) 应报不可用").arg(n.src, n.dst));
+            a.expect(rr.reason.contains(QStringLiteral("韩语"))
+                         || rr.reason.contains(QStringLiteral("Korean")),
+                     QStringLiteral("error 未点名韩语：%1").arg(rr.reason));
+            a.expect(rr.reason.contains(QStringLiteral("多语言模型")),
+                     QStringLiteral("error 未说明是多语言模型的限制：%1").arg(rr.reason));
+            if (a.ok()) {
+                markPass(QStringLiteral("mt-mul.%1 明确报错（%2）").arg(tag, n.what));
+            } else {
+                markFail(QStringLiteral("mt-mul.%1 明确报错（%2）").arg(tag, n.what), a.details());
+            }
+            say(QString());
+        }
+    }
+
+    // 语言 token 表自测：覆盖要求里的 12 个 + ko 必须为空。
+    {
+        const std::vector<std::pair<QString, QString>> expect = {
+            {QStringLiteral("zh"), QStringLiteral("zho_Hans")},
+            {QStringLiteral("zh-TW"), QStringLiteral("zho_Hant")},
+            {QStringLiteral("ja"), QStringLiteral("jpn")},
+            {QStringLiteral("fr"), QStringLiteral("fra")},
+            {QStringLiteral("de"), QStringLiteral("deu")},
+            {QStringLiteral("es"), QStringLiteral("spa")},
+            {QStringLiteral("pt"), QStringLiteral("por")},
+            {QStringLiteral("ru"), QStringLiteral("rus")},
+            {QStringLiteral("it"), QStringLiteral("ita")},
+            {QStringLiteral("ar"), QStringLiteral("ara")},
+            {QStringLiteral("th"), QStringLiteral("tha")},
+            {QStringLiteral("hi"), QStringLiteral("hin")},
+            {QStringLiteral("ko"), QString()},
+        };
+
+        Assertions a;
+        for (const auto &[code, token] : expect) {
+            const QString actual = core::LanguageRegistry::toMarianToken(code);
+            a.expect(actual == token,
+                     QStringLiteral("toMarianToken(\"%1\") = \"%2\"（期望 \"%3\"）")
+                         .arg(code, actual, token));
+        }
+        if (a.ok()) {
+            markPass(QStringLiteral("langToken 表"));
+        } else {
+            markFail(QStringLiteral("langToken 表"), a.details());
+        }
+    }
+}
+
+// --mt-tok：分词诊断。把一个模型目录的 source/target 分词器切出来的**原始 piece**
+// 和它映射到的模型 id 全打出来（含 <unk> 标记）。
+// 用途：多语言模型出现"译文离谱"时，先确认输入是"词表对不上变成 unk"还是"模型本身弱"。
+void runMtTokMode()
+{
+    const QString modelsRoot = mtModelsRoot();
+
+    say(QStringLiteral("=== 本地 MT 分词诊断（--mt-tok） ==="));
+    say(QStringLiteral("模型目录: ") + modelsRoot);
+    say(QString());
+
+    struct Sample {
+        QString label;
+        QString text;
+    };
+    const std::vector<Sample> samples = {
+        {QStringLiteral("zh"), QStringLiteral("今天的天气很好，我们去公园散步吧。")},
+        {QStringLiteral("ja"), QStringLiteral("先輩、ちょっと待ってください。")},
+        {QStringLiteral("ko"), QStringLiteral("안녕하세요, 오늘 날씨가 좋네요.")},
+        {QStringLiteral("en"), QStringLiteral("Please save your progress.")},
+    };
+
+    const QStringList pairs = {QStringLiteral("mul-en"), QStringLiteral("en-mul")};
+    bool allOk = true;
+
+    for (const QString &pair : pairs) {
+        const QString dir = QDir(modelsRoot).filePath(QStringLiteral("mt.opus.%1").arg(pair));
+        mt::MtTokenizer source;
+        mt::MtTokenizer target;
+        QString error;
+        const QString spm = QDir(dir).filePath(QStringLiteral("source.spm"));
+        const QString vocab = QDir(dir).filePath(QStringLiteral("vocab.json"));
+        if (!source.load(spm, vocab, &error) || !target.load(spm, vocab, &error)) {
+            markFail(QStringLiteral("mt-tok.%1").arg(pair), error);
+            allOk = false;
+            continue;
+        }
+
+        say(QStringLiteral("--- mt.opus.%1 ---").arg(pair));
+        say(QStringLiteral("vocab.json 条数 = %1，eos=</s> id=%2，<unk> id=%3，>>fra<< id=%4")
+                .arg(source.vocabSize())
+                .arg(source.eosId())
+                .arg(source.pieceToId(QStringLiteral("<unk>")))
+                .arg(source.pieceToId(QStringLiteral(">>fra<<"))));
+
+        for (const Sample &s : samples) {
+            const QStringList pieces = source.encodePieces(s.text);
+            const QVector<int> ids = source.encode(s.text);
+
+            QStringList rendered;
+            int unknown = 0;
+            for (int i = 0; i < pieces.size(); ++i) {
+                const int id = i < ids.size() ? ids.at(i) : -1;
+                if (id == source.pieceToId(QStringLiteral("<unk>"))) {
+                    ++unknown;
+                }
+                rendered << QStringLiteral("%1(%2)").arg(pieces.at(i)).arg(id);
+            }
+            say(QStringLiteral("  [%1] %2").arg(s.label, s.text));
+            say(QStringLiteral("        spm piece(id)：") + rendered.join(QStringLiteral("  ")));
+            say(QStringLiteral("        %1 个 piece，其中 %2 个落成 <unk>")
+                    .arg(pieces.size())
+                    .arg(unknown));
+            say(QStringLiteral("        反解：") + source.decode(ids));
+            say(QString());
+
+            Assertions a;
+            a.expect(!pieces.isEmpty(), QStringLiteral("%1 切词为空").arg(s.label));
+            if (a.ok()) {
+                markPass(QStringLiteral("mt-tok.%1.%2").arg(pair, s.label));
+            } else {
+                allOk = false;
+                markFail(QStringLiteral("mt-tok.%1.%2").arg(pair, s.label), a.details());
+            }
+        }
+    }
+
+    if (!allOk) {
+        say(QStringLiteral("[INFO] 有语言在某个多语言模型里落成 <unk>：说明该模型词表不覆盖它，"
+                           "译文必然垃圾，别在这种方向上硬用。"));
     }
 }
 
@@ -2292,6 +2643,39 @@ int main(int argc, char *argv[])
         mtText = args.at(mtIndex + 1);
     }
     const bool mtBenchMode = args.contains(QStringLiteral("--mt-bench"));
+    const bool mtMulMode = args.contains(QStringLiteral("--mt-mul"));
+    const bool mtTokMode = args.contains(QStringLiteral("--mt-tok"));
+
+    if (mtTokMode) {
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        runMtTokMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MT TOK CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
+
+    if (mtMulMode) {
+        // 资产装在 <AppData>/studious/assets 下（和 GUI 一致），自测进程要对齐 applicationName。
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        runMtMulMode();
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MT MUL CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
 
     if (mtBenchMode) {
         // 资产装在 <AppData>/studious/assets 下（和 GUI 一致），自测进程要对齐 applicationName。

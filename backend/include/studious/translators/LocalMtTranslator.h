@@ -2,6 +2,7 @@
 
 #include "contract/ITranslator.h"
 
+#include <QSet>
 #include <QString>
 
 #include <map>
@@ -19,10 +20,16 @@ namespace studious::translate {
 //   encoder_model_quantized.onnx / decoder_model_quantized.onnx
 //   source.spm / target.spm / vocab.json / config.json
 //
-// 语言对策略：
-//   1. 有直连对（如 en-zh、zh-en）就用直连，质量最好；
-//   2. 没有直连但有 A-en 和 en-B → 走英文中转（两次推理）；
-//   3. 都没有 → supports() 返回 false，Router 不会选中，UI 通过 resolve() 提示下载。
+// 语言对策略（按顺序找第一个可用的）：
+//   1. 直连          mt.opus.<src>-<dst>                       质量最好；
+//   2. 英文中转      mt.opus.<src>-en + mt.opus.en-<dst>        两次推理；
+//   3. en-mul 兜底   mt.opus.<src>-en + mt.opus.en-mul          给目标加 >>token<<；
+//   4. mul-en 兜底   mt.opus.mul-en  + mt.opus.en-<dst>         源侧自动识别，不带 token；
+//   5. mul 全兜底    mt.opus.mul-en  + mt.opus.en-mul           目标加 >>token<<；
+//   6. 都没有 → supports() 返回 false，Router 不会选中，UI 通过 resolve() 提示下载。
+//
+// 注意 "mul" 不是真语言码，只是 mt.opus.mul-en 目录名里的伪语言标签：
+// 它绝不能被当成 en→mul / mul→zh 这类"直连"去匹配（否则 en-mul 会被误用）。
 class LocalMtTranslator final : public core::ITranslator {
 public:
     // modelsRoot 为空时用 %APPDATA%/studious/assets/models（与资产系统一致）。
@@ -49,7 +56,39 @@ public:
     // 只是把 translate() 内部的选择结果提前暴露出来，供 UI/自测展示。
     bool pivotsThroughEnglish(const QString &src, const QString &dst) const;
 
+    // src→dst 实际会走的路径，稳定 ASCII 标识（自测按它断言）：
+    //   "direct" / "pivot-en" / "en-mul" / "mul-en" / "mul-en+en-mul"；不可用返回空串。
+    QString routeId(const QString &src, const QString &dst) const;
+
+    // 同上，但是给人看的一句话（含真在用的模型目录名），resolve() 也复用它。
+    QString routeDescription(const QString &src, const QString &dst) const;
+
 private:
+    enum class RouteKind {
+        None,
+        Direct,
+        EnglishPivot,
+        EnMul,      // src→en + en-mul（目标加 >>token<<）
+        MulEn,      // mul-en + en→dst（源侧自动识别）
+        MulBoth,    // mul-en + en-mul（目标加 >>token<<）
+    };
+
+    struct Plan {
+        RouteKind kind = RouteKind::None;
+        QString targetToken;   // 仅 en-mul 侧需要：Marian token（如 "zho_Hans"）
+        QString error;         // 非空 = 有明确不可用原因（如韩语目标没有 token）
+    };
+
+    Plan planFor(const QString &src, const QString &dst) const;
+
+    // 多语言模型真正覆盖的语言集合：以 mt.opus.en-mul/vocab.json 里的 >>xx<< token 为准
+    // （194 个，去掉尖括号就是 Marian token 名），外加 en（mul-en 的源端语言）。
+    // 这是一次实测结论的固化：韩语这类没有 token 的语言，spm 切出来会落成 <unk>，
+    // 硬翻必然输出垃圾，所以宁可提前拒绝并说清楚。
+    const QSet<QString> &mulTokens() const;
+    bool mulCoversLanguage(const QString &internal) const;
+    QString mulUnsupportedReason(const QString &internal, bool asTarget) const;
+
     QString pairDir(const QString &src, const QString &dst) const;
     bool pairAvailable(const QString &src, const QString &dst) const;
     mt::MtModel *modelFor(const QString &src, const QString &dst);
@@ -62,6 +101,9 @@ private:
     QString m_modelsRoot;
     // 注意：不能用 QHash —— Qt 容器要求元素可拷贝，std::unique_ptr 不能拷贝（实测编译不过）。
     std::map<QString, std::unique_ptr<mt::MtModel>> m_models;   // key: "en-zh"
+    // 多语言 token 表缓存（惰性读一次 vocab.json；mutable 因为 resolve()/supports() 是 const）。
+    mutable bool m_mulTokensLoaded = false;
+    mutable QSet<QString> m_mulTokens;
     bool m_cancelRequested = false;
 };
 

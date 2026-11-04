@@ -46,7 +46,14 @@ public:
 
     // 单句翻译。text 是源语言（当前只有 en）一句，outText 是译文。
     // 失败返回 false 并写 error —— 错误不吞，调用方自己决定怎么显示。
-    bool translate(const QString &text, QString &outText, QString &error);
+    //
+    // targetLangToken：多语言模型（mt.opus.en-mul）的目标语言 token，形如 "zho_Hans"
+    // （带不带 >> << 都认）。非空时把这个 ">>token<<" 的 id **手工拼到 encoder
+    // input_ids 最前面**（spm 的源语言模型里根本没有这个 piece，交给 encode() 只会
+    // 变成 unk）；attention_mask 与 input_ids 等长，所以同步多一个 1。
+    // 单对各模型传默认空串即可，行为与改动前完全一致。
+    bool translate(const QString &text, QString &outText, QString &error,
+                   const QString &targetLangToken = QString());
 
     bool isLoaded() const;
 
