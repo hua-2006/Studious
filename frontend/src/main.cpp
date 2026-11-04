@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 #include "AssetFormat.h"
+#include "LocalEngine.h"
 #include "MainWindow.h"
 #include "TranslateJob.h"
 
@@ -91,6 +92,8 @@ void printUsage()
     say(QStringLiteral("  studious.exe                                       # 启动 GUI"));
     say(QStringLiteral("  studious.exe --smoke \"文本\" --to zh --engine web    # 无界面冒烟"));
     say(QStringLiteral("  可选: --to <lang> (默认 zh) / --engine <mock|web|llm|local-mt> (默认自动)"));
+    say(QStringLiteral("        --local            # 用本机 llama.cpp（资产页下载的 runtime + GGUF）翻译"));
+    say(QStringLiteral("        --repeat <n>       # 同一请求连跑 n 次（验证本地引擎复用，配合 --cache off）"));
     say(QStringLiteral("        --cache <on|off> (默认 on，走进程级 SQLite 翻译缓存)"));
     say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
     say(QStringLiteral("        --llm-base <url> --llm-key <key> --llm-model <model>"));
@@ -109,11 +112,15 @@ int runSmoke(const QStringList &args)
 {
     QString text;
     QString to = QStringLiteral("zh");
+    QString from;   // 空 = auto；显式给出源语言能让小模型更可靠（避免照抄原文）
     QString engine;
     QString provider = QStringLiteral("auto");
     QString llmBase;
     QString llmKey;
     QString llmModel;
+    // 本地引擎：只改"从哪拿译文"，其余流程与云端完全一致（同一个 TranslateJob / Router）。
+    bool useLocalEngine = false;
+    int repeat = 1;
     // 缓存开关默认与 GUI 一致（AppSettings::defaults() 里是 true）。
     bool cacheEnabled = AppSettings::defaults().cacheEnabled;
 
@@ -127,8 +134,20 @@ int runSmoke(const QStringList &args)
             }
         } else if (arg == QLatin1String("--to") && hasNext) {
             to = args.at(++i);
+        } else if (arg == QLatin1String("--from") && hasNext) {
+            from = args.at(++i);
         } else if (arg == QLatin1String("--engine") && hasNext) {
             engine = args.at(++i);
+        } else if (arg == QLatin1String("--local")) {
+            useLocalEngine = true;
+        } else if (arg == QLatin1String("--repeat") && hasNext) {
+            bool ok = false;
+            const int parsed = args.at(++i).trimmed().toInt(&ok);
+            if (!ok || parsed <= 0) {
+                say(QStringLiteral("[FAIL] --repeat 需要正整数，收到：") + args.at(i));
+                return 1;
+            }
+            repeat = qBound(1, parsed, 20);   // 上限 20：冒烟是用来验行为的，不是压测
         } else if (arg == QLatin1String("--provider") && hasNext) {
             provider = args.at(++i);
         } else if (arg == QLatin1String("--cache") && hasNext) {
@@ -167,7 +186,7 @@ int runSmoke(const QStringList &args)
         say(QStringLiteral("[FAIL] 切分后没有任何段落"));
         return 1;
     }
-    req.srcLang = QStringLiteral("auto");
+    req.srcLang = from.isEmpty() ? QStringLiteral("auto") : from;
     req.dstLang = to;
     req.engineId = engine;
 
@@ -186,6 +205,47 @@ int runSmoke(const QStringList &args)
     }
     if (!llmModel.isEmpty()) {
         req.llm.model = llmModel;
+    }
+
+    // 本地引擎：主线程拉起 llama-server（阻塞约 1 秒），再把 baseUrl 快照塞进 req.llm。
+    // 顺序很关键——必须在 job.start() 之前完成，工作线程只认这份快照。
+    LocalEngine localEngine;
+    if (useLocalEngine) {
+        say(QStringLiteral("[local] 启动本地引擎…"));
+        QString startError;
+        if (!localEngine.ensureStarted(&startError)) {
+            say(QStringLiteral("[FAIL] ")
+                + (startError.isEmpty() ? QStringLiteral("本地引擎启动失败（未给出原因）")
+                                        : startError));
+            say(QStringLiteral("[OK] exit 1"));
+            return 1;
+        }
+        say(QStringLiteral("[local] llama-server 就绪：%1（端口 %2，启动耗时 %3 ms）")
+                .arg(localEngine.baseUrl(),
+                     QString::number(localEngine.port()),
+                     QString::number(localEngine.lastStartupMs())));
+
+        // 本地模式覆盖云端三项：baseUrl 指向 127.0.0.1:<port>/v1，key 不需要
+        // （llama-server 不校验），model 只是占位（服务端忽略这个字段）。
+        // reasoningEffort 清空 = 请求里不再带 reasoning_effort / thinking。
+        req.llm.baseUrl = localEngine.baseUrl();
+        req.llm.apiKey.clear();
+        req.llm.model = QStringLiteral("local");
+        req.llm.reasoningEffort.clear();
+        // 小模型专属收尾（与 GUI 的 applyLocalEngineConfig 保持一致）：
+        // 删整行的括注 / 语言标签；禁用批量（0.5B 返回的是 JSON 对象，不是数组）。
+        req.llm.stripModelNotes = true;
+        req.llm.batchSize = 1;
+        if (req.engineId != QLatin1String("llm")) {
+            // 本地引擎只能配 llm 组件（其余组件早就 isReady()==false 了）。
+            // 用户显式写了别的引擎就明说一句，别让 --engine mock --local 这种组合默默跑偏。
+            if (!req.engineId.isEmpty()) {
+                say(QStringLiteral("[local] 引擎强制为 llm（已忽略 --engine %1）")
+                        .arg(req.engineId));
+            }
+            req.engineId = QStringLiteral("llm");
+            engine = QStringLiteral("llm");
+        }
     }
 
     // 缓存实例照给（关掉只是不用它，不影响任何行为），开关单独传。
@@ -207,48 +267,83 @@ int runSmoke(const QStringList &args)
                  req.llm.reasoningEffort.isEmpty() ? QStringLiteral("<默认>")
                                                    : req.llm.reasoningEffort));
 
-    TranslateJob job;
-    QEventLoop loop;
     int exitCode = 1;
+    for (int round = 1; round <= repeat; ++round) {
+        if (repeat > 1) {
+            say(QStringLiteral("--- 第 %1/%2 次 ---").arg(round).arg(repeat));
+        }
 
-    QObject::connect(&job,
-                     &TranslateJob::finished,
-                     &loop,
-                     [&](const TranslateJobResult &result, qint64 elapsedMs) {
-                         say(QStringLiteral("耗时: %1 ms").arg(elapsedMs));
-                         // 缓存一行：开 = 报命中情况（命中数/总段数），关 = 明确写 off。
-                         if (cacheEnabled) {
-                             const int total = result.cacheHits + result.cacheMisses;
-                             say(QStringLiteral("cache=on  命中=%1/%2")
-                                     .arg(result.cacheHits)
-                                     .arg(total));
-                         } else {
-                             say(QStringLiteral("cache=off"));
-                         }
-                         if (!result.outcome.ok) {
-                             say(QStringLiteral("[FAIL] ") + result.outcome.error);
-                             exitCode = 1;
-                         } else {
-                             const QStringList lines = result.outcome.byLang.value(to);
-                             say(QStringLiteral("译文:"));
-                             for (const QString &line : lines) {
-                                 say(line);
+        if (useLocalEngine && round > 1) {
+            // 复用验证：再调一次 ensureStarted()。lastStartupMs() == 0 说明拿的是
+            // 已经在跑的服务，没有重新加载模型（这条结论靠时间戳，不靠感觉）。
+            QString ignored;
+            localEngine.ensureStarted(&ignored);
+            if (localEngine.lastStartupMs() == 0) {
+                say(QStringLiteral("[local] 复用已在运行的服务（未重新加载模型）"));
+            } else {
+                say(QStringLiteral("[local] 服务被重新拉起，耗时 %1 ms")
+                        .arg(localEngine.lastStartupMs()));
+            }
+        }
+
+        TranslateJob job;
+        QEventLoop loop;
+        int roundCode = 1;
+
+        QObject::connect(&job,
+                         &TranslateJob::finished,
+                         &loop,
+                         [&](const TranslateJobResult &result, qint64 elapsedMs) {
+                             say(QStringLiteral("耗时: %1 ms").arg(elapsedMs));
+                             // 缓存一行：开 = 报命中情况（命中数/总段数），关 = 明确写 off。
+                             if (cacheEnabled) {
+                                 const int total = result.cacheHits + result.cacheMisses;
+                                 say(QStringLiteral("cache=on  命中=%1/%2")
+                                         .arg(result.cacheHits)
+                                         .arg(total));
+                             } else {
+                                 say(QStringLiteral("cache=off"));
                              }
-                             exitCode = 0;
-                         }
-                         loop.quit();
-                     });
+                             if (!result.outcome.ok) {
+                                 say(QStringLiteral("[FAIL] ") + result.outcome.error);
+                                 roundCode = 1;
+                             } else {
+                                 const QStringList lines = result.outcome.byLang.value(to);
+                                 say(QStringLiteral("译文:"));
+                                 for (const QString &line : lines) {
+                                     say(line);
+                                 }
+                                 roundCode = 0;
+                             }
+                             loop.quit();
+                         });
 
-    job.start(req);
+        job.start(req);
 
-    // 包一层超时，避免个别网络环境把冒烟挂死。LLM 可能比 web 更慢，给 120s。
-    QTimer::singleShot(120000, &loop, [&]() {
-        say(QStringLiteral("[FAIL] 冒烟超时（120s）"));
-        exitCode = 1;
-        loop.quit();
-    });
+        // 包一层超时，避免个别网络环境把冒烟挂死。LLM 可能比 web 更慢，给 120s。
+        QTimer::singleShot(120000, &loop, [&]() {
+            say(QStringLiteral("[FAIL] 冒烟超时（120s）"));
+            roundCode = 1;
+            loop.quit();
+        });
 
-    loop.exec();
+        loop.exec();
+
+        exitCode = roundCode;
+        if (exitCode != 0) {
+            break;   // 失败就停：后面的重复只会刷同样的错误
+        }
+    }
+
+    if (useLocalEngine) {
+        // 主动回收：--smoke 是一次性进程，跑完绝不能留一个 llama-server 在后台。
+        QElapsedTimer stopTimer;
+        stopTimer.start();
+        localEngine.shutdown();
+        say(QStringLiteral("[local] 已停止 llama-server（耗时 %1 ms）")
+                .arg(stopTimer.elapsed()));
+    }
+
     say(exitCode == 0 ? QStringLiteral("[OK] exit 0") : QStringLiteral("[OK] exit 1"));
     return exitCode;
 }

@@ -7,8 +7,11 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QShortcut>
@@ -119,6 +122,7 @@ MainWindow::MainWindow(studious::cache::TranslationCache *cache, QWidget *parent
     connect(m_translateButton, &QPushButton::clicked, this, &MainWindow::onTranslateClicked);
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onOpenSettings);
     connect(m_assetsButton, &QPushButton::clicked, this, &MainWindow::onOpenAssets);
+    connect(m_localCheck, &QCheckBox::toggled, this, &MainWindow::onLocalEngineToggled);
     connect(m_job, &TranslateJob::finished, this, &MainWindow::onTranslationFinished);
 
     // Ctrl+Alt+A 打开资产对话框：菜单栏没有「工具」这类入口，给个快捷键省得摸鼠标。
@@ -148,7 +152,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
     m_settings.engineId = currentEngine();
     m_settings.webProviderId = currentWebProviderId();
     m_settings.cacheEnabled = m_cacheCheck->isChecked();
+    m_settings.useLocalEngine = m_localCheck->isChecked();
     m_settings.save();
+
+    // llama-server 的回收放在析构（m_localEngine 的析构函数）里，不在这里做：
+    // stop() 要等 terminate() 满 3 秒才 kill（控制台子进程收不到 WM_CLOSE），
+    // 放在 closeEvent 里会让窗口在消失前先僵住 3 秒。放到析构 = 窗口先关，进程随后退出。
 
     QMainWindow::closeEvent(event);
 }
@@ -207,9 +216,18 @@ void MainWindow::buildUi()
     m_cacheCheck->setToolTip(
         QStringLiteral("命中缓存的句子不再请求翻译接口，重复文本秒出结果"));
 
+    // 本地引擎开关：勾着 = 走本机 llama.cpp（离线、不花 API 费用）。
+    // 资产（runtime / 模型）由「资产…」页下载，没装时第一次翻译会明确报缺哪个。
+    m_localCheck = new QCheckBox(QStringLiteral("本地引擎"));
+    m_localCheck->setChecked(m_settings.useLocalEngine);
+    m_localCheck->setToolTip(QStringLiteral(
+        "用本机 llama.cpp + 已下载的 GGUF 离线翻译，需要先在「资产」里下载 "
+        "runtime.llama.cpu.win-x64 与 model.qwen2.5-0.5b-instruct.q4km"));
+
     sourceBar->addWidget(new QLabel(QStringLiteral("来源")));
     sourceBar->addWidget(m_webProviderBox);
     sourceBar->addStretch(1);
+    sourceBar->addWidget(m_localCheck);
     sourceBar->addWidget(m_cacheCheck);
     sourceBar->addWidget(m_assetsButton);
     sourceBar->addWidget(m_settingsButton);
@@ -301,7 +319,9 @@ void MainWindow::populateEngineBox()
                              QStringLiteral("按后端优先级自动选择：mock → web → llm → local-mt"),
                              Qt::ToolTipRole);
 
-    const bool llmConfigured = m_settings.llm.isValid();
+    // 勾了「本地引擎」时 llm 组件一定可用：本地模式不读云端 baseUrl / model，
+    // 连接参数在提交任务前被覆盖成 127.0.0.1:<port>/v1。
+    const bool llmConfigured = m_settings.llm.isValid() || m_settings.useLocalEngine;
     for (const QString &id : {QStringLiteral("web"), QStringLiteral("mock"),
                               QStringLiteral("llm"), QStringLiteral("local-mt")}) {
         // llm 未配置（baseUrl / model 为空）时置灰：就算选中它也只会拿到 isReady()==false。
@@ -314,7 +334,8 @@ void MainWindow::populateEngineBox()
             disableComboItem(m_engineBox, index);
             m_engineBox->setItemData(
                 index,
-                QStringLiteral("LLM 未配置：点「设置…」填写 Base URL 与模型名后即可启用"),
+                QStringLiteral("LLM 未配置：点「设置…」填写 Base URL 与模型名后即可启用，"
+                               "或勾选「本地引擎」用本机 llama.cpp"),
                 Qt::ToolTipRole);
         }
     }
@@ -389,12 +410,24 @@ QStringList MainWindow::currentWebProviders() const
 
 void MainWindow::refreshEngineStatus()
 {
+    // 本地模式下状态行要反映"本机引擎现在是什么状态"：起来了报真实端口，
+    // 没起来就是未就绪（后端 LlmConfig 的空的 baseUrl 正好等于 isReady()==false）。
+    studious::config::LlmConfig llm = m_settings.llm;
+    if (m_settings.useLocalEngine) {
+        llm.baseUrl = m_localEngine.baseUrl();
+        llm.model = QStringLiteral("local");
+        llm.apiKey.clear();
+    }
+
     QString tooltip;
-    const QString text = buildEngineStatusText(currentSrcLang(),
-                                               currentDstLang(),
-                                               m_settings.llm,
-                                               currentWebProviders(),
-                                               &tooltip);
+    QString text = buildEngineStatusText(currentSrcLang(),
+                                        currentDstLang(),
+                                        llm,
+                                        currentWebProviders(),
+                                        &tooltip);
+    if (m_settings.useLocalEngine && !m_localEngine.isRunning()) {
+        text += QStringLiteral("｜本地引擎未启动（首次翻译时自动启动）");
+    }
     m_engineStatus->setText(text);
     m_engineStatus->setToolTip(tooltip);
 }
@@ -437,6 +470,72 @@ void MainWindow::onOpenAssets()
     // 模态对话框：清单默认取 <repo>/backend/asset/manifest.json，可在对话框内换文件。
     AssetDialog dialog(this);
     dialog.exec();
+
+    // 资产可能刚被下载 / 删除：若本地引擎正在跑，让它下次翻译重新校验一遍资产。
+    // （这里不主动停服务——用户只是看了一眼资产页就把正在用的引擎打断，体验更差。）
+    if (m_settings.useLocalEngine) {
+        refreshEngineStatus();
+    }
+}
+
+void MainWindow::onLocalEngineToggled(bool checked)
+{
+    m_settings.useLocalEngine = checked;
+
+    if (checked) {
+        // 本地引擎只能配 llm 组件，直接把下拉切过去（不靠用户自己记得改）。
+        m_settings.engineId = QStringLiteral("llm");
+    }
+
+    // 立刻落盘：勾选状态是"下次启动还要生效"的配置，不能等关窗（崩溃 / 强杀就丢了）。
+    m_settings.save();
+
+    // 重建下拉：勾上后 llm 项要从「（未配置）」灰态变可用，取消勾选则恢复。
+    populateEngineBox();
+    refreshEngineStatus();
+
+    if (checked) {
+        setStatusOk(QStringLiteral("已启用本地引擎：首次翻译时会自动启动 llama-server（约 1 秒）"));
+    } else if (m_localEngine.isRunning()) {
+        // 用户明确关掉了本地引擎，就顺手把进程停掉，别让 500MB 模型在后台占内存。
+        // stop() 最长要等 3 秒（terminate 对没有窗口的控制台子进程无效），
+        // 先把提示刷到状态栏，免得界面看起来像卡死。
+        setStatusOk(QStringLiteral("正在停止本地引擎（释放模型占用的内存）…"));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        m_localEngine.shutdown();
+        setStatusOk(QStringLiteral("已切回云端 LLM 配置（本地引擎已停止）"));
+    } else {
+        setStatusOk(QStringLiteral("已切回云端 LLM 配置"));
+    }
+}
+
+bool MainWindow::applyLocalEngineConfig(studious::config::LlmConfig *cfg, QString *error)
+{
+    QString startError;
+    if (!m_localEngine.ensureStarted(&startError)) {
+        if (error != nullptr) {
+            *error = startError;
+        }
+        return false;
+    }
+
+    // 本地服务器不校验 model / key，但 LlmConfig::isValid() 要求两者非空。
+    // reasoningEffort 清空：本地不传 reasoning_effort（llama-server 其实容忍，
+    // 但翻译是确定性任务，多发无意义的字段没有收益）。
+    cfg->baseUrl = m_localEngine.baseUrl();
+    cfg->apiKey.clear();
+    cfg->model = QStringLiteral("local");
+    cfg->reasoningEffort.clear();
+    // 0.5B 专属收尾（云端配置不受影响，所以只在这里改）：
+    //   stripModelNotes：删掉"（中文（简体））""【中文】"这类整行注记；
+    //   batchSize = 1：小模型返回的不是 JSON 数组而是对象，合并只会白花两次请求。
+    cfg->stripModelNotes = true;
+    cfg->batchSize = 1;
+
+    if (error != nullptr) {
+        error->clear();
+    }
+    return true;
 }
 
 void MainWindow::onTranslateClicked()
@@ -458,6 +557,7 @@ void MainWindow::onTranslateClicked()
     m_settings.engineId = currentEngine();
     m_settings.webProviderId = currentWebProviderId();
     m_settings.cacheEnabled = m_cacheCheck->isChecked();
+    m_settings.useLocalEngine = m_localCheck->isChecked();
 
     TranslateJobRequest req;
     req.paragraphs = paragraphs;
@@ -469,8 +569,34 @@ void MainWindow::onTranslateClicked()
     req.cache = m_cache;        // 进程级共享实例（可为空）
     req.cacheEnabled = m_settings.cacheEnabled;
 
+    if (m_settings.useLocalEngine) {
+        // 线程约束：ensureStarted() 阻塞约 1 秒且内部是 QProcess（主线程亲和），
+        // 必须在**提交任务之前**在主线程跑完；工作线程只拿 baseUrl 快照。
+        setStatusOk(QStringLiteral("正在启动本地引擎（首次约 1 秒）…"));
+        // 只放行重绘，屏蔽用户输入：启动期间按钮再被点是纯粹的麻烦。
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+        QString localError;
+        if (!applyLocalEngineConfig(&req.llm, &localError)) {
+            QMessageBox::critical(this,
+                                  QStringLiteral("本地引擎启动失败"),
+                                  localError.isEmpty()
+                                      ? QStringLiteral("本地引擎启动失败（未给出原因）")
+                                      : localError);
+            // 回滚勾选：toggled 里会保存 false、重建引擎下拉、停掉半死的进程。
+            m_localCheck->setChecked(false);
+            setStatusError(QStringLiteral("本地引擎启动失败：%1")
+                               .arg(localError.section(QLatin1Char('\n'), 0, 0)));
+            return;
+        }
+        req.engineId = QStringLiteral("llm");   // 本地引擎只能配 llm 组件
+    }
+
     m_lastSrcParagraphs = paragraphs;
     m_lastEngineId = req.engineId.isEmpty() ? QStringLiteral("自动") : req.engineId;
+    if (m_settings.useLocalEngine) {
+        m_lastEngineId += QStringLiteral("（本地）");
+    }
     m_lastCacheEnabled = req.cacheEnabled;
 
     m_translateButton->setEnabled(false);

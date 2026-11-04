@@ -38,9 +38,22 @@ struct LlmConfig {
     // 实测 5 段：逐段 5662 ms → 合并 1034 ms（5.5 倍）。
     //
     // 代价：批量返回需要 JSON 数组校验，模型可能漏条/加前言，故失败会整块回退到逐段。
+    //
+    // 小模型例外：0.5B 实测做不好"返回 JSON 数组"这件事（给的是 {"1":...} 对象），
+    // 合并只会白花一次请求 + 一次重试，所以本地模式把 batchSize 设成 1，直接逐段。
     int batchSize = 8;
 
     bool isValid() const { return !baseUrl.trimmed().isEmpty() && !model.trimmed().isEmpty(); }
+
+    // 清理小模型的"注记噪声"。默认 false：云端大模型基本不犯这个毛病，
+    // 不改动已实测通过的云端输出。
+    //
+    // 本地 0.5B 实测到的两种形态（都要靠这个开关兜住）：
+    //   「【中文】\n译文」                      —— 语言标签单独占一行
+    //   「译文\n\n（中文（简体））」             —— 译文后面追加括注
+    //   「译文\n\n（翻译结果：Good morning,... >>>）」
+    // 打开后只删"整行都是括注 / 语言标签 / 空行"的行，正文一个字都不动。
+    bool stripModelNotes = false;
 };
 
 } // namespace studious::config

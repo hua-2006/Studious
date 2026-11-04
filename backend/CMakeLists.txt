@@ -46,6 +46,7 @@ add_library(backend STATIC
     src/llm/LlmCatalog.cpp
     src/router/TranslatorRouter.cpp
     src/cache/TranslationCache.cpp
+    src/runtime/LlamaServer.cpp
     src/asset/ManifestParser.cpp
     src/asset/AssetRegistry.cpp
     src/asset/Downloader.cpp

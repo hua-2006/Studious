@@ -24,6 +24,12 @@ struct AppSettings {
     // 关掉后 Router 既不查缓存也不写缓存，翻译耗时回到纯网络往返。
     bool cacheEnabled = true;
 
+    // 本地引擎开关（对应界面上的「本地引擎」勾选框，QSettings 键 settings/llm/useLocalEngine）。
+    // true 时翻译走本机 llama.cpp（llama-server.exe + 已下载的 GGUF），
+    // 与 llm.baseUrl / apiKey / model 那套云端配置完全解耦：本地模式只借用 llm 组件，
+    // 连接参数在提交任务前被覆盖成 127.0.0.1:<port>/v1。
+    bool useLocalEngine = false;
+
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //
     // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
