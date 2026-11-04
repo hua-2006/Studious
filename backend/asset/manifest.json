@@ -167,7 +167,9 @@
         "size": 123629196,
         "sha256": "925d3b0ccb42369920be6fde4e2a7fca6c01683cc0245b2d382fe662c2b82d95",
         "archive": "zip",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.en-zh.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -191,7 +193,9 @@
         "size": 123958398,
         "sha256": "e0694c20f2cdc79790f8b682478793400f63ac626900b9bbdf5431734698c526",
         "archive": "zip",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.zh-en.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -215,7 +219,9 @@
         "size": 99913125,
         "sha256": "9faa9f105b8b2c3845f9ce05f19e8dd98c30280f0d5401337c28a7fb3eed33b0",
         "archive": "zip",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.en-ja.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -239,7 +245,9 @@
         "size": 102673294,
         "sha256": "2256ab25adfcc7a1abcc7f5fcfef6047e1a52476dd9614c8f16008513b69430e",
         "archive": "zip",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.ja-en.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -257,7 +265,9 @@
         "size": 116360010,
         "archive": "zip",
         "sha256": "4aba65e2313e38f0de74a3ecfb77e6be527afd15690c8d64facaa983eee8711a",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.en-mul.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -275,7 +285,9 @@
         "size": 104006407,
         "archive": "zip",
         "sha256": "ce00022bb956bc9d6234d509acc9ac050dad648dc45f978edfcce097008161f6",
-        "urls": [],
+        "urls": [
+          "https://github.com/hua-2006/translator/releases/download/mt-v1.0.0/mt.opus.mul-en.zip"
+        ],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
