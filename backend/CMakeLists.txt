@@ -21,6 +21,33 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 find_package(Qt6 REQUIRED COMPONENTS Core Network Sql)
 
+# 第三方：sentencepiece 0.2.0（Apache-2.0，源码内嵌）。
+# 只用分词，不训练、不导出：关掉 shared / tcmalloc / 测试，
+# 目标就是静态库 sentencepiece-static（含内部 protobuf-lite 与 absl）。
+set(SENTENCEPIECE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sentencepiece)
+set(SPM_ENABLE_SHARED OFF CACHE BOOL "Build shared libs" FORCE)
+set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "Use tcmalloc" FORCE)
+set(SPM_BUILD_TEST OFF CACHE BOOL "Build spm test binaries" FORCE)
+set(SPM_ABSL_PROVIDER "internal" CACHE STRING "absl provider" FORCE)
+set(SPM_PROTOBUF_PROVIDER "internal" CACHE STRING "protobuf provider" FORCE)
+# EXCLUDE_FROM_ALL：spm_encode/spm_train 这些命令行工具和它的 install 规则都不要，
+# 只有被 backend 真正链到时才编译 sentencepiece-static。
+# （vendored 副本里把它的 cmake_minimum_required 从 3.1 抬到 3.5，
+#  否则 CMake 3.31+ 会为 "<3.5 兼容性" 发弃用警告，见 third_party/sentencepiece/CMakeLists.txt）
+add_subdirectory(${SENTENCEPIECE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/third_party/sentencepiece EXCLUDE_FROM_ALL)
+
+# 第三方源码自带的警告（protobuf-lite 在 -O3 下的 -Warray-bounds）不是我们要修的：
+# 单独对它静音，构建日志里就只剩我们自己的警告。
+if(TARGET sentencepiece-static)
+    target_compile_options(sentencepiece-static PRIVATE -w)
+endif()
+
+# 第三方：onnxruntime 1.31.1 预编译（CPU provider）。
+# 头文件 + MSVC 导入库（MinGW 能直接链），运行期依赖 onnxruntime.dll，见文件末尾 POST_BUILD。
+set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime)
+set(ONNXRUNTIME_DLL ${ONNXRUNTIME_DIR}/lib/onnxruntime.dll)
+set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/onnxruntime.lib)
+
 # 第三方：Monocypher 4.0.2（BSD-2-Clause OR CC0-1.0，单文件无依赖）。
 # 两个 .c 必须都编进来：monocypher-ed25519.c 用到 monocypher.c 里的基础原语。
 set(MONOCYPHER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher)
@@ -51,6 +78,8 @@ add_library(backend STATIC
     src/asset/ManifestParser.cpp
     src/asset/AssetRegistry.cpp
     src/asset/Downloader.cpp
+    src/mt/MtTokenizer.cpp
+    src/mt/MtModel.cpp
     src/Factory.cpp
     # ---- 第三方（C） ----
     ${MONOCYPHER_DIR}/monocypher.c
@@ -76,6 +105,14 @@ target_include_directories(backend PRIVATE ${MINIZ_DIR})
 
 target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
 
+# 本地 MT：sentencepiece 与 onnxruntime 都是实现细节，头文件不外泄，
+# 但静态库要把依赖往上传，否则可执行文件链不上（PRIVATE 在 STATIC 下等同 LINK_ONLY）。
+target_include_directories(backend PRIVATE
+    ${SENTENCEPIECE_DIR}/src
+    ${ONNXRUNTIME_DIR}/include
+)
+target_link_libraries(backend PRIVATE sentencepiece-static ${ONNXRUNTIME_LIB})
+
 # 控制台自测程序
 add_executable(backend_selftest src/selftest_main.cpp)
 target_link_libraries(backend_selftest PRIVATE backend)
@@ -87,10 +124,23 @@ target_include_directories(backend_selftest PRIVATE ${MONOCYPHER_DIR})
 # --assets 用例要现场造 zip（含 zip-slip 恶意包），所以自测也直接引 miniz。
 target_include_directories(backend_selftest PRIVATE ${MINIZ_DIR})
 
+# onnxruntime.dll 是运行期依赖：backend 是静态库不产出 exe，
+# 谁链接了 backend 谁负责把 dll 放到自己旁边，否则 --mt 一启动就 0xC0000135。
+add_custom_command(TARGET backend_selftest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:backend_selftest>"
+    COMMENT "复制 onnxruntime.dll 到 backend_selftest 输出目录"
+)
+
 # 开发/发布用清单工具（genkey / sign / verify）。不随产品分发，不进安装规则。
 add_executable(manifest_tool tools/manifest_tool.cpp)
 target_link_libraries(manifest_tool PRIVATE backend)
 target_include_directories(manifest_tool PRIVATE ${MONOCYPHER_DIR})
 set_target_properties(manifest_tool PROPERTIES
     WIN32_EXECUTABLE OFF
+)
+add_custom_command(TARGET manifest_tool POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:manifest_tool>"
+    COMMENT "复制 onnxruntime.dll 到 manifest_tool 输出目录"
 )

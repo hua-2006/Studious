@@ -11,6 +11,8 @@
 //   backend_selftest.exe --llm       用本机网关真实翻译两句话（需要网关在 127.0.0.1:3065）
 //                                    可用环境变量临时换网关/Key/模型排查：
 //                                    STUDIOUS_LLM_BASE_URL / STUDIOUS_LLM_API_KEY / STUDIOUS_LLM_MODEL
+//   backend_selftest.exe --mt        本地 OPUS-MT（en→zh）最小闭环：加载 ONNX + 翻三句英文
+//   backend_selftest.exe --mt "<英文句子>"  同上，只翻这一句
 
 #include "Factory.h"
 #include "asset/AssetRegistry.h"
@@ -23,6 +25,7 @@
 #include "llm/LlmCatalog.h"
 #include "llm/LlmModelInfo.h"
 #include "contract/LanguageRegistry.h"
+#include "mt/MtModel.h"
 #include "net/QtHttpClient.h"
 #include "router/TranslatorRouter.h"
 #include "translators/LlmTranslator.h"
@@ -52,6 +55,7 @@
 #include <QPair>
 #include <QString>
 #include <QStringList>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -1823,6 +1827,87 @@ void runCacheMode()
     }
 }
 
+// 译文里至少得有一个汉字，否则说明分词/反分词或 vocab 偏移错了。
+bool hasHan(const QString &text)
+{
+    for (const QChar &c : text) {
+        const ushort u = c.unicode();
+        if ((u >= 0x3400 && u <= 0x4DBF) || (u >= 0x4E00 && u <= 0x9FFF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --mt：本地 OPUS-MT（en→zh）最小闭环。
+// 模型目录固定取 <AppData>/assets/models/mt.opus.en-zh，与资产包的安装位置一致。
+void runMtMode(const QString &singleText)
+{
+    const QString modelDir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                                 .filePath(QStringLiteral("assets/models/mt.opus.en-zh"));
+
+    say(QStringLiteral("=== 本地 MT：OPUS-MT en→zh ==="));
+    say(QStringLiteral("模型目录: ") + modelDir);
+    say(QString());
+
+    studious::mt::MtPaths paths;
+    paths.encoderOnnx = QDir(modelDir).filePath(QStringLiteral("encoder_model_quantized.onnx"));
+    paths.decoderOnnx = QDir(modelDir).filePath(QStringLiteral("decoder_model_quantized.onnx"));
+    paths.sourceSpm = QDir(modelDir).filePath(QStringLiteral("source.spm"));
+    paths.targetSpm = QDir(modelDir).filePath(QStringLiteral("target.spm"));
+    paths.configJson = QDir(modelDir).filePath(QStringLiteral("config.json"));
+    paths.vocabJson = QDir(modelDir).filePath(QStringLiteral("vocab.json"));
+
+    studious::mt::MtModel model;
+    QString error;
+    QElapsedTimer timer;
+    timer.start();
+    if (!model.load(paths, &error)) {
+        markFail(QStringLiteral("mt.load"), error);
+        return;
+    }
+    const qint64 loadMs = timer.elapsed();
+    say(QStringLiteral("模型加载耗时: %1 ms").arg(loadMs));
+    markPass(QStringLiteral("mt.load"));
+    say(QString());
+
+    QStringList sentences;
+    if (singleText.trimmed().isEmpty()) {
+        sentences << QStringLiteral("The quick brown fox jumps over the lazy dog.")
+                  << QStringLiteral("Please save your progress before quitting the game.")
+                  << QStringLiteral("Thank you very much for your help.");
+    } else {
+        sentences << singleText;
+    }
+
+    int index = 0;
+    for (const QString &sentence : sentences) {
+        ++index;
+        timer.restart();
+        QString translated;
+        QString translateError;
+        const bool ok = model.translate(sentence, translated, translateError);
+        const qint64 elapsed = timer.elapsed();
+
+        if (!ok) {
+            markFail(QStringLiteral("mt.translate #%1").arg(index), translateError);
+            continue;
+        }
+
+        say(QStringLiteral("EN: %1").arg(sentence));
+        say(QStringLiteral("ZH: %1").arg(translated));
+        say(QStringLiteral("    单句耗时: %1 ms").arg(elapsed));
+        say(QString());
+
+        if (hasHan(translated)) {
+            markPass(QStringLiteral("mt.translate #%1").arg(index));
+        } else {
+            markFail(QStringLiteral("mt.translate #%1").arg(index),
+                     QStringLiteral("译文里没有任何汉字：%1").arg(translated));
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -1837,6 +1922,31 @@ int main(int argc, char *argv[])
     const bool manifestMode = args.contains(QStringLiteral("--manifest"));
     const bool i18nMode = args.contains(QStringLiteral("--i18n"));
     const bool assetsMode = args.contains(QStringLiteral("--assets"));
+
+    // --mt 后面可以跟一句英文；不跟就翻内置的三句。
+    const int mtIndex = args.indexOf(QStringLiteral("--mt"));
+    const bool mtMode = mtIndex >= 0;
+    QString mtText;
+    if (mtMode && mtIndex + 1 < args.size() && !args.at(mtIndex + 1).startsWith(QStringLiteral("--"))) {
+        mtText = args.at(mtIndex + 1);
+    }
+
+    if (mtMode) {
+        // 资产装在 <AppData>/studious/assets 下（和 GUI 一致）。自测进程默认的 applicationName
+        // 是 exe 名（backend_selftest），会让 AppDataLocation 指到另一个目录，这里显式对齐。
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        runMtMode(mtText);
+        say(QString());
+        if (g_failed == 0) {
+            say(QStringLiteral("MT CHECK PASSED"));
+            return 0;
+        }
+        say(QStringLiteral("FAILED: %1 项").arg(g_failed));
+        for (const QString &item : g_failedItems) {
+            say(QStringLiteral("  - ") + item);
+        }
+        return 1;
+    }
 
     if (i18nMode) {
         runI18nMode();
