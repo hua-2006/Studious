@@ -3,9 +3,11 @@
 #include "i18n/L10n.h"
 
 #include <QEventLoop>
+#include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QTimer>
+#include <QUrl>
 #include <QVariant>
 
 #include <utility>
@@ -21,12 +23,58 @@ int statusOf(const QNetworkReply *reply)
 
 } // namespace
 
+// 从环境变量读代理配置。
+//
+// 为什么需要：Qt 默认不走系统代理（而 Windows 的 WinINET 设置经常是关的），
+// 于是 GitHub / HuggingFace 这类境外源在国内容易直接超时。
+// curl 能过只是因为我们手动传了 --proxy —— 程序自己也得会读。
+//
+// 优先级：STUDIOUS_HTTP_PROXY（程序专用）> HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。
+QNetworkProxy proxyFromEnvironment()
+{
+    static const char *const names[] = {
+        "STUDIOUS_HTTP_PROXY",
+        "HTTPS_PROXY", "https_proxy",
+        "HTTP_PROXY",  "http_proxy",
+        "ALL_PROXY",   "all_proxy",
+    };
+
+    for (const char *name : names) {
+        const QString value = qEnvironmentVariable(name).trimmed();
+        if (value.isEmpty()) {
+            continue;
+        }
+
+        const QUrl url(value.contains(QStringLiteral("://")) ? value
+                                                             : QStringLiteral("http://") + value);
+        if (!url.isValid() || url.host().isEmpty()) {
+            continue;
+        }
+
+        QNetworkProxy proxy(QNetworkProxy::HttpProxy,
+                            url.host(),
+                            static_cast<quint16>(url.port(8080)));
+        if (!url.userName().isEmpty()) {
+            proxy.setUser(url.userName());
+            proxy.setPassword(url.password());
+        }
+        return proxy;
+    }
+
+    return QNetworkProxy(QNetworkProxy::NoProxy);
+}
+
 QtHttpClient::QtHttpClient(QString userAgent, QObject *parent)
     : m_nam(parent)
     , m_userAgent(std::move(userAgent))
 {
     if (m_userAgent.isEmpty()) {
         m_userAgent = QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    }
+
+    const QNetworkProxy proxy = proxyFromEnvironment();
+    if (proxy.type() != QNetworkProxy::NoProxy) {
+        m_nam.setProxy(proxy);
     }
 }
 

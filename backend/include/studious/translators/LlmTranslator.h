@@ -86,9 +86,18 @@ private:
     // 剥掉模型偶发包裹的 ``` 代码块 / 成对引号。
     static QString stripWrapper(QString text);
 
+    // 清理小模型的"注记噪声"：整行都是括注 / 语言标签 / 边界符号的行。
+    // 只在 cfg.stripModelNotes == true 时调用（本地 0.5B 场景），云端行为不受影响。
+    static QString stripAnnotationLines(QString text);
+
     config::LlmConfig m_cfg;
     net::IHttpClient *m_http = nullptr;   // 不持有，生命周期由调用方保证
     bool m_cancelRequested = false;
+
+    // 本次 translate() 的源语言（"auto" 或内部码）。
+    // 用它给 prompt 补上「把英文翻译成中文」这类明确指示——
+    // 小模型（0.5B 级）在缺省源语言时经常直接照抄原文。
+    QString m_activeSrcLang;
 };
 
 } // namespace studious::translate

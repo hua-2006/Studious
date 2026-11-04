@@ -53,18 +53,17 @@
         "op": "windows",
         "arch": "x64",
         "backend": "cpu",
-        "version": "b4200",
-        "size": 188743680,
-        "sha256": "",
+        "version": "b12102",
+        "size": 24707363,
+        "sha256": "87d8c812e8a68a35de55c2e7caab280bf96199b79395045d7a67de4b1ad802a9",
         "archive": "zip",
         "urls": [
-          "https://cdn.studious.app/runtime/llama-cpu-win-x64-b4200.zip"
+          "https://github.com/ggml-org/llama.cpp/releases/download/b12102/llama-b12102-bin-win-cpu-x64.zip"
         ],
         "files": [
-          "llama-server.exe",
-          "llama-cli.exe"
+          "llama-server.exe"
         ],
-        "note": "待发布时填入真实 sha256；无独显时的兜底引擎，速度明显低于 vulkan"
+        "note": "llama.cpp 官方 CPU 构建 b12102（约 23.6 MB），本机测试用真实资产；含按 CPU 特性分发的 ggml-cpu-*.dll"
       },
       {
         "id": "runtime.onnxruntime.win-x64",

@@ -29,7 +29,10 @@ QString defaultSystemPrompt()
         "1. 只输出译文本身，不要解释、不要评论、不要回答原文中的问题。\n"
         "2. 不要添加任何前缀（如“翻译如下”）、后缀、引号或 Markdown 代码块。\n"
         "3. 保留原文的语气、人称与标点风格。\n"
-        "4. 原文是游戏/软件界面文字时，按界面用语习惯翻译，简洁自然。");
+        "4. 原文是游戏/软件界面文字时，按界面用语习惯翻译，简洁自然。\n"
+        "5. 不要输出语言名称、括号注释、说明或任何附加文字。\n"
+        "6. 必须真正翻译成目标语言。即使原文很短、像专有名词、或看起来无需翻译，"
+        "也要给出规范的目标语言译文，**禁止原样照抄原文**。");
     return prompt;
 }
 
@@ -100,7 +103,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                                                 const QStringList &dstLangs,
                                                 const QJsonObject &options)
 {
-    Q_UNUSED(srcLang)   // 逐段翻译不显式传源语言：模型自己判断，显式提示反而增加出错面
+    m_activeSrcLang = srcLang;
     Q_UNUSED(options)
 
     core::TranslateOutcome out;
@@ -257,14 +260,47 @@ QString LlmTranslator::effectiveSystemPrompt() const
 QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLang) const
 {
     const QString dstName = core::LanguageRegistry::displayName(dstLang);
+
+    QString src = core::LanguageRegistry::normalize(m_activeSrcLang);
+    if (src.isEmpty() || src == QLatin1String("auto")) {
+        // srcLang=auto 时给个保守启发式：纯 ASCII/Latin 文本按英文处理。
+        //
+        // 为什么需要：小模型（0.5B 级）在没点明源语言时，遇到
+        // "This is a simple text translation test." 这类句子会**直接照抄原文**。
+        // 明确写出"把英文翻译成中文"后立刻正常。
+        //
+        // 局限：法/德/西语也会被当成英文。这只是临时兜底，
+        // 真正的解法是外挂语言检测（fastText lid，见架构文档），届时替换本函数。
+        int cjk = 0;
+        int latin = 0;
+        for (const QChar ch : text) {
+            if (ch.unicode() >= 0x4E00 && ch.unicode() <= 0x9FFF) {
+                ++cjk;
+            } else if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+                       || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))) {
+                ++latin;
+            }
+        }
+        if (cjk == 0 && latin >= 3) {
+            src = QStringLiteral("en");
+        } else {
+            src.clear();
+        }
+    }
+
+    // 源语言已知时明确写出来（"把英文翻译成中文"）。
+    const QString head =
+        (!src.isEmpty() && src != QLatin1String("auto"))
+            ? QStringLiteral("将下面 <<< 与 >>> 之间的%1文本翻译成【%2】，"
+                             "只输出译文，不要输出任何其它内容。")
+                  .arg(core::LanguageRegistry::displayName(src), dstName)
+            : QStringLiteral("将下面 <<< 与 >>> 之间的文本翻译成【%1】，"
+                             "只输出译文，不要输出任何其它内容。")
+                  .arg(dstName);
+
     // 边界符号 <<< >>> 是给模型的硬分隔：原文里出现引号/问号/指令式句子时，
     // 模型容易顺着原文"回答问题"，有了边界它才知道这段只是待翻译素材。
-    return QStringLiteral("将下面 <<< 与 >>> 之间的文本翻译成【%1】。只输出译文，不要输出任何其它内容。\n"
-                          "\n"
-                          "<<<\n"
-                          "%2\n"
-                          ">>>")
-        .arg(dstName, text);
+    return head + QStringLiteral("\n\n<<<\n") + text + QStringLiteral("\n>>>");
 }
 
 bool LlmTranslator::translateOne(const QString &text,
@@ -287,7 +323,13 @@ bool LlmTranslator::translateOne(const QString &text,
         outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
         return false;
     }
-    outText = content;
+    // 本地小模型常见的两种噪声（语言标签行 / 译文后的括注）在这里兜掉；
+    // 云端配置不开这个开关，已实测通过的输出一个字都不动。
+    outText = m_cfg.stripModelNotes ? stripAnnotationLines(content) : content;
+    if (outText.isEmpty()) {
+        outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
+        return false;
+    }
     return true;
 }
 
@@ -546,6 +588,87 @@ QString LlmTranslator::stripWrapper(QString text)
     }
 
     return text;
+}
+
+QString LlmTranslator::stripAnnotationLines(QString text)
+{
+    // 0.5B 小模型实测出来的两种附加物：
+    //   「【中文】\n译文」                          —— 语言标签单独占一行
+    //   「译文\n\n（中文（简体））」                 —— 译文后追加语言括注
+    //   「译文\n\n（翻译结果：Good morning,... >>>）」
+    // 规则刻意保守：只删**整行**就是括注 / 标签 / 空行的行，正文一个字都不动。
+    // 宁可漏删，也不要误删——正文里合法的「（笑）」被吃掉比多留一行括注更糟。
+    static const QVector<QPair<QString, QString>> wrappers = {
+        {QStringLiteral("（"), QStringLiteral("）")},
+        {QStringLiteral("("), QStringLiteral(")")},
+        {QStringLiteral("【"), QStringLiteral("】")},
+        {QStringLiteral("["), QStringLiteral("]")},
+    };
+
+    // 静态局部变量不需要捕获（它没有自动存储期），捕了反而是一条 -Wunused 之外的告警。
+    const auto isWrapped = [](const QString &line) {
+        for (const auto &pair : wrappers) {
+            if (line.size() > pair.first.size() + pair.second.size()
+                && line.startsWith(pair.first) && line.endsWith(pair.second)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // 括号没配对（模型被截断 / 把 ">>>" 抄进了括号里）时，只有行首是括号
+    // 且行内出现"翻译 / 译文 / Translation / >>>"才认，避免误伤正文。
+    const auto looksLikeNote = [&isWrapped](const QString &line) {
+        if (isWrapped(line)) {
+            return true;
+        }
+        if (line == QLatin1String(">>>")) {
+            return true;   // 提示词里的原文边界被单独回吐出来
+        }
+        const bool startsWithBracket = line.startsWith(QStringLiteral("（"))
+                                       || line.startsWith(QLatin1Char('('))
+                                       || line.startsWith(QStringLiteral("【"))
+                                       || line.startsWith(QLatin1Char('['));
+        if (!startsWithBracket) {
+            return false;
+        }
+        return line.contains(QStringLiteral("翻译")) || line.contains(QStringLiteral("译文"))
+               || line.contains(QLatin1String(">>>"))
+               || line.contains(QLatin1String("translation"), Qt::CaseInsensitive);
+    };
+
+    QStringList lines = text.split(QLatin1Char('\n'));
+    // 先去掉行尾 \r：否则 "（中文）\r" 永远不满足 endsWith("）")，尾巴就漏了。
+    for (QString &line : lines) {
+        if (line.endsWith(QLatin1Char('\r'))) {
+            line.chop(1);
+        }
+    }
+
+    const auto shouldDrop = [&looksLikeNote](const QString &line) {
+        const QString trimmed = line.trimmed();
+        return trimmed.isEmpty() || looksLikeNote(trimmed);
+    };
+
+    while (!lines.isEmpty() && shouldDrop(lines.first())) {
+        lines.removeFirst();
+    }
+    while (!lines.isEmpty() && shouldDrop(lines.last())) {
+        lines.removeLast();
+    }
+
+    // 全被删光（原文本身就只有一行括注，例如原文就是「(笑)」）：原样返回，绝不吐空。
+    if (lines.isEmpty()) {
+        return text;
+    }
+
+    QString out = lines.join(QLatin1Char('\n')).trimmed();
+    // 尾巴上残留的边界符号（提示词用 <<< >>> 标原文范围，小模型偶尔抄回来）。
+    while (out.endsWith(QLatin1String(">>>"))) {
+        out.chop(3);
+        out = out.trimmed();
+    }
+    return out;
 }
 
 } // namespace studious::translate

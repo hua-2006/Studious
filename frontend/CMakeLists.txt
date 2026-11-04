@@ -24,6 +24,7 @@ add_executable(studious
     src/MainWindow.cpp
     src/TranslateJob.cpp
     src/AppSettings.cpp
+    src/LocalEngine.cpp
     src/SettingsDialog.cpp
     src/AssetDialog.cpp
 )

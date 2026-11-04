@@ -4,6 +4,7 @@
 #include <QString>
 
 #include "AppSettings.h"
+#include "LocalEngine.h"
 
 #include <studious/contract/Types.h>
 
@@ -40,6 +41,7 @@ private slots:
     void onTranslateClicked();
     void onOpenSettings();
     void onOpenAssets();
+    void onLocalEngineToggled(bool checked);
     void onTranslationFinished(const TranslateJobResult &result, qint64 elapsedMs);
 
 private:
@@ -50,6 +52,10 @@ private:
     void refreshEngineStatus();
     void setStatusOk(const QString &text);
     void setStatusError(const QString &text);
+
+    // 把 req.llm 覆盖成本地引擎的连接参数；返回 false 表示引擎没起来（error 已填好）。
+    // 必须在主线程调用（会阻塞约 1 秒拉起进程），翻译本身仍交给工作线程。
+    bool applyLocalEngineConfig(studious::config::LlmConfig *cfg, QString *error);
 
     QString currentSrcLang() const;
     QString currentDstLang() const;
@@ -68,6 +74,7 @@ private:
     QPushButton *m_assetsButton = nullptr;   // 「资产…」：模型 / 运行时下载与管理
     QCheckBox *m_showSourceCheck = nullptr;
     QCheckBox *m_cacheCheck = nullptr;   // 「启用缓存」
+    QCheckBox *m_localCheck = nullptr;   // 「本地引擎」：本机 llama.cpp 离线翻译
     QPlainTextEdit *m_input = nullptr;
     QPlainTextEdit *m_output = nullptr;
     QLabel *m_status = nullptr;
@@ -76,6 +83,9 @@ private:
     AppSettings m_settings;            // 界面背后的配置（LLM 设置 / 默认语言 / 上次选择）
 
     studious::cache::TranslationCache *m_cache = nullptr;   // 不拥有，进程级共享
+
+    // 本地引擎：懒启动（第一次翻译时才拉 llama-server），关窗即停。
+    LocalEngine m_localEngine;
 
     TranslateJob *m_job = nullptr;
     QStringList m_lastSrcParagraphs;   // 最近一次请求的段落，用于"原文对照"
