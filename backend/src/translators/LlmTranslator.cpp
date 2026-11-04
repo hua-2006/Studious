@@ -371,6 +371,28 @@ QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLa
     return head + QStringLiteral("\n\n<<<\n") + text + QStringLiteral("\n>>>");
 }
 
+// 判断"译文"是否其实就是原文。
+//
+// 小模型（尤其 0.5B）遇到看不懂的输入时会偷懒：直接把原文吐回来。
+// 这必须当成失败，否则用户看到的是"翻译完和没翻一样"，却没有任何提示。
+static bool isUntranslatedOutput(const QString &output, const QString &source)
+{
+    const auto normalize = [](const QString &text) {
+        QString out;
+        out.reserve(text.size());
+        for (const QChar ch : text) {
+            if (!ch.isSpace() && !ch.isPunct()) {
+                out.append(ch.toLower());
+            }
+        }
+        return out;
+    };
+
+    const QString a = normalize(output);
+    const QString b = normalize(source);
+    return !a.isEmpty() && a == b;
+}
+
 bool LlmTranslator::translateOne(const QString &text,
                                  const QString &dstLang,
                                  const QString &endpoint,
@@ -415,6 +437,30 @@ bool LlmTranslator::translateOne(const QString &text,
     if (content.isEmpty()) {
         outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
         return false;
+    }
+
+    // 模型把原文原样吐回来 = 没翻译。先重试一次，仍如此则明确报错，
+    // 而不是把原文当译文显示（用户会以为"翻译坏了却没人告诉他"）。
+    const QString srcNormalized = core::LanguageRegistry::normalize(m_activeSrcLang);
+    const bool sameLanguage = !srcNormalized.isEmpty() && srcNormalized == dstLang;
+    if (!sameLanguage && isUntranslatedOutput(content, text)) {
+        QString retry;
+        QString retryErr;
+        if (postChat(effectiveSystemPrompt(),
+                     prompt + QStringLiteral("\n\n注意：必须翻译成目标语言，禁止返回原文。"),
+                     0.0,
+                     maxTokens,
+                     retry,
+                     retryErr)
+            && !retry.isEmpty()) {
+            content = retry;
+        }
+        if (isUntranslatedOutput(content, text)) {
+            outError = i18n::s("模型没有翻译（把原文原样返回了）。可以换成更大的模型，或手动指定源语言。",
+                               "The model returned the source text unchanged instead of translating. "
+                               "Try a larger model, or set the source language explicitly.");
+            return false;
+        }
     }
     // 本地小模型常见的两种噪声（语言标签行 / 译文后的括注）在这里兜掉；
     // 云端配置不开这个开关，已实测通过的输出一个字都不动。
