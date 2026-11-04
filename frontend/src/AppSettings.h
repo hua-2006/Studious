@@ -30,6 +30,15 @@ struct AppSettings {
     // 连接参数在提交任务前被覆盖成 127.0.0.1:<port>/v1。
     bool useLocalEngine = false;
 
+    // 本地引擎用哪个模型：models/ 下的文件名（键 settings/llm/localModel）。
+    // 空 = 用 availableModels() 的第一个；存着的模型被删了也按空处理（界面会回落到第一项）。
+    QString localModelFileName;
+
+    // 本地引擎是否优先用 GPU（键 settings/llm/localUseGpu，默认 true）。
+    // true 且 vulkan 运行时已安装 -> llama-server 带 -ngl 99；否则自动回落 CPU。
+    // 「优先」是刻意的措辞：没装 vulkan 运行时不会报错，只是当成 false。
+    bool localUseGpu = true;
+
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //
     // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
