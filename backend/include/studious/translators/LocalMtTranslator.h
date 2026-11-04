@@ -2,21 +2,33 @@
 
 #include "contract/ITranslator.h"
 
+#include <QString>
+
+#include <map>
+#include <memory>
+
+namespace studious::mt {
+class MtModel;
+}
+
 namespace studious::translate {
 
-// 本地神经机器翻译组件（v1 为桩实现）。
+// 本地神经机器翻译组件（OPUS-MT / Marian，ONNX Runtime CPU 推理）。
 //
-// 后续实现路线：
-//   1. 推理后端：onnxruntime C API（跨平台预编译二进制最省心），与 llama 一样不引入平台头文件。
-//   2. 模型形态：OPUS-MT 按语言对切分的小模型（导出为 ONNX，100~300MB/对），
-//      用户选什么语言下什么语言；冷门语言对走 en 中转（A -> en -> B 两次推理）。
-//   3. 资产约定：模型包 id 形如 "mt.opus.en-zh"，通过 asset/AssetRegistry 解析与校验，
-//      缺失时由 resolve() 返回 missingAssets 供 UI 下载引导。
-//   4. 语言检测：本地 MT 不自带检测，需外挂轻量检测器（fastText lid / CLD3）或由前端指定源语言。
+// 资产约定：<modelsRoot>/mt.opus.<src>-<dst>/ 下放
+//   encoder_model_quantized.onnx / decoder_model_quantized.onnx
+//   source.spm / target.spm / vocab.json / config.json
 //
-// v1 只落地接口与不可用状态，保证 Router 的降级链先跑通。
+// 语言对策略：
+//   1. 有直连对（如 en-zh、zh-en）就用直连，质量最好；
+//   2. 没有直连但有 A-en 和 en-B → 走英文中转（两次推理）；
+//   3. 都没有 → supports() 返回 false，Router 不会选中，UI 通过 resolve() 提示下载。
 class LocalMtTranslator final : public core::ITranslator {
 public:
+    // modelsRoot 为空时用 %APPDATA%/studious/assets/models（与资产系统一致）。
+    explicit LocalMtTranslator(const QString &modelsRoot = QString());
+    ~LocalMtTranslator() override;
+
     QString id() const override;
     bool isReady() const override;
     core::ResolveResult resolve(const QString &src, const QString &dst) const override;
@@ -27,6 +39,26 @@ public:
                                      const QStringList &dstLangs,
                                      const QJsonObject &options) override;
     void cancel() override;
+
+    QString cacheTag() const override;
+
+    // 当前已安装的语言对（"en-zh" 形式），供 UI 展示。
+    QStringList installedPairs() const;
+
+private:
+    QString pairDir(const QString &src, const QString &dst) const;
+    bool pairAvailable(const QString &src, const QString &dst) const;
+    mt::MtModel *modelFor(const QString &src, const QString &dst);
+    bool translateOne(const QString &text,
+                      const QString &src,
+                      const QString &dst,
+                      QString &outText,
+                      QString &error);
+
+    QString m_modelsRoot;
+    // 注意：不能用 QHash —— Qt 容器要求元素可拷贝，std::unique_ptr 不能拷贝（实测编译不过）。
+    std::map<QString, std::unique_ptr<mt::MtModel>> m_models;   // key: "en-zh"
+    bool m_cancelRequested = false;
 };
 
 } // namespace studious::translate

@@ -37,3 +37,16 @@ target_link_libraries(studious PRIVATE backend Qt6::Widgets Qt6::Concurrent)
 set_target_properties(studious PROPERTIES
     WIN32_EXECUTABLE OFF
 )
+
+# 本地 MT（OPUS-MT）走 onnxruntime，运行期需要 onnxruntime.dll 与 exe 同目录。
+# 依赖 backend 已把 vendored 的 dll 放在 third_party 里（见 backend/CMakeLists.txt 的说明）。
+set(ORT_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../backend/third_party/onnxruntime/lib/onnxruntime.dll")
+if (EXISTS "${ORT_DLL}")
+    add_custom_command(TARGET studious POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ORT_DLL}" "$<TARGET_FILE_DIR:studious>/onnxruntime.dll"
+        COMMENT "Copying onnxruntime.dll next to studious.exe (needed by local MT)"
+    )
+else()
+    message(WARNING "onnxruntime.dll not found at ${ORT_DLL}; local MT will fail at runtime")
+endif()
