@@ -15,6 +15,11 @@ struct LlmConfig {
     double  temperature = 0.2;
     QString systemPrompt;         // 空则用内置默认
 
+    // 重试总预算（毫秒）。translateOne 失败会换策略最多重试 5 次，
+    // 但慢模型（1.5B CPU 约 1.5s/句）连试 5 次可能拖到十几秒。
+    // 超过本预算就不再继续重试，直接返回错误，避免界面长时间无响应。
+    int retryBudgetMs = 30000;
+
     // 思考等级（推理模型专用）。翻译是确定性任务，开思考只增加延迟不提升质量。
     // 取值："none"（默认，彻底关闭）/ "minimal" / "low" / "medium" / "high"，空串 = 不传该参数（跟随服务端默认）。
     //
