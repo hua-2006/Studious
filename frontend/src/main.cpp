@@ -20,6 +20,7 @@
 #include <studious/asset/Downloader.h>
 #include <studious/asset/Manifest.h>
 #include <studious/cache/TranslationCache.h>
+#include <studious/contract/LanguageRegistry.h>
 #include <studious/contract/Types.h>
 #include <studious/i18n/L10n.h>
 #include <studious/llm/LlmCatalog.h>
@@ -296,9 +297,10 @@ int runSmoke(const QStringList &args)
     req.cacheEnabled = cacheEnabled;
 
     say(QStringLiteral("=== Studious 前端冒烟 ==="));
-    say(QStringLiteral("engine=%1  to=%2  src=auto  provider=%3  paragraphs=%4")
+    say(QStringLiteral("engine=%1  to=%2  src=%3  provider=%4  paragraphs=%5")
             .arg(engine.isEmpty() ? QStringLiteral("auto") : engine,
                  to,
+                 req.srcLang,
                  req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
                                             : req.webProviders.join(QLatin1Char(',')))
             .arg(req.paragraphs.size()));
@@ -338,7 +340,14 @@ int runSmoke(const QStringList &args)
             say(QStringLiteral("--- 第 %1/%2 次 ---").arg(round).arg(repeat));
         }
 
-        if (useLocalEngine) {
+        // 源语言与目标语言相同：Router 直接回填原文，用不到引擎。
+        // 这时还去拉起 llama-server（1 秒启动 + 3 秒停止）纯属浪费，直接跳过。
+        const QString srcNorm = studious::core::LanguageRegistry::normalize(req.srcLang);
+        const QString dstNorm = studious::core::LanguageRegistry::normalize(to);
+        const bool sameLanguage =
+            !srcNorm.isEmpty() && srcNorm != QLatin1String("auto") && srcNorm == dstNorm;
+
+        if (useLocalEngine && !sameLanguage) {
             LocalEngineConfig cfg;
             if (!roundModel.isEmpty()) {
                 cfg.modelPath = QDir(LocalEngine::modelsDir()).filePath(roundModel);

@@ -57,6 +57,28 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         dsts = {QStringLiteral("zh")};
     }
 
+    // 业务规则：源语言 == 目标语言时不做任何翻译，原样返回。
+    //
+    // 用户手动选了 zh -> zh，说明他只想"回填原文"（或选错了）。此时调用引擎
+    // 只会拿到复读、改写或乱码，没有任何价值，还白花一次请求。
+    QHash<QString, QStringList> passthrough;
+    if (src != QLatin1String("auto")) {
+        for (int i = dsts.size() - 1; i >= 0; --i) {
+            if (dsts.at(i) == src) {
+                passthrough.insert(dsts.at(i), req.paragraphs);
+                dsts.removeAt(i);
+            }
+        }
+    }
+
+    // 所有目标语言都与源语言相同：直接返回原文，不选引擎、不请求网络。
+    if (dsts.isEmpty()) {
+        out.ok = true;
+        out.byLang = passthrough;
+        m_lastCacheReport = CacheReport{};
+        return out;
+    }
+
     // 组件对"支持哪些目标语言"的判定要逐个问，多目标时要求全支持。
     const auto unsupportedDsts = [&src, &dsts](core::ITranslator *t) {
         QStringList bad;
@@ -157,6 +179,10 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
     // 没开缓存：保持原样，一次调用交出去。
     if (!isCacheEnabled()) {
         out = chosen->translate(req.paragraphs, src, dsts, req.options);
+        // 同语言的目标语言原样回填（它们根本没走引擎）。
+        for (auto it = passthrough.constBegin(); it != passthrough.constEnd(); ++it) {
+            out.byLang.insert(it.key(), it.value());
+        }
         if (!out.ok) {
             const QString inner =
                 out.error.isEmpty() ? i18n::s("未知错误", "unknown error") : out.error;
@@ -222,6 +248,10 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         }
 
         out.byLang.insert(dst, merged);
+    }
+
+    for (auto it = passthrough.constBegin(); it != passthrough.constEnd(); ++it) {
+        out.byLang.insert(it.key(), it.value());
     }
 
     out.ok = errors.isEmpty();
