@@ -33,6 +33,7 @@ set(MINIZ_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz)
 add_library(backend STATIC
     src/contract/LanguageRegistry.cpp
     src/i18n/L10n.cpp
+    src/i18n/LanguageDetector.cpp
     src/net/IHttpClient.cpp
     src/net/QtHttpClient.cpp
     src/translators/adapters/GoogleFreeAdapter.cpp

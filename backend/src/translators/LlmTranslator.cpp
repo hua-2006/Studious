@@ -2,6 +2,7 @@
 
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
+#include "i18n/LanguageDetector.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -9,6 +10,8 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QPair>
+#include <QSet>
+#include <QElapsedTimer>
 #include <QUrl>
 #include <QVector>
 
@@ -419,38 +422,11 @@ QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLa
 
     QString src = core::LanguageRegistry::normalize(m_activeSrcLang);
     if (src.isEmpty() || src == QLatin1String("auto")) {
-        // srcLang=auto 时的保守启发式：
-        //   · 纯拉丁文本 → 按英文处理
-        //   · 中日韩文本 → 按中文处理（目标不是中文时尤其重要：
-        //     不点明源语言，0.5B 会把中文原样吐回来）
-        //
-        // 局限：法/德/西语会被当成英文，日文会被当成中文。
-        // 真正的解法是外挂语言检测（fastText lid，见架构文档），届时替换本函数。
-        int cjk = 0;
-        int kana = 0;
-        int hangul = 0;
-        int latin = 0;
-        for (const QChar ch : text) {
-            const ushort u = ch.unicode();
-            if (u >= 0x4E00 && u <= 0x9FFF) {
-                ++cjk;                       // 汉字
-            } else if (u >= 0x3040 && u <= 0x30FF) {
-                ++kana;                      // 平假名 / 片假名
-            } else if (u >= 0xAC00 && u <= 0xD7AF) {
-                ++hangul;                    // 谚文
-            } else if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
-                       || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))) {
-                ++latin;
-            }
-        }
-        if (kana > 0) {
-            src = QStringLiteral("ja");
-        } else if (hangul > 0) {
-            src = QStringLiteral("ko");
-        } else if (cjk > 0 && cjk * 2 >= latin) {
-            src = QStringLiteral("zh");
-        } else if (cjk == 0 && latin >= 3) {
-            src = QStringLiteral("en");
+        // 用语言识别器替代早先的"数汉字/字母"粗糙启发式。
+        // 置信度不足时宁可不指定源语言（保守），也不要给出错误暗示。
+        const i18n::DetectedLanguage detected = i18n::detectLanguage(text);
+        if (!detected.code.isEmpty() && detected.confidence >= 0.5) {
+            src = detected.code;
         } else {
             src.clear();
         }
@@ -522,6 +498,23 @@ bool LlmTranslator::translateOne(const QString &text,
     const int configured = m_cfg.maxTokens > 0 ? m_cfg.maxTokens : 2048;
     const int maxTokens = qBound(64, qMin(configured, text.size() * 2 + 48), configured);
 
+    // 输入预检：没有任何字母/汉字的内容（纯数字、纯符号、空白）不需要翻译。
+    // 直接原样返回，省一次请求；也避免模型对 "2026-11-04" 这类内容自由发挥。
+    {
+        int letterCount = 0;
+        QSet<QChar> uniqueChars;
+        for (const QChar ch : text) {
+            if (ch.isLetter()) {
+                ++letterCount;
+            }
+            uniqueChars.insert(ch);
+        }
+        if (letterCount == 0 || uniqueChars.size() <= 2) {
+            outText = text;
+            return true;
+        }
+    }
+
     const QString dstName = core::LanguageRegistry::displayName(dstLang);
     const QString srcNormalized = core::LanguageRegistry::normalize(m_activeSrcLang);
     const bool sameLanguage = !srcNormalized.isEmpty() && srcNormalized == dstLang;
@@ -534,7 +527,17 @@ bool LlmTranslator::translateOne(const QString &text,
     // （照抄原文 / 译成别的语言 / 复读），同一条 prompt 重问往往得到同样的结果。
     // 实测把「中文指令 + <<<>>> 分隔符」换成「纯英文指令」能跳出很多坑。
     QString lastError;
+    QElapsedTimer retryBudget;
+    retryBudget.start();
+
     for (int attempt = 1; attempt <= 5; ++attempt) {
+        // 时间预算：慢模型（1.5B CPU 约 1.5s/次）连试 5 次可能拖十几秒，
+        // 超出预算就停手，把"失败原因"及时还给用户，而不是让界面卡住。
+        if (attempt > 1 && m_cfg.retryBudgetMs > 0
+            && retryBudget.elapsed() > m_cfg.retryBudgetMs) {
+            lastError = i18n::s("重试超出时间预算", "the retry budget was exceeded");
+            break;
+        }
         QString systemPrompt = effectiveSystemPrompt();
         QString userPrompt = standardPrompt;
         double temperature = m_cfg.temperature;
