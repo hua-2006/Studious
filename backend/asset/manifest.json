@@ -24,7 +24,7 @@
           "https://www.modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_k_m.gguf"
         ],
         "requiresRamGB": 2,
-        "note": "本机测试用的真实资产：Qwen2.5-0.5B-Instruct Q4_K_M（约 468 MB）。用于验证下载 / 续传 / sha256 校验 / 安装 / 删除整条链路，不是正式发布的翻译模型。"
+        "note": "【0.5B · 轻量快速】中文↔英文稳定、中文→日文可用；英文→日文较弱（质量差时程序会报错而不是给假译文）。内存约 500 MB，CPU 约 180 ms/句，Vulkan 约 60~100 ms/句。适合：游戏对话、界面文本的快速翻译；对质量要求高的长句建议换 1.5B。"
       },
       {
         "id": "model.qwen2.5-1.5b-instruct.q4km",
@@ -37,7 +37,7 @@
           "https://www.modelscope.cn/models/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/master/qwen2.5-1.5b-instruct-q4_k_m.gguf"
         ],
         "requiresRamGB": 4,
-        "note": "本机测试用的第二档模型：Qwen2.5-1.5B-Instruct Q4_K_M（约 1.07 GB）。质量明显好于 0.5B，速度约为其 1/8（CPU）；有显卡时走 Vulkan 更快。"
+        "note": "【1.5B · 质量优先】中文↔英/日明显比 0.5B 通顺，长句更稳；英文→日文仍不稳定（可能重试 5 次后报错）。内存约 1.7 GB，CPU 约 1.5 s/句，Vulkan 约 150~300 ms/句。适合：剧情文本、需要语气的场合；机器内存 4 GB 以下建议选 0.5B。"
       },
       {
         "id": "runtime.llama.vulkan.win-x64",
@@ -132,7 +132,7 @@
         ],
         "requiresRamGB": 6,
         "requiresVramGB": 4,
-        "note": "待发布时填入真实 sha256；默认推荐模型（国内走 ModelScope，海外走 hf-mirror）"
+        "note": "【3B · 待发布】质量与稳定性优于 1.5B，内存约 3 GB（建议 8 GB 以上机器）。适合：长剧情、对译文质量要求高、有独立显卡的用户。"
       },
       {
         "id": "model.qwen2.5-7b-instruct.q4km",
@@ -152,7 +152,7 @@
         ],
         "requiresRamGB": 10,
         "requiresVramGB": 6,
-        "note": "待发布时填入真实 sha256；画质更高但要求 10GB 内存"
+        "note": "【7B · 待发布】质量最高档，内存约 6.3 GB（建议 16 GB 以上 + 8 GB 显存）。适合：追求译文质量的台式机/游戏本。"
       },
       {
         "id": "mt.opus.en-zh",
@@ -177,7 +177,7 @@
           "target.spm"
         ],
         "requiresRamGB": 2,
-        "note": "待发布时填入真实 sha256；本地 MT 语言对，秒级响应、不联网"
+        "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT），内存仅约 250 MB、单句约 100~200 ms，不需要显卡。质量低于上面的 LLM，但胜在轻与快；适合低配机器或追求极低延迟的场景。"
       },
       {
         "id": "mt.opus.zh-en",
@@ -202,7 +202,7 @@
           "target.spm"
         ],
         "requiresRamGB": 2,
-        "note": "待发布时填入真实 sha256；本地 MT 语言对"
+        "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）语言对，内存约 250 MB、单句约 100~200 ms，不需要显卡。质量低于 LLM，胜在轻与快。"
       },
       {
         "id": "mt.opus.en-ja",
@@ -227,7 +227,7 @@
           "target.spm"
         ],
         "requiresRamGB": 2,
-        "note": "待发布时填入真实 sha256；本地 MT 语言对（日文）"
+        "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）语言对，内存约 250 MB、单句约 100~200 ms，不需要显卡。质量低于 LLM，胜在轻与快。（日文）"
       },
       {
         "id": "mt.opus.ja-en",
@@ -252,7 +252,7 @@
           "target.spm"
         ],
         "requiresRamGB": 2,
-        "note": "待发布时填入真实 sha256；本地 MT 语言对（日文→英文）"
+        "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）日→英语言对，内存约 250 MB、单句约 100~200 ms。"
       }
     ]
   },
