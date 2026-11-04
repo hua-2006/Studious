@@ -16,6 +16,7 @@
 #include <QTimer>
 
 #include <studious/asset/AssetRegistry.h>
+#include <studious/asset/Downloader.h>
 #include <studious/asset/Manifest.h>
 #include <studious/cache/TranslationCache.h>
 #include <studious/contract/Types.h>
@@ -25,6 +26,8 @@
 
 #include <cstdio>
 #include <cstring>
+
+#include <atomic>
 
 namespace {
 
@@ -96,6 +99,8 @@ void printUsage()
     say(QStringLiteral("                                     # 打印网关模型目录 + 思考等级，不开 GUI"));
     say(QStringLiteral("  studious.exe --assets-cli <manifest.json>"));
     say(QStringLiteral("                                     # 打印资产清单（类型/大小/状态/占位），不开 GUI"));
+    say(QStringLiteral("  studious.exe --asset-download <manifest.json> <assetId>"));
+    say(QStringLiteral("                                     # 真实下载一个资产（含续传/校验/安装），不开 GUI"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -452,8 +457,112 @@ int runAssetsCli(const QStringList &args)
     return 0;
 }
 
-bool hasFlag(int argc, char *argv[], const char *flag)
+// --asset-download <manifest.json> <assetId>：无界面走一遍**真实**下载链路。
+//
+// 用途：验收「多源 → 续传 → sha256 校验 → 原子安装」，不需要开 GUI 手点。
+// 与 GUI 用完全相同的清单解析选项与安装根目录，所以下载完直接去界面里就能看到「已安装」。
+int runAssetDownload(const QStringList &args)
 {
+    QString manifestPath;
+    QString assetId;
+
+    for (int i = 0; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        if (arg == QLatin1String("--asset-download")) {
+            const bool hasFirst = (i + 1) < args.size() && !args.at(i + 1).startsWith(QLatin1String("--"));
+            if (hasFirst) {
+                manifestPath = args.at(++i);
+            }
+            const bool hasSecond = (i + 1) < args.size() && !args.at(i + 1).startsWith(QLatin1String("--"));
+            if (hasSecond) {
+                assetId = args.at(++i);
+            }
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage();
+            return 0;
+        }
+    }
+
+    if (manifestPath.isEmpty() || assetId.isEmpty()) {
+        say(QStringLiteral("[FAIL] 用法：studious.exe --asset-download <manifest.json> <assetId>"));
+        return 1;
+    }
+
+    QFile file(manifestPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        say(QStringLiteral("[FAIL] 打开清单失败：%1").arg(file.errorString()));
+        return 1;
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+
+    studious::asset::ManifestVerifyOptions opts;
+    opts.requireSignature = false;
+    opts.allowMissingSha256 = true;
+    opts.maxSchemaVersion = 1;
+
+    const studious::asset::ManifestLoadResult parsed = studious::asset::parseManifest(bytes, opts);
+    if (!parsed.ok) {
+        say(QStringLiteral("[FAIL] ") + parsed.error);
+        return 1;
+    }
+
+    const QString installRoot =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("assets"));
+
+    studious::asset::AssetRegistry registry(installRoot, parsed.manifest);
+    studious::net::QtHttpClient http;
+    studious::asset::Downloader downloader(http, registry);
+
+    say(QStringLiteral("=== 真实资产下载 ==="));
+    say(QStringLiteral("清单     = ") + QDir::toNativeSeparators(QFileInfo(manifestPath).absoluteFilePath()));
+    say(QStringLiteral("资产     = ") + assetId);
+    say(QStringLiteral("安装根   = ") + QDir::toNativeSeparators(installRoot));
+    say(QStringLiteral("当前状态 = ") + studious::frontend::assetStateText(registry.status(assetId).state));
+
+    std::atomic_bool cancel{false};
+    int lastPrintedPercent = -1;
+    QElapsedTimer timer;
+    timer.start();
+
+    const studious::asset::DownloadResult result =
+        downloader.download(assetId,
+                            [&](const studious::asset::DownloadProgress &p) {
+                                const int percent =
+                                    p.total > 0 ? static_cast<int>(p.received * 100 / p.total) : -1;
+                                // 每 10% 打一行，避免刷屏又把进度看清楚。
+                                if (percent >= 0 && percent / 10 != lastPrintedPercent / 10) {
+                                    lastPrintedPercent = percent;
+                                    say(QStringLiteral("  %1%  %2 / %3  源 %4/%5")
+                                            .arg(percent)
+                                            .arg(studious::frontend::humanBytes(p.received),
+                                                 studious::frontend::humanBytes(p.total))
+                                            .arg(p.sourceIndex + 1)
+                                            .arg(p.sourceCount));
+                                }
+                            },
+                            &cancel);
+
+    const qint64 elapsed = timer.elapsed();
+    say(QString());
+    if (!result.ok) {
+        // 后端已本地化，直接显示。
+        say(QStringLiteral("[FAIL] ") + result.error);
+        return 1;
+    }
+
+    registry.refresh();
+    const studious::asset::AssetStatus status = registry.status(assetId);
+    say(QStringLiteral("[OK] 下载并安装成功：%1").arg(QDir::toNativeSeparators(result.installedPath)));
+    say(QStringLiteral("     耗时 %1 ms，状态 = %2，占用 %3")
+            .arg(elapsed)
+            .arg(studious::frontend::assetStateText(status.state),
+                 studious::frontend::humanBytes(status.installedBytes)));
+    return 0;
+}
+
+bool hasFlag(int argc, char *argv[], const char *flag){
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], flag) == 0) {
             return true;
@@ -487,6 +596,13 @@ int main(int argc, char *argv[])
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         applyUiLanguageFromSettings();
         return runAssetsCli(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--asset-download")) {
+        QCoreApplication app(argc, argv);
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
+        return runAssetDownload(QCoreApplication::arguments());
     }
 
     QApplication app(argc, argv);

@@ -232,6 +232,9 @@ cmake --build frontend/build
 
 # 资产清单状态
 .\frontend\build\studious.exe --assets-cli backend\asset\manifest.json
+
+# 真实下载某个资产（含多源/续传/校验/安装，不开 GUI）
+.\frontend\build\studious.exe --asset-download backend\asset\manifest.json model.qwen2.5-0.5b-instruct.q4km
 ```
 
 ### 后端自测
