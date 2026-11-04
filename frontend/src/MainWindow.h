@@ -57,6 +57,8 @@ private:
     void refreshEngineStatus();
     void setStatusOk(const QString &text);
     void setStatusError(const QString &text);
+    // 在状态栏追加非阻断提示（琥珀色），保留原有信息。
+    void appendStatusWarning(const QString &warning);
 
     // 把 req.llm 覆盖成本地引擎的连接参数；返回 false 表示引擎没起来（error 已填好）。
     // 必须在主线程调用（会阻塞数百毫秒到数秒拉起进程），翻译本身仍交给工作线程。

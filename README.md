@@ -2,8 +2,10 @@
 
 跨平台截图翻译工具（Windows 优先，Linux 预留）。
 
-> **当前阶段：v0.4 后端能力基本完备，前端为可测试 demo。**
-> 翻译链路（Web / 云端 LLM / 缓存 / 资产下载）已全部打通并实测；截图、OCR、浮层尚未开始。
+> **当前阶段：v0.5 —— 翻译链路完成（Web / 云端 LLM / 本地 llama.cpp + Vulkan / 缓存 / 资产系统），前端为可测试 demo。**
+> 截图、OCR、浮层尚未开始。
+>
+> 📄 详细进度见 [`docs/progress-report.md`](docs/progress-report.md)
 
 ---
 
@@ -33,11 +35,14 @@
 | 已有 | 没有 |
 |---|---|
 | 三种翻译引擎 + 降级链 | ❌ 截图 |
-| 翻译缓存（重复文本 0ms） | ❌ 框选 |
-| 云端 LLM 接入（OpenAI 兼容） | ❌ OCR |
-| 资产下载 / 校验 / 安装 / 删除 | ❌ 结果浮层 |
-| 清单 ed25519 验签 | ❌ 本地 MT 推理 |
-| 后端错误提示中英双语 | ❌ 前端界面文案完整 i18n |
+| 本地 llama.cpp 推理（CPU / Vulkan） | ❌ 框选 |
+| 模型热切换（0.5B ↔ 1.5B） | ❌ OCR |
+| 翻译缓存（重复文本 9ms） | ❌ 结果浮层 |
+| 语言检测（14 种语言） | ❌ 本地 MT（v2） |
+| 资产下载 / 校验 / 安装 / 删除 | ❌ 前端界面完整 i18n |
+| 清单 ed25519 验签 | |
+| 失败重试（最多 5 次）+ 语种校验 | |
+| 后端错误提示中英双语 | |
 
 ---
 
@@ -79,7 +84,8 @@
 
 | 引擎 | 状态 | 质量 | 延迟 | 依赖 |
 |---|---|---|---|---|
-| **llm**（云端） | ✅ | 最好 | 0.9~1.2s | API Key |
+| **llm（本地）** | ✅ | 好 | **102ms**（Vulkan 0.5B） | 需下载 runtime + 模型 |
+| **llm（云端）** | ✅ | 最好 | 0.9~1.2s | API Key |
 | **web / Google** | ✅ | 中 | ~1s | 免费，国内常需代理 |
 | **web / MyMemory** | ✅ | 中 | ~1.3s | 免费兜底 |
 | **web / Azure** | 🚧 仅接口 | — | — | 需 Azure 订阅 Key |
@@ -109,13 +115,32 @@
 
 | 场景 | 耗时 | 备注 |
 |---|---|---|
-| 单段（LLM，关思考） | **1.0~1.2s** | 上游固定首字延迟，非本地开销 |
-| 5 段逐段请求 | 6.4s | 每段各付一次 ~1.1s |
-| **5 段批量合并** | **0.9s** | **7 倍提速** |
+| 本地 0.5B + **Vulkan** | **102 ms** | 预热后 47~71 ms |
+| 本地 0.5B + CPU | 450~563 ms | 6 线程 |
+| 本地 1.5B + CPU | 1,526 ms | 质量更好 |
+| 云端 LLM 单段 | **1.0~1.2s** | 上游固定首字延迟 |
+| 云端 LLM 5 段批量 | **0.9s** | 7 倍提速 |
 | 命中缓存 | **9ms** | 跨进程复用 |
+| 同语言直返 | **1ms** | 不调引擎 |
 | 网关纯网络开销 | 6~62ms | `GET /models` |
 
-> 延迟剖析：`token` 数从 32 涨到 69、输出 4→5，耗时几乎不变 → 瓶颈是**每次请求固定的上游首字延迟**，所以优化方向是「减少请求次数」和「不请求」。
+> 延迟剖析：token 从 32 涨到 69、输出 4→5，耗时几乎不变 → 瓶颈是**每次请求固定的上游首字延迟**。所以优化方向是「减少请求次数」（批量）和「完全不请求」（缓存、同语言直返）。
+
+### 健壮性
+
+小模型会犯的错，代码层都拦住了：
+
+| 失败模式 | 处理 |
+|---|---|
+| 输出 = 原文（没翻） | 检测 → 重试 → 报错 |
+| 复读刷屏 | 输出长度按输入封顶 + 截断 |
+| 目标语言不符（如中文目标吐意大利语） | 字符集校验 → 重试 |
+| 碎片化输出 | 单字符片段占比检测 |
+| 纯数字/符号输入 | 预检直接返回，不发请求 |
+| 源语言选错 | **黄字提示**（不阻断，LLM 能自纠） |
+| 源 = 目标 | 原样返回 + 提示 |
+
+重试策略：**最多 5 次，每次换一种 prompt**（默认 → 加禁止照抄 → 纯英文指令 → 极简 → 高温度），总时长预算 30 秒。
 
 ---
 
@@ -225,17 +250,25 @@ cmake --build frontend/build
 #   --engine  auto|mock|web|llm|local-mt
 #   --provider auto|google|azure|mymemory
 #   --cache on|off
+#   --from <lang>                     源语言（默认 auto，走语言检测）
 #   --llm-base / --llm-key / --llm-model
+
+# 本地引擎
+.\frontend\build\studious.exe --smoke "Hello, world!" --to zh --engine llm --local
+#   --local-gpu on|off                默认 on（Vulkan）
+#   --local-model <文件名>            如 model.qwen2.5-1.5b-instruct.q4km
+#   --switch-demo                     同一进程内逐个模型切换（验证热插拔）
+#   --repeat <n>                      同一句跑 n 次（验证服务复用）
 
 # 拉取网关模型列表
 .\frontend\build\studious.exe --list-models
 
-# 资产清单状态
+# 资产清单状态 / 真实下载
 .\frontend\build\studious.exe --assets-cli backend\asset\manifest.json
-
-# 真实下载某个资产（含多源/续传/校验/安装，不开 GUI）
 .\frontend\build\studious.exe --asset-download backend\asset\manifest.json model.qwen2.5-0.5b-instruct.q4km
 ```
+
+> 本地引擎需要代理时可设环境变量：`HTTPS_PROXY=http://127.0.0.1:7897`（下载器会读取）。
 
 ### 后端自测
 
@@ -313,6 +346,7 @@ cmake --build frontend/build
 
 ## 文档
 
+- [`docs/progress-report.md`](docs/progress-report.md) —— **进度报告**（当前状态、实测数据、问题清单）
 - [`docs/backend-architecture.md`](docs/backend-architecture.md) —— 架构、契约、20 条 ADR、全部踩坑记录
 - [`backend/README.md`](backend/README.md) —— 后端模块与自测说明
 - [`frontend/README.md`](frontend/README.md) —— 前端界面、线程模型、冒烟参数
@@ -324,13 +358,12 @@ cmake --build frontend/build
 
 | 优先级 | 事项 | 说明 |
 |---|---|---|
-| 高 | **真实资产发布** | 填 sha256/URL 并签名，端到端验收下载器 |
-| 高 | **截图链路** | 热键 → 抓屏 → 框选 → OCR → 翻译 → 浮层 |
-| 中 | 本地 MT 运行时 | onnxruntime + OPUS-MT，语言对 + 英文中转 |
-| 中 | 前端界面文案 i18n | 目前只有资产对话框双语 |
-| 中 | 预翻译 | galgame 提前翻后续句，命中缓存 → 感知延迟趋零 |
-| 低 | 本地 LLM | llama-server 子进程（CPU + Vulkan） |
-| 低 | Linux 支持 | 仅占位；首版限 X11 |
+| **P0** | **截图链路** | 热键 → 抓屏 → 框选 → OCR → 翻译 → 浮层（产品主线） |
+| P1 | 前端界面完整 i18n | 目前只有资产对话框双语 |
+| P2 | 失败原因分级展示 | 区分「换模型 / 换网络 / 内容不可译」 |
+| P3 | 本地 MT（OPUS-MT） | v2；源语言选错会出垃圾，需强制检测 |
+| P4 | 预翻译 + 缓存导入导出 | galgame 感知延迟趋零 |
+| P5 | 本地 LLM 更大模型（3B/7B） | 清单已预留，填 sha256/URL 即可 |
 
 ---
 

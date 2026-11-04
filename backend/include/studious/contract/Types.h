@@ -29,6 +29,14 @@ struct TranslateOutcome {
     bool ok = false;
     QHash<QString, QStringList> byLang;  // dstLang -> 段落译文
     QString error;
+
+    // 非阻断提示：翻译已成功，但有值得告知用户的情况（例如源语言可疑）。
+    // 前端用醒目但非错误的方式展示（状态栏黄字），不影响译文。
+    QString warning;
+
+    // true 表示"源语言与目标语言相同，未调用引擎，原样返回了原文"。
+    // 前端据此告诉用户"这是原文不是译文"，避免误以为翻译失败。
+    bool passthrough = false;
 };
 
 } // namespace studious::core
