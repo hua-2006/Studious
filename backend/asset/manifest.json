@@ -167,9 +167,7 @@
         "size": 123629196,
         "sha256": "925d3b0ccb42369920be6fde4e2a7fca6c01683cc0245b2d382fe662c2b82d95",
         "archive": "zip",
-        "urls": [
-          "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-zh/resolve/main/opus-mt-en-zh.zip"
-        ],
+        "urls": [],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -193,9 +191,7 @@
         "size": 123958398,
         "sha256": "e0694c20f2cdc79790f8b682478793400f63ac626900b9bbdf5431734698c526",
         "archive": "zip",
-        "urls": [
-          "https://hf-mirror.com/Helsinki-NLP/opus-mt-zh-en/resolve/main/opus-mt-zh-en.zip"
-        ],
+        "urls": [],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -219,9 +215,7 @@
         "size": 99913125,
         "sha256": "9faa9f105b8b2c3845f9ce05f19e8dd98c30280f0d5401337c28a7fb3eed33b0",
         "archive": "zip",
-        "urls": [
-          "https://hf-mirror.com/Helsinki-NLP/opus-mt-en-jap/resolve/main/opus-mt-en-jap.zip"
-        ],
+        "urls": [],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -245,9 +239,7 @@
         "size": 102673294,
         "sha256": "2256ab25adfcc7a1abcc7f5fcfef6047e1a52476dd9614c8f16008513b69430e",
         "archive": "zip",
-        "urls": [
-          "https://hf-mirror.com/Helsinki-NLP/opus-mt-ja-en/resolve/main/opus-mt-ja-en.zip"
-        ],
+        "urls": [],
         "files": [
           "encoder_model_quantized.onnx",
           "decoder_model_quantized.onnx",
@@ -257,6 +249,42 @@
         ],
         "requiresRamGB": 2,
         "note": "【本地 MT · v2 计划】轻量机器翻译（OPUS-MT）日→英语言对，内存约 250 MB、单句约 100~200 ms。"
+      },
+      {
+        "id": "mt.opus.en-mul",
+        "type": "model",
+        "family": "opus-mt",
+        "size": 116360010,
+        "archive": "zip",
+        "sha256": "4aba65e2313e38f0de74a3ecfb77e6be527afd15690c8d64facaa983eee8711a",
+        "urls": [],
+        "files": [
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
+          "source.spm",
+          "target.spm",
+          "vocab.json"
+        ],
+        "requiresRamGB": 2,
+        "note": "【多语言 · 英→200 种语言】OPUS-MT 多语言模型（int8，约 111 MB）。源语言固定英语，目标语言靠句首 token >>zho_Hans<< 指定。质量低于单对模型，但一个模型覆盖上百种语言，用于冷门语言兜底。"
+      },
+      {
+        "id": "mt.opus.mul-en",
+        "type": "model",
+        "family": "opus-mt",
+        "size": 104006407,
+        "archive": "zip",
+        "sha256": "ce00022bb956bc9d6234d509acc9ac050dad648dc45f978edfcce097008161f6",
+        "urls": [],
+        "files": [
+          "encoder_model_quantized.onnx",
+          "decoder_model_quantized.onnx",
+          "source.spm",
+          "target.spm",
+          "vocab.json"
+        ],
+        "requiresRamGB": 2,
+        "note": "【多语言 · 200 种语言→英】OPUS-MT 多语言模型（int8，约 99 MB）。任意语言译成英语；与 en-mul 组合可覆盖「任意→任意」（经英文中转，质量略降）。"
       }
     ]
   },
