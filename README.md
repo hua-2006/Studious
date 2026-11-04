@@ -2,10 +2,10 @@
 
 跨平台截图翻译工具（Windows 优先，Linux 预留）。
 
-> **当前阶段：v0.5 —— 翻译链路完成（Web / 云端 LLM / 本地 llama.cpp + Vulkan / 缓存 / 资产系统），前端为可测试 demo。**
+> **当前阶段：v0.6 —— 翻译链路完整可用（Web / 云端 LLM / 本地 LLM / 本地 MT + 多语言兜底），前端为可测试 demo。**
 > 截图、OCR、浮层尚未开始。
 >
-> 📄 详细进度见 [`docs/progress-report.md`](docs/progress-report.md)
+> 📄 进度报告：[`docs/progress-report.md`](docs/progress-report.md) ｜ 测试报告：[`docs/test-report-2026-11-05.md`](docs/test-report-2026-11-05.md) ｜ **接手先读**：[`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 ---
 
@@ -34,12 +34,13 @@
 
 | 已有 | 没有 |
 |---|---|
-| 三种翻译引擎 + 降级链 | ❌ 截图 |
-| 本地 llama.cpp 推理（CPU / Vulkan） | ❌ 框选 |
-| 模型热切换（0.5B ↔ 1.5B） | ❌ OCR |
-| 翻译缓存（重复文本 9ms） | ❌ 结果浮层 |
-| 语言检测（14 种语言） | ❌ 本地 MT（v2） |
-| 资产下载 / 校验 / 安装 / 删除 | ❌ 前端界面完整 i18n |
+| 四类翻译引擎 + 降级链 | ❌ 截图 |
+| **本地 MT（OPUS-MT，6 个语言对 + 多语言兜底）** | ❌ 框选 |
+| 本地 llama.cpp 推理（CPU / Vulkan） | ❌ OCR |
+| 模型热切换（0.5B ↔ 1.5B） | ❌ 结果浮层 |
+| 翻译缓存（重复文本 9ms） | ❌ 前端界面完整 i18n |
+| 语言检测（14 种语言） | |
+| 资产下载 / 校验 / 安装 / 删除 / 手动导入 | |
 | 清单 ed25519 验签 | |
 | 失败重试（最多 5 次）+ 语种校验 | |
 | 后端错误提示中英双语 | |
@@ -84,13 +85,13 @@
 
 | 引擎 | 状态 | 质量 | 延迟 | 依赖 |
 |---|---|---|---|---|
+| **local-mt（本地 MT）** | ✅ | 中 | **237~751 ms** | 下载语言包（约 100 MB/对） |
 | **llm（本地）** | ✅ | 好 | **102ms**（Vulkan 0.5B） | 需下载 runtime + 模型 |
 | **llm（云端）** | ✅ | 最好 | 0.9~1.2s | API Key |
 | **web / Google** | ✅ | 中 | ~1s | 免费，国内常需代理 |
 | **web / MyMemory** | ✅ | 中 | ~1.3s | 免费兜底 |
 | **web / Azure** | 🚧 仅接口 | — | — | 需 Azure 订阅 Key |
 | **mock** | ✅ | — | 4ms | 离线自测 |
-| **local-mt** | 🚧 桩 | — | — | v2 |
 
 降级链：`mock → web → llm → local-mt`（可配置）。
 
@@ -282,7 +283,11 @@ cmake --build frontend/build
 .\backend\build\backend_selftest.exe --cache      # 缓存命中/失效
 .\backend\build\backend_selftest.exe --manifest   # 清单验签（11 用例）
 .\backend\build\backend_selftest.exe --i18n       # 中英双语
-.\backend\build\backend_selftest.exe --assets     # 下载/续传/取消/zip-slip/删除（11 用例）
+.\backend\build\backend_selftest.exe --assets     # 下载/续传/取消/zip-slip/删除（13 用例）
+.\backend\build\backend_selftest.exe --mt         # 本地 MT 4 个直连语言对
+.\backend\build\backend_selftest.exe --mt-mul     # 多语言模型兜底（5 正向 + 2 拒译）
+.\backend\build\backend_selftest.exe --mt-bench   # KV cache / beam 对比
+.\backend\build\backend_selftest.exe --mt-tok     # 分词诊断
 ```
 
 ---
@@ -346,7 +351,9 @@ cmake --build frontend/build
 
 ## 文档
 
-- [`docs/progress-report.md`](docs/progress-report.md) —— **进度报告**（当前状态、实测数据、问题清单）
+- [`docs/HANDOFF.md`](docs/HANDOFF.md) —— **交接文档**（下一个接手的人先读这个）
+- [`docs/test-report-2026-11-05.md`](docs/test-report-2026-11-05.md) —— 后端接口测试报告（63 条断言）
+- [`docs/progress-report.md`](docs/progress-report.md) —— 进度报告（当前状态、实测数据、问题清单）
 - [`docs/backend-architecture.md`](docs/backend-architecture.md) —— 架构、契约、20 条 ADR、全部踩坑记录
 - [`backend/README.md`](backend/README.md) —— 后端模块与自测说明
 - [`frontend/README.md`](frontend/README.md) —— 前端界面、线程模型、冒烟参数
@@ -360,10 +367,10 @@ cmake --build frontend/build
 |---|---|---|
 | **P0** | **截图链路** | 热键 → 抓屏 → 框选 → OCR → 翻译 → 浮层（产品主线） |
 | P1 | 前端界面完整 i18n | 目前只有资产对话框双语 |
+| P1 | MT 的 UX 补丁 | 显示「经英文中转」、失败时给「去下载」按钮 |
 | P2 | 失败原因分级展示 | 区分「换模型 / 换网络 / 内容不可译」 |
-| P3 | 本地 MT（OPUS-MT） | v2；源语言选错会出垃圾，需强制检测 |
-| P4 | 预翻译 + 缓存导入导出 | galgame 感知延迟趋零 |
-| P5 | 本地 LLM 更大模型（3B/7B） | 清单已预留，填 sha256/URL 即可 |
+| P3 | 预翻译 + 缓存导入导出 | galgame 感知延迟趋零 |
+| P4 | 抽 ONNX control-flow 子图 | 吃满 KV cache 收益（需 python onnx） |
 
 ---
 
