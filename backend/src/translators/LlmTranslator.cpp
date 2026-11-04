@@ -42,6 +42,57 @@ int effectiveTimeout(const config::LlmConfig &cfg)
     return cfg.timeoutMs > 0 ? cfg.timeoutMs : 60000;
 }
 
+// 复读检测。小模型（0.5B 级）偶发把同一短语重复上百次，
+// 输出可以涨到几千字、耗时飙到七八秒。
+//
+// 判据二选一：
+//   1. 输出长度远超原文（> 4 倍 + 120 字符）—— 正常译文不会这样
+//   2. 末尾 12 个字符在全文里出现 ≥ 4 次 —— 典型的"卡住复读"
+bool looksDegenerate(const QString &output, const QString &source)
+{
+    if (output.size() > source.size() * 4 + 120) {
+        return true;
+    }
+    if (output.size() < 40) {
+        return false;
+    }
+
+    const QString tail = output.right(12);
+    if (tail.trimmed().size() < 4) {
+        return false;   // 纯标点/空白结尾，不足以判断
+    }
+
+    int count = 0;
+    int pos = 0;
+    while ((pos = output.indexOf(tail, pos)) >= 0) {
+        ++count;
+        pos += tail.size();
+    }
+    return count >= 4;
+}
+
+// 把复读尾巴截掉：找到第二次出现的位置，从那里切断。
+QString truncateRepetition(const QString &output)
+{
+    if (output.size() < 40) {
+        return output;
+    }
+    const QString tail = output.right(12);
+    if (tail.trimmed().size() < 4) {
+        return output;
+    }
+
+    const int first = output.indexOf(tail);
+    if (first < 0) {
+        return output;
+    }
+    const int second = output.indexOf(tail, first + tail.size());
+    if (second > 0 && second < output.size() - tail.size()) {
+        return output.left(second).trimmed();
+    }
+    return output;
+}
+
 } // namespace
 
 LlmTranslator::LlmTranslator() = default;
@@ -263,27 +314,44 @@ QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLa
 
     QString src = core::LanguageRegistry::normalize(m_activeSrcLang);
     if (src.isEmpty() || src == QLatin1String("auto")) {
-        // srcLang=auto 时给个保守启发式：纯 ASCII/Latin 文本按英文处理。
+        // srcLang=auto 时的保守启发式：
+        //   · 纯拉丁文本 → 按英文处理
+        //   · 中日韩文本 → 按中文处理（目标不是中文时尤其重要：
+        //     不点明源语言，0.5B 会把中文原样吐回来）
         //
-        // 为什么需要：小模型（0.5B 级）在没点明源语言时，遇到
-        // "This is a simple text translation test." 这类句子会**直接照抄原文**。
-        // 明确写出"把英文翻译成中文"后立刻正常。
-        //
-        // 局限：法/德/西语也会被当成英文。这只是临时兜底，
+        // 局限：法/德/西语会被当成英文，日文会被当成中文。
         // 真正的解法是外挂语言检测（fastText lid，见架构文档），届时替换本函数。
         int cjk = 0;
+        int kana = 0;
+        int hangul = 0;
         int latin = 0;
         for (const QChar ch : text) {
-            if (ch.unicode() >= 0x4E00 && ch.unicode() <= 0x9FFF) {
-                ++cjk;
+            const ushort u = ch.unicode();
+            if (u >= 0x4E00 && u <= 0x9FFF) {
+                ++cjk;                       // 汉字
+            } else if (u >= 0x3040 && u <= 0x30FF) {
+                ++kana;                      // 平假名 / 片假名
+            } else if (u >= 0xAC00 && u <= 0xD7AF) {
+                ++hangul;                    // 谚文
             } else if ((ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
                        || (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))) {
                 ++latin;
             }
         }
-        if (cjk == 0 && latin >= 3) {
+        if (kana > 0) {
+            src = QStringLiteral("ja");
+        } else if (hangul > 0) {
+            src = QStringLiteral("ko");
+        } else if (cjk > 0 && cjk * 2 >= latin) {
+            src = QStringLiteral("zh");
+        } else if (cjk == 0 && latin >= 3) {
             src = QStringLiteral("en");
         } else {
+            src.clear();
+        }
+
+        // 源语言与目标语言相同就没有"翻译"可言，按自动处理。
+        if (!src.isEmpty() && src == dstLang) {
             src.clear();
         }
     }
@@ -311,14 +379,39 @@ bool LlmTranslator::translateOne(const QString &text,
 {
     Q_UNUSED(endpoint)   // 端点已在 postChat 内部按配置拼接
 
+    // 输出上限按输入长度估算：小模型陷入复读时，2,048 token 会烧掉七八秒，
+    // 而正常译文不会超过原文两倍长度。这里把损耗封顶。
+    const int configured = m_cfg.maxTokens > 0 ? m_cfg.maxTokens : 2048;
+    const int maxTokens = qBound(64, qMin(configured, text.size() * 2 + 48), configured);
+
+    const QString prompt = buildUserPrompt(text, dstLang);
+
     QString content;
     QString err;
-    const int maxTokens = m_cfg.maxTokens > 0 ? m_cfg.maxTokens : 2048;
-    if (!postChat(effectiveSystemPrompt(), buildUserPrompt(text, dstLang),
-                  m_cfg.temperature, maxTokens, content, err)) {
+    if (!postChat(effectiveSystemPrompt(), prompt, m_cfg.temperature, maxTokens, content, err)) {
         outError = err;
         return false;
     }
+
+    // 复读检测：小模型（0.5B 级）偶发把同一短语重复上百次。
+    // 先降温度重试一次，仍复读就把多余部分截掉——宁可给半句，也不要刷屏。
+    if (looksDegenerate(content, text)) {
+        QString retry;
+        QString retryErr;
+        if (postChat(effectiveSystemPrompt(),
+                     prompt + QStringLiteral("\n\n只输出一次译文，不要重复任何内容。"),
+                     0.0,
+                     maxTokens,
+                     retry,
+                     retryErr)
+            && !retry.isEmpty()) {
+            content = retry;
+        }
+        if (looksDegenerate(content, text)) {
+            content = truncateRepetition(content);
+        }
+    }
+
     if (content.isEmpty()) {
         outError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
         return false;
