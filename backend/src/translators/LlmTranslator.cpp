@@ -93,6 +93,28 @@ QString truncateRepetition(const QString &output)
     return output;
 }
 
+// 判断文本里是否含中日韩字符。
+//
+// 用途：目标语言是拉丁语系（英/法/德…）时，译文里不该再出现中日韩文字。
+// 一旦出现，说明模型没翻完或直接照抄 —— 这是 0.5B 级模型最常见的失败形态。
+bool containsCjk(const QString &text)
+{
+    for (const QChar ch : text) {
+        const ushort u = ch.unicode();
+        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3040 && u <= 0x30FF)
+            || (u >= 0xAC00 && u <= 0xD7AF)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool targetUsesCjk(const QString &dstLang)
+{
+    return dstLang == QLatin1String("zh") || dstLang == QLatin1String("zh-TW")
+           || dstLang == QLatin1String("ja") || dstLang == QLatin1String("ko");
+}
+
 } // namespace
 
 LlmTranslator::LlmTranslator() = default;
@@ -368,7 +390,18 @@ QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLa
 
     // 边界符号 <<< >>> 是给模型的硬分隔：原文里出现引号/问号/指令式句子时，
     // 模型容易顺着原文"回答问题"，有了边界它才知道这段只是待翻译素材。
-    return head + QStringLiteral("\n\n<<<\n") + text + QStringLiteral("\n>>>");
+    QString prompt = head;
+
+    // 中日韩 -> 拉丁语系时加一句硬约束。
+    // 实测小模型会把整段原文照抄回来（温度 0 也照旧），点明"不许出现原文文字"后正常。
+    const bool srcIsCjk = !src.isEmpty()
+                          && (src == QLatin1String("zh") || src == QLatin1String("zh-TW")
+                              || src == QLatin1String("ja") || src == QLatin1String("ko"));
+    if (srcIsCjk && !targetUsesCjk(dstLang)) {
+        prompt += QStringLiteral("译文中不得出现任何中文、日文或韩文字符。");
+    }
+
+    return prompt + QStringLiteral("\n\n<<<\n") + text + QStringLiteral("\n>>>");
 }
 
 // 判断"译文"是否其实就是原文。
@@ -431,6 +464,38 @@ bool LlmTranslator::translateOne(const QString &text,
         }
         if (looksDegenerate(content, text)) {
             content = truncateRepetition(content);
+        }
+    }
+
+    // 部分照抄：目标语言是拉丁语系，译文里却还残留中日韩文字。
+    //
+    // 实测（0.5B + Vulkan）「中文指令 + <<< >>> 分隔符」这种中英混排 prompt
+    // 反而会诱导模型复读原文，且 temperature=0 也照旧；
+    // 换成「纯英文指令 + 明确禁止输出源语言字符」立刻正常。
+    // 所以这里换一套 prompt 重试，而不是简单再问一遍。
+    if (!targetUsesCjk(dstLang) && containsCjk(content)) {
+        const QString dstNameForRetry = core::LanguageRegistry::displayName(dstLang);
+        QString retry;
+        QString retryErr;
+        const QString englishPrompt =
+            QStringLiteral("Translate the following text into %1. "
+                           "Output only the translation, with no characters from the source language.")
+                .arg(dstNameForRetry);
+        if (postChat(QStringLiteral("You are a professional translation engine. "
+                                    "Output only the translation, nothing else."),
+                     englishPrompt + QStringLiteral("\n\n") + text,
+                     0.0,
+                     maxTokens,
+                     retry,
+                     retryErr)
+            && !retry.isEmpty() && !containsCjk(retry)) {
+            content = retry;
+        }
+        if (containsCjk(content)) {
+            outError = i18n::s("模型没有完成翻译（译文中仍含有原文文字）。可以换成更大的模型。",
+                               "The model did not finish translating: the output still contains source-language "
+                               "characters. Try a larger model.");
+            return false;
         }
     }
 
