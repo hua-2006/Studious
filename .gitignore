@@ -21,6 +21,9 @@ CMakeUserPresets.json
 *.exe
 *.dll
 
+# 例外：vendored 的运行时 DLL 必须入库，否则新克隆无法构建/运行本地 MT
+!backend/third_party/onnxruntime/lib/onnxruntime.dll
+
 # Qt 生成物
 moc_*.cpp
 moc_*.h
