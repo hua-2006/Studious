@@ -21,8 +21,9 @@ CMakeUserPresets.json
 *.exe
 *.dll
 
-# 例外：vendored 的运行时 DLL 必须入库，否则新克隆无法构建/运行本地 MT
+# 例外：vendored 的运行时 DLL / 导入库必须入库，否则新克隆无法构建/运行本地 MT
 !backend/third_party/onnxruntime/lib/onnxruntime.dll
+!backend/third_party/onnxruntime/lib/onnxruntime.lib
 
 # Qt 生成物
 moc_*.cpp
@@ -45,14 +46,19 @@ ui_*.h
 *.sdf
 
 # 运行时资产（模型、推理引擎，不入库）
-runtime/
-models/
-downloads/
+# 必须带前导斜杠锚定到仓库根：裸写 `runtime/` / `cache/` 会连
+# backend/src/runtime/ 和 backend/src/cache/ 一起吞掉，导致新克隆 configure 就失败。
+/runtime/
+/models/
+/downloads/
+
+# 字体：整套 260 MB，不入库。缺失时程序回落到系统字体。
+/font/
 
 # 日志与缓存
 *.log
-logs/
-cache/
+/logs/
+/cache/
 *.sqlite
 *.db
 

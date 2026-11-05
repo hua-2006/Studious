@@ -6,47 +6,126 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# MainWindow / TranslateJob 都是 QObject 子类，必须开 moc。
-set(CMAKE_AUTOMOC ON)
+# Qt Quick 渲染栈。不再需要 Widgets：界面全部由 QML 描述。
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Qml Concurrent)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Concurrent)
+qt_standard_project_setup(REQUIRES 6.5)
 
-# 后端作为子目录引入，目标是静态库 backend（对外导出 include 目录 + Qt6::Core / Qt6::Network）。
-# 注意：backend/CMakeLists.txt 里的 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ...) 只作用于它自己的
-# 子目录 scope，不会把我们的 studious.exe 挪进 backend/build。
+# 后端作为子目录引入（静态库 backend，导出 include + Qt6::Core/Network/Sql）。
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../backend ${CMAKE_BINARY_DIR}/backend)
 
-# 故意不加 WIN32：
-#   WIN32 子系统会砍掉控制台，--smoke 的输出就看不见了。
-#   保持控制台子系统时，GUI 依然能正常弹窗，且 smoke 输出直接可见（亲测）。
-add_executable(studious
+# 平台抽象层（截图 / OCR / 浮层 / 热键的接缝，实现仍是空桩）。
+add_library(studious_platform STATIC
+    src/platform/NullPlatform.cpp
+    src/platform/PlatformFactory.cpp
+)
+target_include_directories(studious_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui)
+
+qt_add_executable(studious
     src/main.cpp
-    src/MainWindow.cpp
-    src/TranslateJob.cpp
+    src/AppBackend.cpp
+    src/AppBackend.h
     src/AppSettings.cpp
+    src/AppSettings.h
     src/LocalEngine.cpp
-    src/SettingsDialog.cpp
-    src/AssetDialog.cpp
+    src/LocalEngine.h
+    src/TranslateJob.cpp
+    src/TranslateJob.h
+    src/AssetFormat.h
+    src/i18n/Strings.cpp
+    src/i18n/Strings.h
+)
+
+# QML 模块：URI = Studious，页面与组件全部注册进去，运行期用 import Studious 1.0。
+#
+# Theme.qml 必须显式标成 singleton：qmldir 生成器没有从 `pragma Singleton`
+# 自动推断出来（生成的是 `Theme 1.0` 而不是 `singleton Theme 1.0`），
+# 结果所有 Theme.xxx 绑定静默失败、布局全塌。
+set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
+qt_add_qml_module(studious
+    URI Studious
+    VERSION 1.0
+    QML_FILES
+        qml/Main.qml
+        qml/Theme.qml
+        qml/components/SectionCard.qml
+        qml/components/FieldRow.qml
+        qml/components/AppChip.qml
+        qml/components/Segmented.qml
+        qml/components/AppToggle.qml
+        qml/components/Badge.qml
+        qml/components/StatusDot.qml
+        qml/components/AppButton.qml
+        qml/components/AppTextField.qml
+        qml/components/AppComboBox.qml
+        qml/components/Stub.qml
+        qml/pages/TranslatePage.qml
+        qml/pages/HotkeysPage.qml
+        qml/pages/ConfigPage.qml
+        qml/pages/SettingsPage.qml
+        qml/pages/AppearancePage.qml
+    RESOURCES
+        resources/icons/brand.svg
+        resources/icons/translate.svg
+        resources/icons/keyboard.svg
+        resources/icons/tune.svg
+        resources/icons/settings.svg
+        resources/icons/palette.svg
+        resources/icons/database.svg
+        resources/icons/globe.svg
+        resources/icons/download.svg
+        resources/icons/folder.svg
+        resources/icons/info.svg
 )
 
 target_include_directories(studious PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-# Qt6::Concurrent 提供 QtConcurrent::run（工作线程跑翻译）。
-target_link_libraries(studious PRIVATE backend Qt6::Widgets Qt6::Concurrent)
+# 提交号在配置期从 git 取（版本号/渠道名读仓库根的 version.json，不在这里写死）。
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+    OUTPUT_VARIABLE STUDIOUS_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT STUDIOUS_GIT_COMMIT)
+    set(STUDIOUS_GIT_COMMIT "unknown")
+endif()
+
+# 字体目录：仓库根的 font/（思源黑体做界面、霞鹜文楷做译文）。
+# 直接指源码目录，不往输出目录拷 —— 两套字体加起来 200 MB，拷贝纯属浪费。
+target_compile_definitions(studious PRIVATE
+    STUDIOUS_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../font"
+    STUDIOUS_COMMIT="${STUDIOUS_GIT_COMMIT}"
+)
+
+target_link_libraries(studious PRIVATE
+    backend
+    studious_platform
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::QuickControls2
+    Qt6::Concurrent
+    Qt6::Qml
+)
 
 set_target_properties(studious PROPERTIES
     WIN32_EXECUTABLE OFF
 )
 
-# 本地 MT（OPUS-MT）走 onnxruntime，运行期需要 onnxruntime.dll 与 exe 同目录。
-# 依赖 backend 已把 vendored 的 dll 放在 third_party 里（见 backend/CMakeLists.txt 的说明）。
-set(ORT_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../backend/third_party/onnxruntime/lib/onnxruntime.dll")
-if (EXISTS "${ORT_DLL}")
-    add_custom_command(TARGET studious POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ORT_DLL}" "$<TARGET_FILE_DIR:studious>/onnxruntime.dll"
-        COMMENT "Copying onnxruntime.dll next to studious.exe (needed by local MT)"
-    )
-else()
-    message(WARNING "onnxruntime.dll not found at ${ORT_DLL}; local MT will fail at runtime")
+# 本地 MT（OPUS-MT）运行期需要 onnxruntime.dll 与 exe 同目录。
+if(WIN32)
+    set(ORT_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../backend/third_party/onnxruntime/lib/onnxruntime.dll")
+    if (EXISTS "${ORT_DLL}")
+        add_custom_command(TARGET studious POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ORT_DLL}" "$<TARGET_FILE_DIR:studious>/onnxruntime.dll"
+            COMMENT "Copying onnxruntime.dll next to studious.exe (needed by local MT)"
+        )
+    else()
+        message(WARNING "onnxruntime.dll not found at ${ORT_DLL}; local MT will fail at runtime")
+    endif()
 endif()

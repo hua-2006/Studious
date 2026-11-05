@@ -1,19 +1,29 @@
+#include "AppBackend.h"
 #include "AppSettings.h"
 #include "AssetFormat.h"
 #include "LocalEngine.h"
-#include "MainWindow.h"
 #include "TranslateJob.h"
+#include "i18n/Strings.h"
+#include "platform/IPlatform.h"
 
-#include <QApplication>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QGuiApplication>
+#include <QImage>
 #include <QObject>
+#include <QPalette>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQuickStyle>
+#include <QQuickWindow>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QStyleHints>
 #include <QTimer>
 
 #include <studious/asset/AssetRegistry.h>
@@ -32,6 +42,67 @@
 #include <atomic>
 
 namespace {
+
+// 装载一个字体文件，返回它注册的字体族名（失败返回空串）。
+// 用族名而不是文件名，是因为 QML 的 font.family 认的是族名（如 "Source Han Sans SC"）。
+QString loadFontFamily(const QString &path)
+{
+    const int id = QFontDatabase::addApplicationFont(path);
+    if (id < 0) {
+        std::fprintf(stderr, "[font] 装载失败: %s\n", path.toUtf8().constData());
+        return QString();
+    }
+    const QStringList families = QFontDatabase::applicationFontFamilies(id);
+    return families.isEmpty() ? QString() : families.first();
+}
+
+// 装载界面字体 / 译文字体 / 等宽字体，返回 (ui, content, mono)。
+struct FontSet {
+    QString ui;
+    QString content;
+    QString mono;
+};
+
+FontSet loadBundledFonts()
+{
+    const QString root = QStringLiteral(STUDIOUS_FONT_DIR);
+    const QString uiDir = root + QStringLiteral("/UI_OTF/SimplifiedChinese");
+    const QString contentDir = root + QStringLiteral("/centent-v1.530");
+
+    FontSet fonts;
+
+    // 界面：思源黑体 SC。Regular + Medium + Bold 三个字重，
+    // 让 QML 里的 Font.Normal / DemiBold / Bold 都能落到真字形上。
+    fonts.ui = loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Regular.otf"));
+    loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Medium.otf"));
+    loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Bold.otf"));
+
+    // 译文：霞鹜文楷。
+    fonts.content = loadFontFamily(contentDir + QStringLiteral("/LXGWWenKai-Regular.ttf"));
+    loadFontFamily(contentDir + QStringLiteral("/LXGWWenKai-Medium.ttf"));
+
+    // 等宽：霞鹜文楷 Mono。
+    fonts.mono = loadFontFamily(contentDir + QStringLiteral("/LXGWWenKaiMono-Regular.ttf"));
+
+    if (fonts.ui.isEmpty()) {
+        fonts.ui = QStringLiteral("Segoe UI Variable");
+    }
+    if (fonts.content.isEmpty()) {
+        fonts.content = fonts.ui;
+    }
+    if (fonts.mono.isEmpty()) {
+        fonts.mono = QStringLiteral("Cascadia Code");
+    }
+
+    std::printf("[font] ui=%s content=%s mono=%s\n",
+                fonts.ui.toUtf8().constData(),
+                fonts.content.toUtf8().constData(),
+                fonts.mono.toUtf8().constData());
+    return fonts;
+}
+
+// 注意：不要在这里关闭匿名 namespace —— 下面的缓存/工具函数还在同一个匿名 namespace 里，
+// 它一直到文件末尾（main 之前）才闭合。
 
 // 进程级唯一的翻译缓存（GUI / --smoke 共用同一个 db 文件）。
 //
@@ -71,13 +142,17 @@ void say(const QString &line)
 void applyUiLanguage(const QString &uiLanguage)
 {
     using studious::i18n::Language;
+    namespace ui18n = studious::ui::i18n;
 
     if (uiLanguage == QLatin1String("zh")) {
         studious::i18n::setLanguage(Language::Chinese);
+        ui18n::setLanguage(ui18n::Lang::Chinese);
     } else if (uiLanguage == QLatin1String("en")) {
         studious::i18n::setLanguage(Language::English);
+        ui18n::setLanguage(ui18n::Lang::English);
     } else {
         studious::i18n::resetToSystemLanguage();
+        ui18n::setLanguage(ui18n::detectSystemLanguage());
     }
 }
 
@@ -217,7 +292,7 @@ int runSmoke(const QStringList &args)
         return 1;
     }
     req.srcLang = from.isEmpty() ? QStringLiteral("auto") : from;
-    req.dstLang = to;
+    req.dstLangs = QStringList{to};
     req.engineId = engine;
 
     // --provider auto（或空）= 空列表 = 后端默认顺序 google -> mymemory。
@@ -775,6 +850,59 @@ bool hasFlag(int argc, char *argv[], const char *flag){
     return false;
 }
 
+// 版本信息来自仓库根的 version.json（不写死在代码里）。
+// 找不到或解析失败就用保守的兜底值，界面照样能起。
+struct AppInfo {
+    QString name = QStringLiteral("Studious");
+    QString version = QStringLiteral("0.0.0");
+    QString channel = QStringLiteral("stable");
+    QString channelLabel = QStringLiteral("开发版");
+};
+
+AppInfo loadAppInfo()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        QDir(appDir).filePath(QStringLiteral("version.json")),
+        QDir(appDir).filePath(QStringLiteral("../version.json")),
+        QDir(appDir).filePath(QStringLiteral("../../version.json")),
+    };
+
+    for (const QString &path : candidates) {
+        if (!QFileInfo::exists(path)) {
+            continue;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QByteArray bytes = file.readAll();
+        file.close();
+
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes);
+        if (!doc.isObject()) {
+            std::fprintf(stderr, "[appinfo] %s 不是合法 JSON\n", path.toUtf8().constData());
+            continue;
+        }
+        const QJsonObject obj = doc.object();
+
+        AppInfo info;
+        info.name = obj.value(QStringLiteral("name")).toString(info.name);
+        info.version = obj.value(QStringLiteral("version")).toString(info.version);
+        info.channel = obj.value(QStringLiteral("channel")).toString(info.channel);
+        info.channelLabel = obj.value(QStringLiteral("channelLabel")).toString(info.channelLabel);
+
+        std::printf("[appinfo] %s 版本 %s（%s）\n",
+                    info.name.toUtf8().constData(),
+                    info.version.toUtf8().constData(),
+                    path.toUtf8().constData());
+        return info;
+    }
+
+    std::fprintf(stderr, "[appinfo] 没找到 version.json，用兜底值\n");
+    return AppInfo{};
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -809,14 +937,132 @@ int main(int argc, char *argv[])
         return runAssetDownload(QCoreApplication::arguments());
     }
 
-    QApplication app(argc, argv);
+    // DPI 感知必须在 QGuiApplication 构造之前设置（Windows 上只生效一次）。
+    studious::platform::IPlatform::initProcessDpi();
+
+    QGuiApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("studious"));
 
-    // 界面语言必须在建窗口之前落地：之后所有 i18n::s 才对得上配置。
-    // 改语言要重启（Qt 没有运行时换界面的机制），设置页里有说明。
+    // 界面语言必须在加载 QML 之前落地：之后所有 i18n::s 才对得上配置。
     applyUiLanguageFromSettings();
 
-    MainWindow window(sharedCache());
-    window.show();
+    // 产品约定：界面中英双语可切，但**后端返回的错误文案固定英文**。
+    if (studious::ui::i18n::backendMessagesInEnglish()) {
+        studious::i18n::setLanguage(studious::i18n::Language::English);
+    }
+
+    // Controls 样式必须是 Basic：Windows 原生样式不认 background / contentItem，
+    // 会静默忽略页面里所有定制（探针实测：把背景改成纯红也不生效）。
+    // QQuickStyle::setStyle() 单独用在这台机器上没接管成功，环境变量必须更早设置，
+    // 所以两个都上 —— 环境变量在 QGuiApplication 之前生效，setStyle 兜底。
+    qputenv("QT_QUICK_CONTROLS_STYLE", "Basic");
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
+    // Basic 样式下 TextField / ComboBox 的底色取自 QPalette::Base，
+    // 这里不给值的话会落到系统默认（本机是黑色），看起来就是「黑底白字」。
+    // 这组值与 qml/Theme.qml 里的一一对应，改色两边一起改。
+    {
+        QPalette pal;
+        pal.setColor(QPalette::Window, QColor(QStringLiteral("#F9F3FC")));
+        pal.setColor(QPalette::WindowText, QColor(QStringLiteral("#2C273F")));
+        pal.setColor(QPalette::Base, QColor(QStringLiteral("#F0EAF6")));
+        pal.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#E9E2F1")));
+        pal.setColor(QPalette::Text, QColor(QStringLiteral("#2C273F")));
+        pal.setColor(QPalette::Button, QColor(QStringLiteral("#F0EAF6")));
+        pal.setColor(QPalette::ButtonText, QColor(QStringLiteral("#2C273F")));
+        pal.setColor(QPalette::Highlight, QColor(QStringLiteral("#DAD5E9")));
+        pal.setColor(QPalette::HighlightedText, QColor(QStringLiteral("#4C3B79")));
+        pal.setColor(QPalette::ToolTipBase, QColor(QStringLiteral("#E4DEEB")));
+        pal.setColor(QPalette::ToolTipText, QColor(QStringLiteral("#2C273F")));
+        pal.setColor(QPalette::PlaceholderText, QColor(QStringLiteral("#736F87")));
+        app.setPalette(pal);
+    }
+
+    QQmlApplicationEngine engine;
+    auto *backend = new studious::ui::AppBackend(sharedCache(), &app);
+    engine.rootContext()->setContextProperty(QStringLiteral("backend"), backend);
+
+    // 字体：必须在 QML 加载前注册好，否则首帧会用系统默认字体渲染再跳变。
+    const FontSet fonts = loadBundledFonts();
+    engine.rootContext()->setContextProperty(QStringLiteral("bundledFontUi"), fonts.ui);
+    engine.rootContext()->setContextProperty(QStringLiteral("bundledFontContent"), fonts.content);
+    engine.rootContext()->setContextProperty(QStringLiteral("bundledFontMono"), fonts.mono);
+
+    // 关于页的信息：名称/版本/渠道读仓库根的 version.json；提交号构建期取；Qt 版本与架构运行期取。
+    const AppInfo appInfo = loadAppInfo();
+    engine.rootContext()->setContextProperty(QStringLiteral("appName"), appInfo.name);
+    engine.rootContext()->setContextProperty(QStringLiteral("appVersion"), appInfo.version);
+    engine.rootContext()->setContextProperty(QStringLiteral("appChannel"), appInfo.channel);
+    engine.rootContext()->setContextProperty(QStringLiteral("appChannelLabel"),
+                                             appInfo.channelLabel);
+    engine.rootContext()->setContextProperty(QStringLiteral("appCommit"),
+                                             QStringLiteral(STUDIOUS_COMMIT));
+    engine.rootContext()->setContextProperty(QStringLiteral("qtVersion"),
+                                             QString::fromLatin1(qVersion()));
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("buildArch"),
+#if defined(Q_PROCESSOR_ARM_64) || defined(__aarch64__)
+        QStringLiteral("arm64")
+#else
+        QStringLiteral("x64")
+#endif
+    );
+    // QML 侧拿不稳 QStyleHints，这里注入一次「系统是否深色」给 Theme 单例用。
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("systemPrefersDark"),
+        QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
+    engine.loadFromModule(QStringLiteral("Studious"), QStringLiteral("Main"));
+
+    if (engine.rootObjects().isEmpty()) {
+        std::fprintf(stderr, "[fatal] QML 加载失败：检查 Studious 模块是否注册成功\n");
+        return 1;
+    }
+
+    // ---- 开发用截图：studious.exe --ui-shot out.png [--ui-page N] [--ui-size WxH] ----
+    // 拍完就退出，不进事件循环。给 UI 走查 / 与设计稿比对用。
+    if (hasFlag(argc, argv, "--ui-shot")) {
+        const QStringList all = QCoreApplication::arguments();
+        const auto valueAfter = [&all](const char *flag) {
+            const int index = all.indexOf(QString::fromLatin1(flag));
+            return (index >= 0 && index + 1 < all.size()) ? all.at(index + 1) : QString();
+        };
+
+        const QString outPath = valueAfter("--ui-shot");
+        const int pageIndex = valueAfter("--ui-page").toInt();
+
+        int width = 1440;
+        int height = 900;
+        const QStringList sizeParts = valueAfter("--ui-size").split(QLatin1Char('x'));
+        if (sizeParts.size() == 2) {
+            width = sizeParts.at(0).toInt();
+            height = sizeParts.at(1).toInt();
+        }
+
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
+        if (window == nullptr) {
+            std::fprintf(stderr, "[ui-shot] 根对象不是 QQuickWindow\n");
+            return 1;
+        }
+
+        window->resize(width, height);
+        window->setProperty("currentPage", pageIndex);
+        window->show();
+
+        // 不能只 processEvents：那样不推进动画驱动，带 `Behavior on color` 的控件
+        // 会永远停在动画第一帧（截图里就是浅色）。真跑一段事件循环等动画收敛。
+        QEventLoop loop;
+        QTimer::singleShot(700, &loop, &QEventLoop::quit);
+        loop.exec();
+
+        const QImage shot = window->grabWindow();
+        const bool saved = !shot.isNull() && shot.save(outPath);
+        std::printf("[ui-shot] %s -> %s (%dx%d)\n",
+                    saved ? "saved" : "FAILED",
+                    outPath.toUtf8().constData(),
+                    shot.width(),
+                    shot.height());
+        return saved ? 0 : 1;
+    }
+
     return app.exec();
 }

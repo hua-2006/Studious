@@ -43,10 +43,26 @@ if(TARGET sentencepiece-static)
 endif()
 
 # 第三方：onnxruntime 1.31.1 预编译（CPU provider）。
-# 头文件 + MSVC 导入库（MinGW 能直接链），运行期依赖 onnxruntime.dll，见文件末尾 POST_BUILD。
+#
+# Windows：头文件 + MSVC 导入库（MinGW 能直接链），运行期依赖 onnxruntime.dll，
+#          由文件末尾的 POST_BUILD 复制到可执行文件旁边。
+# 其他平台：仓库里只 vendored 了 Windows 版二进制，需要自己提供 libonnxruntime.so
+#          （放进 third_party/onnxruntime/lib/，或装到系统库路径）。
 set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime)
-set(ONNXRUNTIME_DLL ${ONNXRUNTIME_DIR}/lib/onnxruntime.dll)
-set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/onnxruntime.lib)
+if(WIN32)
+    set(ONNXRUNTIME_DLL ${ONNXRUNTIME_DIR}/lib/onnxruntime.dll)
+    set(ONNXRUNTIME_LIB ${ONNXRUNTIME_DIR}/lib/onnxruntime.lib)
+else()
+    set(ONNXRUNTIME_DLL "")
+    find_library(ONNXRUNTIME_LIB
+                 NAMES onnxruntime
+                 PATHS ${ONNXRUNTIME_DIR}/lib /usr/lib /usr/local/lib)
+    if(NOT ONNXRUNTIME_LIB)
+        message(FATAL_ERROR
+            "非 Windows 平台需要 onnxruntime 共享库：请把 libonnxruntime.so 放到 "
+            "${ONNXRUNTIME_DIR}/lib/ ，或安装到系统库路径后重新 configure。")
+    endif()
+endif()
 
 # 第三方：Monocypher 4.0.2（BSD-2-Clause OR CC0-1.0，单文件无依赖）。
 # 两个 .c 必须都编进来：monocypher-ed25519.c 用到 monocypher.c 里的基础原语。
@@ -126,11 +142,14 @@ target_include_directories(backend_selftest PRIVATE ${MINIZ_DIR})
 
 # onnxruntime.dll 是运行期依赖：backend 是静态库不产出 exe，
 # 谁链接了 backend 谁负责把 dll 放到自己旁边，否则 --mt 一启动就 0xC0000135。
-add_custom_command(TARGET backend_selftest POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:backend_selftest>"
-    COMMENT "复制 onnxruntime.dll 到 backend_selftest 输出目录"
-)
+# 只有 Windows 才有这个 dll；其他平台走 rpath / 系统库路径。
+if(WIN32)
+    add_custom_command(TARGET backend_selftest POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:backend_selftest>"
+        COMMENT "复制 onnxruntime.dll 到 backend_selftest 输出目录"
+    )
+endif()
 
 # 开发/发布用清单工具（genkey / sign / verify）。不随产品分发，不进安装规则。
 add_executable(manifest_tool tools/manifest_tool.cpp)
@@ -139,8 +158,10 @@ target_include_directories(manifest_tool PRIVATE ${MONOCYPHER_DIR})
 set_target_properties(manifest_tool PROPERTIES
     WIN32_EXECUTABLE OFF
 )
-add_custom_command(TARGET manifest_tool POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:manifest_tool>"
-    COMMENT "复制 onnxruntime.dll 到 manifest_tool 输出目录"
-)
+if(WIN32)
+    add_custom_command(TARGET manifest_tool POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:manifest_tool>"
+        COMMENT "复制 onnxruntime.dll 到 manifest_tool 输出目录"
+    )
+endif()

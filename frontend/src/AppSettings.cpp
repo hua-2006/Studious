@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 
+#include <QColor>
 #include <QSettings>
 
 #include <algorithm>
@@ -49,6 +50,7 @@ AppSettings AppSettings::defaults()
     s.localModelFileName.clear();   // 空 = 第一个可用模型
     s.localUseGpu = true;           // 装了 vulkan 运行时就用 GPU（实测 0.5B 单句快 4 倍多）
     s.uiLanguage.clear();   // 空 = 跟随系统语言
+    s.accentSeed.clear();   // 空 = 默认紫 #6750A4
     return s;
 }
 
@@ -85,6 +87,17 @@ AppSettings AppSettings::load()
     // 这两个空串本身是合法值（= 自动），textOr 回落到的也是空串，行为一致。
     s.webProviderId = textOr(key("web/providerId"), def.webProviderId);
     s.engineId = textOr(key("engine/id"), def.engineId);
+
+    // 引擎优先级：逗号分隔串。空串 = 用后端默认顺序。
+    s.enginePriority.clear();
+    const QString priorityText = store.value(key("engine/priority")).toString();
+    for (const QString &part : priorityText.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString trimmed = part.trimmed();
+        if (!trimmed.isEmpty() && !s.enginePriority.contains(trimmed)) {
+            s.enginePriority << trimmed;
+        }
+    }
+
     s.srcLang = textOr(key("lang/src"), def.srcLang);
     s.dstLang = textOr(key("lang/dst"), def.dstLang);
 
@@ -105,6 +118,20 @@ AppSettings AppSettings::load()
     const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
     s.uiLanguage = (lang == QLatin1String("zh") || lang == QLatin1String("en")) ? lang : QString();
 
+    // 主题：只认三个白名单值，手改成别的就回落到跟随系统。
+    const QString theme = store.value(key("ui/theme")).toString().trimmed().toLower();
+    s.themeMode = (theme == QLatin1String("light") || theme == QLatin1String("dark"))
+                      ? theme
+                      : QStringLiteral("system");
+
+    // 强调色：空串本身是合法值（= 默认紫），但注册表可能被手改成乱码，
+    // 只有 QColor 解析不了的才按空处理，交给 Theme 回落默认色。
+    const QString accent = store.value(key("ui/accent")).toString().trimmed();
+    s.accentSeed = QColor(accent).isValid() ? accent : QString();
+
+    // 字号缩放：夹在 80~150，缺失或越界都回落到 100。
+    s.fontScale = clampedInt(store.value(key("ui/fontScale"), def.fontScale).toInt(), 80, 150);
+
     return s;
 }
 
@@ -123,6 +150,7 @@ void AppSettings::save() const
 
     store.setValue(key("web/providerId"), webProviderId);
     store.setValue(key("engine/id"), engineId);
+    store.setValue(key("engine/priority"), enginePriority.join(QLatin1Char(',')));
     store.setValue(key("lang/src"), srcLang);
     store.setValue(key("lang/dst"), dstLang);
 
@@ -131,6 +159,9 @@ void AppSettings::save() const
     store.setValue(key("llm/localModel"), localModelFileName);   // 空 = 第一个可用模型
     store.setValue(key("llm/localUseGpu"), localUseGpu);
     store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
+    store.setValue(key("ui/theme"), themeMode);       // system / light / dark
+    store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小
+    store.setValue(key("ui/accent"), accentSeed);     // 空 = 默认紫 #6750A4
 
     store.sync();
 }

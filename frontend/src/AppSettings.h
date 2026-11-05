@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include <studious/config/LlmConfig.h>
 
@@ -10,13 +11,17 @@
 // HKCU\Software\Studious\Studious，不自己管文件路径。
 //
 // 约定：所有字符串字段"空 = 用内置默认 / 空 = 自动"，
-// 所以 load() 里除 systemPrompt / uiLanguage 外都做空值回落：
+// 所以 load() 里除 systemPrompt / uiLanguage / accentSeed 外都做空值回落：
 //   systemPrompt 空是合法取值（空 = 让后端用内置 prompt）；
-//   uiLanguage 空是合法取值（空 = 跟随系统语言）。
+//   uiLanguage 空是合法取值（空 = 跟随系统语言）；
+//   accentSeed 空是合法取值（空 = 默认紫 #6750A4）。
 struct AppSettings {
     studious::config::LlmConfig llm;   // LLM 网关连接与采样参数
     QString webProviderId;             // 空 = 自动（google -> mymemory）
     QString engineId;                  // 空 = 自动
+    // 引擎优先级（等价于 TranslatorRouter 的 priority 参数）。
+    // 空 = 用后端默认顺序 mock -> web -> llm -> local-mt。
+    QStringList enginePriority;
     QString srcLang = QStringLiteral("auto");
     QString dstLang = QStringLiteral("zh");
 
@@ -40,11 +45,22 @@ struct AppSettings {
     bool localUseGpu = true;
 
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
-    //
-    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
+    //    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
     // 不改翻译本身的目标语言（那是 dstLang 的事）。
     // Qt 没有运行时换语言的机制，所以改完必须重启进程才生效。
     QString uiLanguage;
+
+    // 主题："system"（默认）/ "light" / "dark"。
+    // QML 侧 Theme 单例按这个值切换调色板，不需要重启。
+    QString themeMode = QStringLiteral("system");
+
+    // 字号缩放百分比（80~150，默认 100）。QML 侧 Theme.fontScale = 这个值 / 100。
+    int fontScale = 100;
+
+    // 强调色种子（QSettings 键 ui/accent），形如 "#RRGGBB"。
+    // 空 = 用默认紫 #6750A4；load() 里非法值同样按空处理。
+    // 整套调色板由 Theme 单例在 OKLab 空间从这个种子混出来。
+    QString accentSeed;
 
     // 从 QSettings 读；缺失 / 空值回落 defaults()。
     static AppSettings load();

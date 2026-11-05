@@ -21,8 +21,13 @@ QStringList splitParagraphs(const QString &text);
 struct TranslateJobRequest {
     QStringList paragraphs;
     QString srcLang = QStringLiteral("auto");
-    QString dstLang = QStringLiteral("zh");
+    // 目标语言是**多选**：后端的 TranslateOutcome::byLang 是 dstLang -> 段落译文 的映射，
+    // 一次请求可以同时要多个目标语言。为空时后端会回落成 zh。
+    QStringList dstLangs = {QStringLiteral("zh")};
     QString engineId;           // 空 = 自动
+    // 引擎优先级，原样传给 TranslatorRouter 的 priority 参数。
+    // 空 = 用后端默认顺序（mock -> web -> llm -> local-mt）。
+    QStringList priority;
     QStringList webProviders;   // 空 = 后端默认顺序 google -> mymemory
     studious::config::LlmConfig llm;   // 空配置 => llm 组件 isReady()==false，Router 自动跳过
 

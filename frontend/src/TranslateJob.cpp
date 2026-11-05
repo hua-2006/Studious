@@ -30,7 +30,15 @@ TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job)
     //   空 webProviders -> web 组件走默认 google -> mymemory。
     auto translators =
         studious::factory::makeDefaultTranslators(http, job.llm, job.webProviders);
-    studious::router::TranslatorRouter router(std::move(translators));
+
+    // 优先级为空时用后端默认顺序。注意不能直接传空列表——那会让 Router 一个引擎都不选。
+    const QStringList priority =
+        job.priority.isEmpty()
+            ? QStringList{QStringLiteral("mock"), QStringLiteral("web"),
+                          QStringLiteral("llm"), QStringLiteral("local-mt")}
+            : job.priority;
+
+    studious::router::TranslatorRouter router(std::move(translators), priority);
 
     // 缓存注入：指针可以为空（= 完全不碰 SQLite），开关另算。
     // 两个都要给，Router 才真正启用：isCacheEnabled() == (cache != nullptr && enabled)。
@@ -41,7 +49,7 @@ TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job)
     studious::core::TranslateRequest req;
     req.paragraphs = job.paragraphs;
     req.srcLang = job.srcLang;
-    req.dstLangs = QStringList{job.dstLang};
+    req.dstLangs = job.dstLangs;
     req.preferredEngine = job.engineId;
 
     TranslateJobResult result;
