@@ -22,6 +22,15 @@ add_library(studious_platform STATIC
 target_include_directories(studious_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui)
 
+# Windows 可执行文件图标（资源管理器 / 任务栏 / Alt-Tab 用）。
+# 走 .rc 而不是 WIN32_EXECUTABLE：本项目保留控制台子系统，
+# 否则 --smoke / --assets-cli 这些命令行模式的 stdout 就没了。
+if(WIN32)
+    set(STUDIOUS_WIN_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc")
+else()
+    set(STUDIOUS_WIN_ICON "")
+endif()
+
 qt_add_executable(studious
     src/main.cpp
     src/AppBackend.cpp
@@ -35,6 +44,7 @@ qt_add_executable(studious
     src/AssetFormat.h
     src/i18n/Strings.cpp
     src/i18n/Strings.h
+    ${STUDIOUS_WIN_ICON}
 )
 
 # QML 模块：URI = Studious，页面与组件全部注册进去，运行期用 import Studious 1.0。
@@ -67,6 +77,7 @@ qt_add_qml_module(studious
         qml/pages/SettingsPage.qml
         qml/pages/AppearancePage.qml
     RESOURCES
+        resources/brand.png
         resources/icons/brand.svg
         resources/icons/translate.svg
         resources/icons/keyboard.svg

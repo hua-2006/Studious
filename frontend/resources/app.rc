@@ -1,0 +1,6 @@
+// Windows 可执行文件图标。
+// app.ico 由 docs/TempUI/brand.png（512×512）生成，含 7 个尺寸（16~256）。
+// 这个资源只影响资源管理器 / 任务栏 / Alt-Tab 显示的图标，
+// 与 WIN32_EXECUTABLE 无关 —— 本项目保留控制台子系统，命令行模式要看 stdout。
+
+IDI_ICON1 ICON "app.ico"

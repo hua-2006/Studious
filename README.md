@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/resources/brand.png" alt="Studious" width="112">
+</p>
+
 # Studious
 
 跨平台截图翻译工具（Windows 优先）。

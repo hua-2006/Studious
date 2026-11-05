@@ -14,6 +14,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QImage>
 #include <QObject>
 #include <QPalette>
@@ -942,6 +943,10 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("studious"));
+
+    // 任务栏 / Alt-Tab / 窗口图标。exe 本身的图标由 resources/app.rc 编进 PE，
+    // 这里再设一次是为了让运行期窗口也用同一张图（托盘以后接平台层时同样取它）。
+    app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Studious/resources/brand.png")));
 
     // 界面语言必须在加载 QML 之前落地：之后所有 i18n::s 才对得上配置。
     applyUiLanguageFromSettings();
