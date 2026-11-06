@@ -128,53 +128,76 @@ Window {
                     Repeater {
                         model: root.navItems
 
-                        delegate: Rectangle {
+                        delegate: ColumnLayout {
                             id: railItem
                             required property int index
                             required property var modelData
 
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 60
-                            radius: Theme.rMd
-                            color: root.currentPage === index ? Theme.primaryContainer : "transparent"
+                            spacing: 0
 
-                            Column {
-                                anchors.centerIn: parent
-                                spacing: Theme.s1
-
-                                Image {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    source: railItem.modelData.icon
-                                    sourceSize.width: 20
-                                    sourceSize.height: 20
-                                    // SVG 里的描边色是写死的，换主题不会跟着变。
-                                    // 这里用 MultiEffect 按调色板重新上色：
-                                    // 选中用 on-surface（深色主题下是近白），未选中用 on-surface-variant。
-                                    // 两个都是强调色推导出来的，不是硬编码白色。
-                                    opacity: root.currentPage === railItem.index ? 1.0 : 0.85
-                                    layer.enabled: true
-                                    layer.effect: MultiEffect {
-                                        colorizationColor: root.currentPage === railItem.index
-                                                           ? Theme.railIconActive
-                                                           : Theme.railIconIdle
-                                        colorization: 1.0
-                                    }
-                                }
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    text: railItem.modelData.label
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.fontSizeTiny
-                                    font.weight: root.currentPage === railItem.index ? Font.DemiBold : Font.Normal
-                                    color: root.currentPage === railItem.index
-                                           ? Theme.railIconActive : Theme.railIconIdle
-                                }
+                            // 翻译（第 0 项）和快捷键（第 1 项）之间加一条分割线。
+                            // 放在下标的 delegate 里而不是单独一条，是因为 Repeater 的
+                            // delegate 必须连续排布，插独立节点会破坏 Layout 顺序。
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.leftMargin: Theme.s3
+                                Layout.rightMargin: Theme.s3
+                                Layout.topMargin: Theme.s2
+                                Layout.bottomMargin: Theme.s2
+                                Layout.preferredHeight: 1
+                                visible: railItem.index === 1
+                                color: Theme.outlineVariant
                             }
 
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.currentPage = railItem.index
+                            Rectangle {
+                                id: railItemBody
+
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 60
+                                radius: Theme.rMd
+                                color: root.currentPage === railItem.index
+                                       ? Theme.primaryContainer : "transparent"
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    spacing: Theme.s1
+
+                                    Image {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        source: railItem.modelData.icon
+                                        sourceSize.width: 20
+                                        sourceSize.height: 20
+                                        // SVG 里的描边色是写死的，换主题不会跟着变。
+                                        // 这里用 MultiEffect 按调色板重新上色：
+                                        // 选中用 on-surface（深色主题下是近白），未选中用 on-surface-variant。
+                                        // 两个都是强调色推导出来的，不是硬编码白色。
+                                        opacity: root.currentPage === railItem.index ? 1.0 : 0.85
+                                        layer.enabled: true
+                                        layer.effect: MultiEffect {
+                                            colorizationColor: root.currentPage === railItem.index
+                                                               ? Theme.railIconActive
+                                                               : Theme.railIconIdle
+                                            colorization: 1.0
+                                        }
+                                    }
+                                    Text {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: railItem.modelData.label
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        font.weight: root.currentPage === railItem.index
+                                                     ? Font.DemiBold : Font.Normal
+                                        color: root.currentPage === railItem.index
+                                               ? Theme.railIconActive : Theme.railIconIdle
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.currentPage = railItem.index
+                                }
                             }
                         }
                     }
