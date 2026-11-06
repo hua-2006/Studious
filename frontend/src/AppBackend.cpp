@@ -830,9 +830,15 @@ void AppBackend::uninstallAsset(const QString &id)
     refreshAssets();
 }
 
-void AppBackend::setUiLanguage(const QString &code)
+QString AppBackend::systemLanguage() const
 {
-    const QString next = (code == QLatin1String("zh") || code == QLatin1String("en"))
+    return studious::ui::i18n::detectSystemLanguage() == studious::ui::i18n::Lang::Chinese
+               ? QStringLiteral("zh")
+               : QStringLiteral("en");
+}
+
+void AppBackend::setUiLanguage(const QString &code)
+{    const QString next = (code == QLatin1String("zh") || code == QLatin1String("en"))
                              ? code
                              : QStringLiteral("system");
     if (m_uiLanguage == next) {

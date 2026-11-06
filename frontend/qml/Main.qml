@@ -33,11 +33,11 @@ Window {
     readonly property int cornerRadius: 12
 
     readonly property var navItems: [
-        { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: "翻译" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/keyboard.svg",  label: "快捷键" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/tune.svg",      label: "配置" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/settings.svg",  label: "设置" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/palette.svg",   label: "外观" }
+        { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: qsTr("翻译") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/keyboard.svg",  label: qsTr("快捷键") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/tune.svg",      label: qsTr("配置") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/settings.svg",  label: qsTr("设置") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/palette.svg",   label: qsTr("外观") }
     ]
 
     // 字体：main.cpp 注册完字体文件后注入族名，这里绑进 Theme 单例。
@@ -209,11 +209,22 @@ Window {
                                             colorization: 1.0
                                         }
                                     }
+                                    // 导航栏只有 88px 宽，中文两字够用，英文单词不一定
+                                    // （Configuration 比栏宽还宽，会溢出选中胶囊）。
+                                    // 按基础字号实测宽度等比缩一点，任何语言都不溢出。
+                                    FontMetrics {
+                                        id: railLabelMetrics
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeTiny
+                                    }
                                     Text {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         text: railItem.modelData.label
                                         font.family: Theme.fontUi
-                                        font.pixelSize: Theme.fontSizeTiny
+                                        readonly property real wanted: railLabelMetrics.advanceWidth(text)
+                                        font.pixelSize: wanted > railItemBody.width
+                                                        ? Theme.fontSizeTiny * railItemBody.width / wanted
+                                                        : Theme.fontSizeTiny
                                         font.weight: root.currentPage === railItem.index
                                                      ? Font.DemiBold : Font.Normal
                                         color: root.currentPage === railItem.index
@@ -270,7 +281,7 @@ Window {
                             color: Theme.ink
                         }
                         Text {
-                            text: "截图 / 文本翻译"
+                            text: qsTr("截图 / 文本翻译")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.inkVariant
@@ -295,9 +306,9 @@ Window {
                         // 窗口按钮
                         Repeater {
                             model: [
-                                { glyph: "\u2212", tip: "最小化" },
-                                { glyph: "\u25A1", tip: "最大化" },
-                                { glyph: "\u2715", tip: "关闭" }
+                                { glyph: "\u2212", tip: qsTr("最小化") },
+                                { glyph: "\u25A1", tip: qsTr("最大化") },
+                                { glyph: "\u2715", tip: qsTr("关闭") }
                             ]
 
                             delegate: Rectangle {

@@ -9,14 +9,14 @@ Item {
 
     // 强调色预置：8 个常用 seed（第一个是默认紫，和 Theme.defaultSeed 一致）。
     readonly property var accentPresets: [
-        { color: "#6750A4", name: "紫罗兰（默认）" },
-        { color: "#7D5260", name: "玫瑰" },
-        { color: "#00658F", name: "蓝" },
-        { color: "#2E7D32", name: "绿" },
-        { color: "#B26A00", name: "琥珀" },
-        { color: "#8E244D", name: "酒红" },
-        { color: "#4A5C92", name: "靛蓝" },
-        { color: "#5D4037", name: "棕" }
+        { color: "#6750A4", name: qsTr("紫罗兰（默认）") },
+        { color: "#7D5260", name: qsTr("玫瑰") },
+        { color: "#00658F", name: qsTr("蓝") },
+        { color: "#2E7D32", name: qsTr("绿") },
+        { color: "#B26A00", name: qsTr("琥珀") },
+        { color: "#8E244D", name: qsTr("酒红") },
+        { color: "#4A5C92", name: qsTr("靛蓝") },
+        { color: "#5D4037", name: qsTr("棕") }
     ]
 
     // 只是输入框的校验态，不是配色状态：真值永远在 backend.accentColor。
@@ -72,14 +72,14 @@ Item {
                 spacing: Theme.s2
 
                 Text {
-                    text: "外观"
+                    text: qsTr("外观")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeDisplay
                     font.weight: Font.Bold
                     color: Theme.ink
                 }
                 Text {
-                    text: "长什么样。"
+                    text: qsTr("长什么样。")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeBody
                     color: Theme.inkVariant
@@ -90,15 +90,15 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                title: "主题"
+                title: qsTr("主题")
 
                 FieldRow {
-                    label: "配色"
+                    label: qsTr("配色")
                     Segmented {
                         items: [
-                            { code: "system", label: "跟随系统" },
-                            { code: "light", label: "浅色" },
-                            { code: "dark", label: "深色" }
+                            { code: "system", label: qsTr("跟随系统") },
+                            { code: "light", label: qsTr("浅色") },
+                            { code: "dark", label: qsTr("深色") }
                         ]
                         current: backend.themeMode
                         onSelected: function (code) { backend.themeMode = code }
@@ -106,7 +106,7 @@ Item {
                 }
 
                 FieldRow {
-                    label: "强调色"
+                    label: qsTr("强调色")
 
                     // 预置色板：当前色套一圈外环，点一下直接写后端。
                     RowLayout {
@@ -185,7 +185,7 @@ Item {
                     }
 
                     AppButton {
-                        text: "应用"
+                        text: qsTr("应用")
                         variant: "tonal"
                         Layout.alignment: Qt.AlignVCenter
                         onClicked: page.commitAccent()
@@ -197,10 +197,10 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                title: "字体"
+                title: qsTr("字体")
 
                 FieldRow {
-                    label: "界面字体"
+                    label: qsTr("界面字体")
                     Stub { }
                     AppTextField {
                         Layout.fillWidth: true
@@ -209,7 +209,7 @@ Item {
                     }
                 }
                 FieldRow {
-                    label: "译文字体"
+                    label: qsTr("译文字体")
                     Stub { }
                     AppTextField {
                         Layout.fillWidth: true
@@ -219,7 +219,7 @@ Item {
                     }
                 }
                 FieldRow {
-                    label: "字号缩放"
+                    label: qsTr("字号缩放")
 
                     // 裸 Slider 走 Basic 默认色（深色下是灰黑），这里显式自绘轨道与滑块，
                     // 并用 backend.fontScale 真正驱动 Theme.fontScale。
@@ -281,22 +281,22 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                title: "主窗口"
+                title: qsTr("主窗口")
                 Stub { }
 
                 FieldRow {
-                    label: "布局密度"
+                    label: qsTr("布局密度")
                     Stub { }
                     Segmented {
                         items: [
-                            { code: "compact", label: "紧凑" },
-                            { code: "standard", label: "标准" }
+                            { code: "compact", label: qsTr("紧凑") },
+                            { code: "standard", label: qsTr("标准") }
                         ]
                         current: "standard"
                     }
                 }
                 FieldRow {
-                    label: "状态栏信息密度"
+                    label: qsTr("状态栏信息密度")
                     Stub { }
                     Segmented {
                         items: [
@@ -313,15 +313,15 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                title: "语言显示名"
+                title: qsTr("语言显示名")
 
                 FieldRow {
-                    label: "显示方式"
+                    label: qsTr("显示方式")
                     Stub { }
                     Segmented {
                         items: [
-                            { code: "short", label: "简短(zh / en)" },
-                            { code: "full", label: "完整(中文(简体) / English)" }
+                            { code: "short", label: qsTr("简短(zh / en)") },
+                            { code: "full", label: qsTr("完整(中文(简体) / English)") }
                         ]
                         current: "full"
                     }
@@ -329,7 +329,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "预览:中文(简体) · English"
+                    text: qsTr("预览:中文(简体) · English")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.inkVariant

@@ -26,41 +26,83 @@ Item {
     // ------------------------------------------------------------ 本地数据模型
 
     // 引擎优先级：顺序即 Router(priority)。
+    // 文案不进 model —— ListElement 的值必须是常量，包不了 qsTr；
+    // 所以 model 只存 id，显示时用下面的函数按 id 取词，lupdate 才能抽到条目。
     ListModel {
         id: engineOrderModel
-        ListElement { engineName: "mock"; engineNote: "开发占位 · 永远就绪"; }
-        ListElement { engineName: "Web"; engineNote: "google → mymemory · 无需 key"; }
-        ListElement { engineName: "云端 LLM"; engineNote: "未配置 API 时自动跳过"; }
-        ListElement { engineName: "本地 MT"; engineNote: "OPUS-MT · 缺资产时跳过"; }
+        ListElement { engineId: "mock"; }
+        ListElement { engineId: "web"; }
+        ListElement { engineId: "llm-cloud"; }
+        ListElement { engineId: "local-mt"; }
     }
 
-    // Web 来源：列表顺序即优先级。
+    // 引擎 id → 显示名。
+    function engineDisplayName(id) {
+        if (id === "web")
+            return qsTr("Web")
+        if (id === "llm-cloud")
+            return qsTr("云端 LLM")
+        if (id === "local-mt")
+            return qsTr("本地 MT")
+        return id
+    }
+
+    // 引擎 id → 一行说明。
+    function engineNote(id) {
+        if (id === "mock")
+            return qsTr("开发占位 · 永远就绪")
+        if (id === "web")
+            return qsTr("google → mymemory · 无需 key")
+        if (id === "llm-cloud")
+            return qsTr("未配置 API 时自动跳过")
+        if (id === "local-mt")
+            return qsTr("OPUS-MT · 缺资产时跳过")
+        return ""
+    }
+
+    // Web 来源：列表顺序即优先级。同样只存 id，文案由函数给。
     ListModel {
         id: webProviderModel
         ListElement {
             providerId: "google"
-            webName: "Google 在线翻译"
-            webNote: "无需 key · 免费 · 国内通常需要代理；高频会限流"
             active: true
             azureKey: ""
             azureRegion: ""
         }
         ListElement {
             providerId: "mymemory"
-            webName: "MyMemory 记忆库"
-            webNote: "无需 key · 源语言未知时按 en 处理 · 额度有限"
             active: true
             azureKey: ""
             azureRegion: ""
         }
         ListElement {
             providerId: "azure"
-            webName: "Microsoft Azure 翻译"
-            webNote: "需要 key · v1 仅保留接口，填了也不参与翻译"
             active: false
             azureKey: ""
             azureRegion: ""
         }
+    }
+
+    // 来源 id → 显示名。
+    function providerName(id) {
+        if (id === "google")
+            return qsTr("Google 在线翻译")
+        if (id === "mymemory")
+            return qsTr("MyMemory 记忆库")
+        if (id === "azure")
+            return qsTr("Microsoft Azure 翻译")
+        return id
+    }
+
+    // 来源 id → 一行说明。
+    function providerNote(id) {
+        if (id === "google")
+            return qsTr("无需 key · 免费 · 国内通常需要代理；高频会限流")
+        if (id === "mymemory")
+            return qsTr("无需 key · 源语言未知时按 en 处理 · 额度有限")
+        if (id === "azure")
+            return qsTr("需要 key · v1 仅保留接口，填了也不参与翻译")
+        return ""
     }
 
     // 本地 MT 的可用路径。后端还没暴露资产清单，先留空 —— 走「需下载」空态。
@@ -71,8 +113,8 @@ Item {
     readonly property string localPid: "—"
 
     // 「获取模型」「探测」暂时没有后端接口，点了先给一句实话。
-    property string modelHint: "已获取的模型会出现在下拉里；当前为占位项。"
-    property string probeHint: "尚未探测：会真的发一次翻译请求，用返回的 usage 判断思考是否被关掉。"
+    property string modelHint: qsTr("已获取的模型会出现在下拉里；当前为占位项。")
+    property string probeHint: qsTr("尚未探测：会真的发一次翻译请求，用返回的 usage 判断思考是否被关掉。")
 
     // 本地 LLM 是否在跑：取 engineStatuses 里的 llm-local 一条。
     readonly property bool localLlmReady: page.engineReady("llm-local")
@@ -394,7 +436,7 @@ Item {
                 spacing: Theme.s2
 
                 Text {
-                    text: "配置"
+                    text: qsTr("配置")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeDisplay
                     font.weight: Font.Bold
@@ -403,7 +445,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "翻译链路怎么接通：选引擎、填凭据、装模型。"
+                    text: qsTr("翻译链路怎么接通：选引擎、填凭据、装模型。")
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeBody
@@ -417,8 +459,8 @@ Item {
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
                 expanded: true
-                title: "引擎"
-                hint: "优先级：靠前的先试，前一个不可用才轮到下一个；未列出的组件永不被自动选中。"
+                title: qsTr("引擎")
+                hint: qsTr("优先级：靠前的先试，前一个不可用才轮到下一个；未列出的组件永不被自动选中。")
 
                 Repeater {
                     model: engineOrderModel
@@ -426,8 +468,7 @@ Item {
                     delegate: Rectangle {
                         id: engineRow
                         required property int index
-                        required property string engineName
-                        required property string engineNote
+                        required property string engineId
 
                         Layout.fillWidth: true
                         implicitHeight: 52
@@ -457,7 +498,7 @@ Item {
                                 spacing: 0
 
                                 Text {
-                                    text: engineRow.engineName
+                                    text: page.engineDisplayName(engineRow.engineId)
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeBody
                                     font.weight: Font.DemiBold
@@ -466,7 +507,7 @@ Item {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: engineRow.engineNote
+                                    text: page.engineNote(engineRow.engineId)
                                     elide: Text.ElideRight
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeTiny
@@ -476,7 +517,7 @@ Item {
 
                             AppButton {
                                 Layout.alignment: Qt.AlignVCenter
-                                text: "上移"
+                                text: qsTr("上移")
                                 variant: "text"
                                 buttonEnabled: engineRow.index > 0
                                 onClicked: engineOrderModel.move(engineRow.index,
@@ -485,7 +526,7 @@ Item {
 
                             AppButton {
                                 Layout.alignment: Qt.AlignVCenter
-                                text: "下移"
+                                text: qsTr("下移")
                                 variant: "text"
                                 buttonEnabled: engineRow.index < engineOrderModel.count - 1
                                 onClicked: engineOrderModel.move(engineRow.index,
@@ -497,7 +538,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "换引擎 / 换模型 / 换 Base URL 后，缓存键（含引擎标签）互不命中，同一句原文译文可能完全不同。"
+                    text: qsTr("换引擎 / 换模型 / 换 Base URL 后，缓存键（含引擎标签）互不命中，同一句原文译文可能完全不同。")
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
@@ -511,11 +552,11 @@ Item {
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
                 expanded: true
-                title: "引擎状态面板"
-                hint: "按当前语言对实时探测每个引擎是否可用；绿点＝就绪，灰点＝未就绪。"
+                title: qsTr("引擎状态面板")
+                hint: qsTr("按当前语言对实时探测每个引擎是否可用；绿点＝就绪，灰点＝未就绪。")
 
                 headerActions: AppButton {
-                    text: "刷新"
+                    text: qsTr("刷新")
                     variant: "text"
                     onClicked: backend.refreshEngineStatuses()
                 }
@@ -548,7 +589,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     visible: backend.engineStatuses.length === 0
-                    text: "尚未探测到任何引擎。"
+                    text: qsTr("尚未探测到任何引擎。")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.inkVariant
@@ -570,8 +611,8 @@ Item {
                 CollapsibleCard {
                     width: cardFlow.width >= 960 ? (cardFlow.width - Theme.s4) / 2 : cardFlow.width
                     expanded: false
-                    title: "Web 来源"
-                    hint: "列表顺序即优先级，靠前的先试。"
+                    title: qsTr("Web 来源")
+                    hint: qsTr("列表顺序即优先级，靠前的先试。")
                     Stub { }
 
                     Repeater {
@@ -581,8 +622,6 @@ Item {
                             id: providerItem
                             required property int index
                             required property string providerId
-                            required property string webName
-                            required property string webNote
                             required property bool active
 
                             Layout.fillWidth: true
@@ -628,7 +667,7 @@ Item {
                                     contentItem: Text {
                                         leftPadding: providerCheck.indicator.width
                                                      + providerCheck.spacing
-                                        text: providerItem.webName
+                                        text: page.providerName(providerItem.providerId)
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeBody
                                         color: Theme.ink
@@ -644,7 +683,7 @@ Item {
                                 Stub { }
                                 AppButton {
                                     Layout.alignment: Qt.AlignVCenter
-                                    text: "上移"
+                                    text: qsTr("上移")
                                     variant: "text"
                                     buttonEnabled: providerItem.index > 0
                                     onClicked: webProviderModel.move(providerItem.index,
@@ -655,7 +694,7 @@ Item {
                             Text {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 26
-                                text: providerItem.webNote
+                                text: page.providerNote(providerItem.providerId)
                                 wrapMode: Text.WordWrap
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeTiny
@@ -674,7 +713,7 @@ Item {
                                     Stub { }
                                     ThemedField {
                                         font.family: Theme.fontMono
-                                        placeholderText: "填入 Key"
+                                        placeholderText: qsTr("填入 Key")
                                         echoMode: TextInput.Password
                                     }
                                 }
@@ -684,7 +723,7 @@ Item {
                                     Stub { }
                                     ThemedField {
                                         font.family: Theme.fontMono
-                                        placeholderText: "例如 eastasia"
+                                        placeholderText: qsTr("例如 eastasia")
                                     }
                                 }
                             }
@@ -693,7 +732,7 @@ Item {
 
                     Text {
                         Layout.fillWidth: true
-                        text: "未知的来源 id 会被静默忽略；只剩一个来源时「上移」自动置灰。"
+                        text: qsTr("未知的来源 id 会被静默忽略；只剩一个来源时「上移」自动置灰。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
@@ -705,8 +744,8 @@ Item {
                 CollapsibleCard {
                     width: cardFlow.width >= 960 ? (cardFlow.width - Theme.s4) / 2 : cardFlow.width
                     expanded: true
-                    title: "云端 LLM"
-                    hint: "OpenAI 兼容接口；没填 API Key 时这条链路自动跳过。"
+                    title: qsTr("云端 LLM")
+                    hint: qsTr("OpenAI 兼容接口；没填 API Key 时这条链路自动跳过。")
                     Stub { }
 
                     FieldRow {
@@ -729,7 +768,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "模型"
+                        label: qsTr("模型")
                         Stub { }
                         ThemedCombo {
                             id: modelCombo
@@ -738,8 +777,8 @@ Item {
                         }
                         Stub { }
                         AppButton {
-                            text: "获取模型"
-                            onClicked: page.modelHint = "后端还没有「获取模型」接口，先按占位列表选。"
+                            text: qsTr("获取模型")
+                            onClicked: page.modelHint = qsTr("后端还没有「获取模型」接口，先按占位列表选。")
                         }
                     }
 
@@ -798,7 +837,7 @@ Item {
                         TextArea {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 72
-                            placeholderText: "留空使用内置提示词"
+                            placeholderText: qsTr("留空使用内置提示词")
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
                             color: Theme.ink
@@ -824,22 +863,23 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         Layout.leftMargin: 132 + Theme.s3
-                        text: "留空使用内置提示词。"
+                        text: qsTr("留空使用内置提示词。")
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
                         color: Theme.inkVariant
                     }
 
                     FieldRow {
-                        label: "思考等级"
+                        label: qsTr("思考等级")
                         Stub { }
                         ThemedCombo {
-                            model: ["关闭", "极低", "低", "中", "高", "跟随默认"]
+                            model: [qsTr("关闭"), qsTr("极低"), qsTr("低"), qsTr("中"), qsTr("高"),
+                                    qsTr("跟随默认")]
                         }
                         Stub { }
                         AppButton {
-                            text: "探测"
-                            onClicked: page.probeHint = "后端还没有探测接口；接上后会真的发一次翻译请求。"
+                            text: qsTr("探测")
+                            onClicked: page.probeHint = qsTr("后端还没有探测接口；接上后会真的发一次翻译请求。")
                         }
                     }
 
@@ -854,7 +894,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "批量合并段数"
+                        label: qsTr("批量合并段数")
                         Stub { }
                         ThemedSpin {
                             from: 1
@@ -865,7 +905,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "重试预算"
+                        label: qsTr("重试预算")
                         Stub { }
                         ThemedSpin {
                             from: 1000
@@ -876,7 +916,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "清理模型注记"
+                        label: qsTr("清理模型注记")
                         Stub { }
                         AppToggle {
                             Layout.alignment: Qt.AlignVCenter
@@ -884,7 +924,7 @@ Item {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: "清掉小模型加的「【中文】」注记，只删整行括注，正文不动。"
+                            text: qsTr("清掉小模型加的「【中文】」注记，只删整行括注，正文不动。")
                             wrapMode: Text.WordWrap
                             verticalAlignment: Text.AlignVCenter
                             font.family: Theme.fontUi
@@ -898,8 +938,8 @@ Item {
                 CollapsibleCard {
                     width: cardFlow.width >= 960 ? (cardFlow.width - Theme.s4) / 2 : cardFlow.width
                     expanded: false
-                    title: "本地 MT"
-                    hint: "按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。"
+                    title: qsTr("本地 MT")
+                    hint: qsTr("按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。")
                     // 整张卡只有一个表格块，这一个标记同时代表卡片与表格。
                     Stub { }
 
@@ -910,7 +950,7 @@ Item {
 
                         Text {
                             Layout.preferredWidth: 180
-                            text: "语言对"
+                            text: qsTr("语言对")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.DemiBold
@@ -919,7 +959,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: "实际路径"
+                            text: qsTr("实际路径")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.DemiBold
@@ -966,7 +1006,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         visible: page.localMtRoutes.length === 0
-                        text: "需下载"
+                        text: qsTr("需下载")
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.inkVariant
@@ -978,11 +1018,11 @@ Item {
                 CollapsibleCard {
                     width: cardFlow.width >= 960 ? (cardFlow.width - Theme.s4) / 2 : cardFlow.width
                     expanded: false
-                    title: "本地 LLM（llama-server）"
-                    hint: "由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。"
+                    title: qsTr("本地 LLM（llama-server）")
+                    hint: qsTr("由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。")
 
                     FieldRow {
-                        label: "模型文件"
+                        label: qsTr("模型文件")
                         Stub { }
                         ThemedCombo {
                             model: ["model.qwen2.5-3b-instruct.q4km",
@@ -991,13 +1031,13 @@ Item {
                         }
                         Stub { }
                         AppButton {
-                            text: "浏览…"
-                            onClicked: page.modelHint = "后端还没有文件选择接口。"
+                            text: qsTr("浏览…")
+                            onClicked: page.modelHint = qsTr("后端还没有文件选择接口。")
                         }
                     }
 
                     FieldRow {
-                        label: "上下文"
+                        label: qsTr("上下文")
                         Stub { }
                         ThemedSpin {
                             from: 256
@@ -1008,7 +1048,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "线程"
+                        label: qsTr("线程")
                         Stub { }
                         ThemedSpin {
                             from: 1
@@ -1019,7 +1059,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "GPU 层数"
+                        label: qsTr("GPU 层数")
                         Stub { }
                         ThemedSpin {
                             id: gpuSpin
@@ -1029,14 +1069,14 @@ Item {
                             value: 0
 
                             ToolTip.visible: gpuHover.hovered
-                            ToolTip.text: "Vulkan 构建需要 99"
+                            ToolTip.text: qsTr("Vulkan 构建需要 99")
 
                             HoverHandler { id: gpuHover }
                         }
                     }
 
                     FieldRow {
-                        label: "附加参数"
+                        label: qsTr("附加参数")
                         Stub { }
                         ThemedField {
                             font.family: Theme.fontMono
@@ -1051,7 +1091,7 @@ Item {
 
                         StatusDot {
                             Layout.alignment: Qt.AlignVCenter
-                            label: page.localLlmReady ? "运行中" : "已停止"
+                            label: page.localLlmReady ? qsTr("运行中") : qsTr("已停止")
                             state: page.localLlmReady ? 0 : 3
                         }
 
@@ -1064,7 +1104,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: "端口"
+                            text: qsTr("端口")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
@@ -1105,7 +1145,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: "日志"
+                            text: qsTr("日志")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
@@ -1115,7 +1155,7 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
-                            text: page.localLlmReady ? "llama-server 已就绪" : "等待启动…"
+                            text: page.localLlmReady ? qsTr("llama-server 已就绪") : qsTr("等待启动…")
                             elide: Text.ElideRight
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
@@ -1124,14 +1164,14 @@ Item {
 
                         AppButton {
                             Layout.alignment: Qt.AlignVCenter
-                            text: "启动"
+                            text: qsTr("启动")
                             variant: "primary"
                             onClicked: backend.startLocalServer()
                         }
 
                         AppButton {
                             Layout.alignment: Qt.AlignVCenter
-                            text: "停止"
+                            text: qsTr("停止")
                             buttonEnabled: page.localLlmReady
                             onClicked: backend.stopLocalServer()
                         }

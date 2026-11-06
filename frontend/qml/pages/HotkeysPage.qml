@@ -8,16 +8,16 @@ Item {
     id: page
 
     readonly property var rows: [
-        { group: "截图翻译", action: "区域截图翻译", scope: "全局" },
-        { group: "截图翻译", action: "窗口翻译", scope: "全局" },
-        { group: "截图翻译", action: "全屏翻译", scope: "全局" },
-        { group: "截图翻译", action: "重复上次区域", scope: "全局" },
-        { group: "剪贴板", action: "翻译剪贴板", scope: "全局" },
-        { group: "剪贴板", action: "译文写回剪贴板", scope: "应用内" },
-        { group: "窗口 / 进程", action: "显示 / 隐藏主窗口", scope: "全局" },
-        { group: "窗口 / 进程", action: "取消当前翻译", scope: "应用内" },
-        { group: "窗口 / 进程", action: "锁定浮层", scope: "应用内" },
-        { group: "窗口 / 进程", action: "退出", scope: "全局" }
+        { group: qsTr("截图翻译"), action: qsTr("区域截图翻译"), scope: qsTr("全局") },
+        { group: qsTr("截图翻译"), action: qsTr("窗口翻译"), scope: qsTr("全局") },
+        { group: qsTr("截图翻译"), action: qsTr("全屏翻译"), scope: qsTr("全局") },
+        { group: qsTr("截图翻译"), action: qsTr("重复上次区域"), scope: qsTr("全局") },
+        { group: qsTr("剪贴板"), action: qsTr("翻译剪贴板"), scope: qsTr("全局") },
+        { group: qsTr("剪贴板"), action: qsTr("译文写回剪贴板"), scope: qsTr("应用内") },
+        { group: qsTr("窗口 / 进程"), action: qsTr("显示 / 隐藏主窗口"), scope: qsTr("全局") },
+        { group: qsTr("窗口 / 进程"), action: qsTr("取消当前翻译"), scope: qsTr("应用内") },
+        { group: qsTr("窗口 / 进程"), action: qsTr("锁定浮层"), scope: qsTr("应用内") },
+        { group: qsTr("窗口 / 进程"), action: qsTr("退出"), scope: qsTr("全局") }
     ]
 
     // 每行四列的固定宽度，保证表头与数据对齐。
@@ -31,7 +31,7 @@ Item {
         spacing: Theme.s3
 
         Text {
-            text: "快捷键"
+            text: qsTr("快捷键")
             font.family: Theme.fontUi
             font.pixelSize: Theme.fontSizeDisplay
             font.weight: Font.Bold
@@ -40,7 +40,7 @@ Item {
 
         Text {
             Layout.fillWidth: true
-            text: "怎么触发。每行四要素:功能 / 键位 / 作用域 / 状态。截图与选区能力尚未接入,键位一律留空。"
+            text: qsTr("怎么触发。每行四要素:功能 / 键位 / 作用域 / 状态。截图与选区能力尚未接入,键位一律留空。")
             wrapMode: Text.WordWrap
             font.family: Theme.fontUi
             font.pixelSize: Theme.fontSizeBody
@@ -58,7 +58,7 @@ Item {
                 id: warnText
                 anchors.fill: parent
                 anchors.margins: Theme.s3
-                text: "当前平台尚未接入全局热键;录制功能置灰,键位无法设置。"
+                text: qsTr("当前平台尚未接入全局热键;录制功能置灰,键位无法设置。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSmall
@@ -72,7 +72,7 @@ Item {
         SectionCard {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            title: "场景快捷键"
+            title: qsTr("场景快捷键")
 
             // 表头
             RowLayout {
@@ -81,28 +81,28 @@ Item {
 
                 Text {
                     Layout.preferredWidth: page.colAction
-                    text: "功能"
+                    text: qsTr("功能")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.outline
                 }
                 Text {
                     Layout.preferredWidth: page.colKey
-                    text: "键位"
+                    text: qsTr("键位")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.outline
                 }
                 Text {
                     Layout.preferredWidth: page.colScope
-                    text: "作用域"
+                    text: qsTr("作用域")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.outline
                 }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: "状态"
+                    text: qsTr("状态")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.outline
@@ -134,7 +134,7 @@ Item {
                     }
                     Text {
                         Layout.preferredWidth: page.colKey
-                        text: "未设置"
+                        text: qsTr("未设置")
                         font.family: Theme.fontMono
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.outline
@@ -149,12 +149,12 @@ Item {
                     Item { Layout.fillWidth: true }
 
                     AppButton {
-                        text: "录制"
+                        text: qsTr("录制")
                         variant: "text"
                         buttonEnabled: false
                     }
                     AppButton {
-                        text: "清除"
+                        text: qsTr("清除")
                         variant: "text"
                         buttonEnabled: false
                     }

@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Qt Quick 渲染栈。不再需要 Widgets：界面全部由 QML 描述。
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Qml Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Qml Concurrent LinguistTools)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -140,3 +140,27 @@ if(WIN32)
         message(WARNING "onnxruntime.dll not found at ${ORT_DLL}; local MT will fail at runtime")
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# 界面文案翻译
+#
+# 源码里的字符串**就是中文原文**（qsTr("源语言")），所以：
+#   · studious_zh_CN.qm 是恒等映射，只为占位与一致性；
+#   · 真正需要维护的是 studious_en.ts —— 每条中文原文对应一条英文译文。
+#
+# 新增控件的规矩：QML 里所有面向用户的文字一律写 qsTr("中文")。
+# 之后跑 `cmake --build build --target update_translations`（lupdate）
+# 把新条目补进 .ts，再补英文。
+# ---------------------------------------------------------------------------
+set(STUDIOUS_TS_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/translations/studious_zh_CN.ts
+    ${CMAKE_CURRENT_SOURCE_DIR}/translations/studious_en.ts
+)
+
+qt_add_lupdate(studious TS_FILES ${STUDIOUS_TS_FILES})
+qt_add_lrelease(studious TS_FILES ${STUDIOUS_TS_FILES}
+                QM_FILES_OUTPUT_VARIABLE STUDIOUS_QM_FILES)
+qt_add_resources(studious "translations"
+                 PREFIX "/i18n"
+                 BASE "${CMAKE_CURRENT_BINARY_DIR}"
+                 FILES ${STUDIOUS_QM_FILES})

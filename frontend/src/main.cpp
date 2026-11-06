@@ -26,6 +26,7 @@
 #include <QStringList>
 #include <QStyleHints>
 #include <QTimer>
+#include <QTranslator>
 
 #include <studious/asset/AssetRegistry.h>
 #include <studious/asset/Downloader.h>
@@ -140,21 +141,54 @@ void say(const QString &line)
 // （QSettings 需要一个已存在的 application 实例来定位持久化位置）、
 // 且在创建任何窗口 / 解析任何本地化文案**之前**——i18n 覆盖是进程级的纯内存状态，
 // 晚了就有一半文案是旧语言。
+// QML 里 qsTr() 的翻译器。
+//
+// 源码原文就是中文，所以中文不需要翻译器（源字符串直接显示）；
+// 只有 en 需要真正的 .qm。每次调用先卸掉上一个，避免重复安装叠加。
+void installUiTranslator(const QString &code)
+{
+    static QTranslator *installed = nullptr;
+
+    if (installed != nullptr) {
+        QCoreApplication::removeTranslator(installed);
+        delete installed;
+        installed = nullptr;
+    }
+
+    auto *translator = new QTranslator(QCoreApplication::instance());
+    if (code == QLatin1String("en")
+        && translator->load(QStringLiteral(":/i18n/studious_en.qm"))) {
+        QCoreApplication::installTranslator(translator);
+        installed = translator;
+    } else {
+        delete translator;
+    }
+}
+
 void applyUiLanguage(const QString &uiLanguage)
 {
     using studious::i18n::Language;
     namespace ui18n = studious::ui::i18n;
 
+    QString resolved;
+
     if (uiLanguage == QLatin1String("zh")) {
         studious::i18n::setLanguage(Language::Chinese);
         ui18n::setLanguage(ui18n::Lang::Chinese);
+        resolved = QStringLiteral("zh");
     } else if (uiLanguage == QLatin1String("en")) {
         studious::i18n::setLanguage(Language::English);
         ui18n::setLanguage(ui18n::Lang::English);
+        resolved = QStringLiteral("en");
     } else {
         studious::i18n::resetToSystemLanguage();
-        ui18n::setLanguage(ui18n::detectSystemLanguage());
+        const ui18n::Lang system = ui18n::detectSystemLanguage();
+        ui18n::setLanguage(system);
+        resolved = system == ui18n::Lang::Chinese ? QStringLiteral("zh")
+                                                  : QStringLiteral("en");
     }
+
+    installUiTranslator(resolved);
 }
 
 // 读配置 -> 应用界面语言。三条入口（GUI / --smoke / --assets-cli）都走这一份。

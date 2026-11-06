@@ -44,6 +44,26 @@ Item {
     readonly property int hMenuItem: 40     // .menu-item 高
     readonly property int paneFontSize: 16  // textarea.src 1rem
 
+    // 语言名本地化表。
+    // 后端 LanguageRegistry 的 displayTable() 把 13 个语言名硬编码成中文，
+    // 英文模式下会残留中文。后端不归前端改，这里按 code 重新取词。
+    // 中文原文与后端保持一致，别各写一套。
+    readonly property var languageNames: ({
+        "auto":  qsTr("自动检测"),
+        "zh":    qsTr("中文(简体)"),
+        "zh-TW": qsTr("中文(繁体)"),
+        "en":    qsTr("英语"),
+        "ja":    qsTr("日语"),
+        "ko":    qsTr("韩语"),
+        "fr":    qsTr("法语"),
+        "de":    qsTr("德语"),
+        "es":    qsTr("西班牙语"),
+        "ru":    qsTr("俄语"),
+        "pt":    qsTr("葡萄牙语"),
+        "pt-BR": qsTr("葡萄牙语(巴西)"),
+        "it":    qsTr("意大利语")
+    })
+
     // 取语言 / 引擎条目的显示名（条目形如 {code,label}）。
     function entryLabel(entry) {
         if (entry === undefined || entry === null)
@@ -58,9 +78,28 @@ Item {
         return entry.code !== undefined ? entry.code : String(entry)
     }
 
+    // 语言列表的本地化视图。
+    // 后端 backend.languages 的 label 是硬编码中文（C++ 侧 displayTable），
+    // 这里按 code 换成当前语言的显示名，其它字段原样保留。
+    // 注意不要把这个映射塞进 entryLabel() —— 引擎里也有 code 为 "auto" 的项，
+    // 会出现「自动」被写成「自动检测」的串味。
+    readonly property var languages: {
+        var out = []
+        var src = backend.languages
+        for (var i = 0; i < src.length; ++i) {
+            var code = entryCode(src[i])
+            out.push({
+                "code": code,
+                "label": languageNames[code] !== undefined ? languageNames[code]
+                                                           : entryLabel(src[i])
+            })
+        }
+        return out
+    }
+
     // 语言码 → 显示名。
     function langName(code) {
-        var list = backend.languages
+        var list = page.languages
         for (var i = 0; i < list.length; ++i) {
             if (entryCode(list[i]) === code)
                 return entryLabel(list[i])
@@ -89,7 +128,7 @@ Item {
     // 目标语言下拉的条目：从 languages 里去掉「自动检测」。
     readonly property var targetLanguages: {
         var out = []
-        var list = backend.languages
+        var list = page.languages
         for (var i = 0; i < list.length; ++i) {
             if (entryCode(list[i]) !== "auto")
                 out.push(list[i])
@@ -117,7 +156,7 @@ Item {
             spacing: Theme.s2
 
             Text {
-                text: "欢迎来到 Studious"
+                text: qsTr("欢迎来到 Studious")
                 font.family: Theme.fontUi
                 // 控制项挪到下面后这一行空出来了，标题放大占住这块空白。
                 // 仍跟着「字号缩放」走（fontSizeDisplay 本身已经乘过 fontScale）。
@@ -128,7 +167,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: "文字如舟，渡你过语言的河。选好目标语言就能出发。"
+                text: qsTr("文字如舟，渡你过语言的河。选好目标语言就能出发。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -157,7 +196,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: "源语言"
+                    text: qsTr("源语言")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.DemiBold
@@ -172,7 +211,7 @@ Item {
                     Layout.preferredWidth: page.wSourceField
                     Layout.preferredHeight: page.hField
 
-                    model: backend.languages
+                    model: page.languages
                     textRole: "label"
                     valueRole: "code"
 
@@ -188,7 +227,7 @@ Item {
 
                     // 后端改了源语言（切页 / 恢复设置）时同步显示项。
                     function syncIndex() {
-                        var list = backend.languages
+                        var list = page.languages
                         for (var i = 0; i < list.length; ++i) {
                             if (page.entryCode(list[i]) === backend.srcLang) {
                                 currentIndex = i
@@ -266,7 +305,7 @@ Item {
 
                 Text {
                     Layout.preferredWidth: page.wSourceField
-                    text: "目标语言"
+                    text: qsTr("目标语言")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.DemiBold
@@ -350,7 +389,7 @@ Item {
                 spacing: Theme.s1
 
                 Text {
-                    text: "引擎"
+                    text: qsTr("引擎")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.DemiBold
@@ -378,7 +417,7 @@ Item {
 
                 Text {
                     Layout.alignment: Qt.AlignVCenter
-                    text: "原文对照"
+                    text: qsTr("原文对照")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeBody
                     color: Theme.inkVariant
@@ -400,7 +439,7 @@ Item {
 
                 Badge {
                     Layout.alignment: Qt.AlignVCenter
-                    text: "缓存键含引擎"
+                    text: qsTr("缓存键含引擎")
                 }
             }
 
@@ -425,7 +464,7 @@ Item {
 
                     Text {
                         anchors.centerIn: parent
-                        text: backend.running ? "翻译中…" : "开始翻译"
+                        text: backend.running ? qsTr("翻译中…") : qsTr("开始翻译")
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeBody + 2   // .run-label .9375rem
                         font.weight: Font.DemiBold
@@ -450,7 +489,7 @@ Item {
 
                 Text {
                     Layout.alignment: Qt.AlignRight
-                    text: "点击开始翻译 · 翻译中可取消"
+                    text: qsTr("点击开始翻译 · 翻译中可取消")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.inkVariant
@@ -502,25 +541,25 @@ Item {
                             spacing: Theme.s2
 
                             Text {
-                                text: "原文"
+                                text: qsTr("原文")
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeSmall
                                 font.weight: Font.DemiBold
                                 color: Theme.inkVariant
                             }
 
-                            Badge { text: backend.paragraphCount + " 段" }
+                            Badge { text: qsTr("%1 段").arg(backend.paragraphCount) }
 
                             Item { Layout.fillWidth: true }
 
                             AppButton {
-                                text: "粘贴"
+                                text: qsTr("粘贴")
                                 variant: "text"
                                 onClicked: backend.pasteFromClipboard()
                             }
 
                             AppButton {
-                                text: "清空"
+                                text: qsTr("清空")
                                 variant: "text"
                                 onClicked: backend.clearSource()
                             }
@@ -545,7 +584,7 @@ Item {
                             wrapMode: TextArea.Wrap
                             selectByMouse: true
                             text: backend.sourceText
-                            placeholderText: "在这里输入或粘贴要翻译的文字…"
+                            placeholderText: qsTr("在这里输入或粘贴要翻译的文字…")
                             color: Theme.ink
                             placeholderTextColor: Theme.inkVariant
                             selectionColor: Theme.primaryContainer
@@ -585,7 +624,7 @@ Item {
                             spacing: Theme.s2
 
                             Text {
-                                text: "源语言 · " + backend.srcLang
+                                text: qsTr("源语言 · %1").arg(backend.srcLang)
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeTiny
                                 color: Theme.inkVariant
@@ -593,7 +632,7 @@ Item {
 
                             Item { Layout.fillWidth: true }
 
-                            Badge { text: "UTF-8 · " + backend.charCount + " 字符" }
+                            Badge { text: qsTr("UTF-8 · %1 字符").arg(backend.charCount) }
                         }
                     }
                 }
@@ -636,7 +675,7 @@ Item {
                             spacing: Theme.s2
 
                             Text {
-                                text: "译文"
+                                text: qsTr("译文")
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeSmall
                                 font.weight: Font.DemiBold
@@ -690,7 +729,7 @@ Item {
                             Item { Layout.fillWidth: true }
 
                             AppButton {
-                                text: "复制全部"
+                                text: qsTr("复制全部")
                                 variant: "text"
                                 onClicked: backend.copyTranslated()
                             }
@@ -717,7 +756,7 @@ Item {
                                 topPadding: Theme.s4
                                 width: parent.width - Theme.s4 * 2
                                 visible: backend.blocks.length === 0
-                                text: "译文会出现在这里"
+                                text: qsTr("译文会出现在这里")
                                 wrapMode: Text.Wrap
                                 color: Theme.inkVariant
                                 // 占位也是译文区的内容，字体要跟正文一致（霞鹜文楷），
@@ -751,7 +790,7 @@ Item {
                                         Text {
                                             id: passLabel
                                             anchors.centerIn: parent
-                                            text: "这是原文"
+                                            text: qsTr("这是原文")
                                             font.family: Theme.fontUi
                                             font.pixelSize: Theme.fontSizeTiny
                                             color: Theme.inkVariant
@@ -775,7 +814,7 @@ Item {
                                         width: parent.width
                                         height: contentHeight
                                         text: blockCol.modelData.empty
-                                              ? "（该段无译文）"
+                                              ? qsTr("（该段无译文）")
                                               : blockCol.modelData.text
                                         wrapMode: TextEdit.Wrap
                                         readOnly: true
@@ -817,7 +856,7 @@ Item {
                             spacing: Theme.s2
 
                             Text {
-                                text: "引擎 · " + page.engineName(backend.engineId)
+                                text: qsTr("引擎 · %1").arg(page.engineName(backend.engineId))
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeTiny
                                 color: Theme.inkVariant
@@ -828,7 +867,7 @@ Item {
                             Badge {
                                 visible: backend.cacheHits > 0
                                 filled: true
-                                text: "命中 " + backend.cacheHits
+                                text: qsTr("命中 %1").arg(backend.cacheHits)
                             }
                         }
                     }
@@ -928,7 +967,7 @@ Item {
 
                 AppButton {
                     Layout.alignment: Qt.AlignVCenter
-                    text: "查看引擎状态"
+                    text: qsTr("查看引擎状态")
                     variant: "text"
                     onClicked: page.navigateRequested(2)
                 }

@@ -83,6 +83,11 @@ class AppBackend : public QObject {
     // 所以改完必须重启（UI 里会因此弹一个「重启」按钮）。
     Q_PROPERTY(QString uiLanguage READ uiLanguage WRITE setUiLanguage NOTIFY uiLanguageChanged)
 
+    // 系统语言解析结果（"zh" | "en"）。
+    // 用来判断「跟随系统」和当前具体语言是不是同一个 —— 系统本来就是中文时，
+    // 从「中文」切到「跟随系统」结果完全一样，不该提示重启。
+    Q_PROPERTY(QString systemLanguage READ systemLanguage CONSTANT)
+
     // ---- 字号缩放百分比（80~150）----
     Q_PROPERTY(int fontScale READ fontScale WRITE setFontScale NOTIFY fontScaleChanged)
 
@@ -142,6 +147,7 @@ public:
 
     QString uiLanguage() const { return m_uiLanguage; }
     void setUiLanguage(const QString &code);
+    QString systemLanguage() const;
 
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
     QString accentColor() const;

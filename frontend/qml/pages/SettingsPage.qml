@@ -26,6 +26,13 @@ Item {
     // （赋值在下面的 Component.onCompleted 里，QML 不允许写两个 onCompleted。）
     property string appliedLanguage: "system"
 
+    // 把「跟随系统」解析成具体语言再比。
+    // 系统本来就是中文时，「中文」→「跟随系统」结果一模一样，不该提示重启；
+    // 反过来也一样。
+    function effectiveLanguage(code) {
+        return code === "system" ? backend.systemLanguage : code
+    }
+
     // FieldRow 的默认标签列宽；行内提示文字靠它对齐到控件列。
     readonly property int labelWidth: 132
     // 输入框 / 按钮统一行高，同排不齐高会显得歪。
@@ -38,13 +45,13 @@ Item {
 
     // 七个分区：图标用 qrc 里的 SVG，文字保持中文。
     readonly property var sections: [
-        { icon: "qrc:/qt/qml/Studious/resources/icons/settings.svg",  label: "通用" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: "翻译行为" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/database.svg",  label: "缓存" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/globe.svg",     label: "网络" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/download.svg",  label: "资产" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/folder.svg",    label: "数据" },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/info.svg",      label: "关于" }
+        { icon: "qrc:/qt/qml/Studious/resources/icons/settings.svg",  label: qsTr("通用") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: qsTr("翻译行为") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/database.svg",  label: qsTr("缓存") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/globe.svg",     label: qsTr("网络") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/download.svg",  label: qsTr("资产") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/folder.svg",    label: qsTr("数据") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/info.svg",      label: qsTr("关于") }
     ]
 
     // ---- 资产表列宽（表头与数据行共用，保证上下对齐）----
@@ -55,15 +62,15 @@ Item {
 
     // ---- 界面语言 ----
     readonly property var langItems: [
-        { code: "system", label: "跟随系统" },
-        { code: "zh", label: "中文" },
+        { code: "system", label: qsTr("跟随系统") },
+        { code: "zh", label: qsTr("中文") },
         { code: "en", label: "English" }
     ]
 
     // ---- 关闭主窗口时的行为 ----
     readonly property var closeItems: [
-        { code: "exit", label: "退出程序" },
-        { code: "tray", label: "最小化到托盘" }
+        { code: "exit", label: qsTr("退出程序") },
+        { code: "tray", label: qsTr("最小化到托盘") }
     ]
 
     // ---- 资产：分类标签 + 过滤 ----
@@ -95,10 +102,10 @@ Item {
     // 资产状态码 → 界面文案（后端只给码，文案归界面管）。
     function stateLabel(code) {
         if (code === "installed")
-            return "已安装"
+            return qsTr("已安装")
         if (code === "corrupted")
-            return "损坏"
-        return "未安装"
+            return qsTr("损坏")
+        return qsTr("未安装")
     }
 
     function humanBytes(bytes) {
@@ -117,15 +124,16 @@ Item {
     // 分支名后面补空格对齐到同一列说明；中文是全角，视觉上会差半个字宽，不用较真。
     readonly property string dirTree: [
         "assets\\",
-        "├─ models\\                         MT 语言对 + LLM 模型（.gguf）",
+        // 反斜杠放在 qsTr 外面：lupdate 写 .ts 时会把 `\\` 吃掉，包进去就永远匹配不上。
+        "├─ models\\                         " + qsTr("MT 语言对 + LLM 模型（.gguf）"),
         "│  ├─ mt.opus.en-zh\\",
         "│  ├─ mt.opus.zh-en\\",
         "│  └─ model.qwen2.5-3b-instruct.q4km\\",
-        "├─ runtime\\                        运行时",
+        "├─ runtime\\                        " + qsTr("运行时"),
         "│  └─ runtime.llama.cpu.win-x64\\",
-        "├─ downloads\\                      .part 临时文件（可续传）",
-        "├─ dist\\                           打包产物",
-        "└─ logs\\                           运行日志"
+        "├─ downloads\\                      " + qsTr(".part 临时文件（可续传）"),
+        "├─ dist\\                           " + qsTr("打包产物"),
+        "└─ logs\\                           " + qsTr("运行日志")
     ].join("\n")
 
     // 后端不会主动推缓存统计，进页面时拉一次，数字才有内容。
@@ -147,7 +155,7 @@ Item {
             spacing: Theme.s2
 
             Text {
-                text: "设置"
+                text: qsTr("设置")
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeDisplay
                 font.weight: Font.Bold
@@ -156,7 +164,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: "管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据。"
+                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -271,13 +279,13 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "通用"
-                                hint: "应用行为，与翻译链路无关。"
+                                title: qsTr("通用")
+                                hint: qsTr("应用行为，与翻译链路无关。")
                                 Stub { }
 
                                 // 界面语言：Qt 没有运行时换语言机制，改完要重启。
                                 FieldRow {
-                                    label: "界面语言"
+                                    label: qsTr("界面语言")
 
                                     Segmented {
                                         Layout.alignment: Qt.AlignVCenter
@@ -289,9 +297,10 @@ Item {
                                     // 只在「改过了、还没重启」时出现。
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "重启软件"
+                                        text: qsTr("重启软件")
                                         variant: "tonal"
-                                        visible: backend.uiLanguage !== page.appliedLanguage
+                                        visible: page.effectiveLanguage(backend.uiLanguage)
+                                                 !== page.effectiveLanguage(page.appliedLanguage)
                                         onClicked: backend.restartApplication()
                                     }
 
@@ -300,7 +309,7 @@ Item {
 
                                 // 开机自启：当前平台层没接入。
                                 FieldRow {
-                                    label: "开机自启"
+                                    label: qsTr("开机自启")
                                     Stub { }
 
                                     AppToggle {
@@ -312,7 +321,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "当前平台尚未接入"
+                                        text: qsTr("当前平台尚未接入")
                                         elide: Text.ElideRight
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -322,7 +331,7 @@ Item {
 
                                 // 最小化到托盘：同上，平台层未接入。
                                 FieldRow {
-                                    label: "最小化到托盘"
+                                    label: qsTr("最小化到托盘")
                                     Stub { }
 
                                     AppToggle {
@@ -334,7 +343,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "当前平台尚未接入"
+                                        text: qsTr("当前平台尚未接入")
                                         elide: Text.ElideRight
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -344,7 +353,7 @@ Item {
 
                                 // 关闭主窗口时：退出 / 最小化到托盘。
                                 FieldRow {
-                                    label: "关闭时"
+                                    label: qsTr("关闭时")
                                     Stub { }
 
                                     Segmented {
@@ -358,7 +367,7 @@ Item {
 
                                 // 单实例：QLocalServer 防多开，第二个实例把请求转给已运行进程。
                                 FieldRow {
-                                    label: "单实例运行"
+                                    label: qsTr("单实例运行")
                                     Stub { }
 
                                     AppToggle {
@@ -379,8 +388,8 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "翻译行为"
-                                hint: "决定结果怎么表达。"
+                                title: qsTr("翻译行为")
+                                hint: qsTr("决定结果怎么表达。")
                                 Stub { }
 
                                 // 同语言直返：源 == 目标时不调引擎，只有灰字提示。
@@ -389,7 +398,7 @@ Item {
                                     spacing: Theme.s1
 
                                     FieldRow {
-                                        label: "同语言直返提示"
+                                        label: qsTr("同语言直返提示")
                                         Stub { }
 
                                         AppToggle {
@@ -403,7 +412,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: "源语言与目标语言相同时提示「这是原文」。"
+                                        text: qsTr("源语言与目标语言相同时提示「这是原文」。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -417,7 +426,7 @@ Item {
                                     spacing: Theme.s1
 
                                     FieldRow {
-                                        label: "源语言可疑警告"
+                                        label: qsTr("源语言可疑警告")
                                         Stub { }
 
                                         AppToggle {
@@ -431,7 +440,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: "源语言可疑时给出警告。"
+                                        text: qsTr("源语言可疑时给出警告。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -445,7 +454,7 @@ Item {
                                     spacing: Theme.s1
 
                                     FieldRow {
-                                        label: "自动检测源语言"
+                                        label: qsTr("自动检测源语言")
                                         Stub { }
 
                                         AppToggle {
@@ -459,7 +468,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: "自动检测源语言。"
+                                        text: qsTr("自动检测源语言。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -477,24 +486,24 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "缓存"
-                                hint: "按 引擎 + 源语言 + 目标语言 + 原文 命中。"
+                                title: qsTr("缓存")
+                                hint: qsTr("按 引擎 + 源语言 + 目标语言 + 原文 命中。")
 
                                 headerActions: [
                                     AppButton {
-                                        text: "清空缓存"
+                                        text: qsTr("清空缓存")
                                         variant: "outline"
                                         onClicked: backend.clearCache()
                                     },
                                     AppButton {
-                                        text: "重置统计"
+                                        text: qsTr("重置统计")
                                         variant: "text"
                                         onClicked: backend.resetCacheStats()
                                     }
                                 ]
 
                                 FieldRow {
-                                    label: "启用翻译缓存"
+                                    label: qsTr("启用翻译缓存")
                                     Stub { }
 
                                     AppToggle {
@@ -506,7 +515,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: "条数"
+                                    label: qsTr("条数")
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
@@ -520,7 +529,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: "命中 / 未命中"
+                                    label: qsTr("命中 / 未命中")
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
@@ -534,7 +543,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: "数据库路径"
+                                    label: qsTr("数据库路径")
 
                                     AppTextField {
                                         id: cacheDbField
@@ -563,7 +572,7 @@ Item {
 
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "复制"
+                                        text: qsTr("复制")
                                         variant: "text"
                                         onClicked: {
                                             cacheDbField.selectAll()
@@ -582,12 +591,12 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "网络"
-                                hint: "代理只读环境变量，程序内没有 setProxy。"
+                                title: qsTr("网络")
+                                hint: qsTr("代理只读环境变量，程序内没有 setProxy。")
                                 Stub { }
 
                                 FieldRow {
-                                    label: "代理"
+                                    label: qsTr("代理")
                                     Stub { }
 
                                     AppTextField {
@@ -622,7 +631,7 @@ Item {
                                 Text {
                                     Layout.leftMargin: page.labelWidth + Theme.s3
                                     Layout.fillWidth: true
-                                    text: "修改后需重启程序才生效"
+                                    text: qsTr("修改后需重启程序才生效")
                                     wrapMode: Text.WordWrap
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeSmall
@@ -630,7 +639,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: "超时"
+                                    label: qsTr("超时")
                                     Stub { }
 
                                     SpinBox {
@@ -711,7 +720,7 @@ Item {
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "毫秒"
+                                        text: qsTr("毫秒")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
@@ -730,15 +739,15 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "资产"
-                                hint: "模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对与 onnxruntime。"
+                                title: qsTr("资产")
+                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对与 onnxruntime。")
 
                                 // 分类标签：全部 / LLM / 本地 MT
                                 Segmented {
                                     items: [
-                                        { code: "all", label: "全部" },
+                                        { code: "all", label: qsTr("全部") },
                                         { code: "llm", label: "LLM" },
-                                        { code: "mt", label: "本地 MT" }
+                                        { code: "mt", label: qsTr("本地 MT") }
                                     ]
                                     current: page.assetTab
                                     onSelected: function (code) { page.assetTab = code }
@@ -751,7 +760,7 @@ Item {
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "总占用：" + page.installedTotalText
+                                        text: qsTr("总占用：%1").arg(page.installedTotalText)
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeBody
                                         color: Theme.ink
@@ -759,7 +768,7 @@ Item {
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "（当前分类 " + page.filteredAssets.length + " 项）"
+                                        text: qsTr("（当前分类 %1 项）").arg(page.filteredAssets.length)
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
@@ -770,7 +779,7 @@ Item {
                                     Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "从文件导入"
+                                        text: qsTr("从文件导入")
                                         variant: "tonal"
                                     }
                                 }
@@ -782,7 +791,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: page.colId
-                                        text: "资产 id"
+                                        text: qsTr("资产 id")
                                         elide: Text.ElideRight
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -792,7 +801,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: page.colState
-                                        text: "状态"
+                                        text: qsTr("状态")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -801,7 +810,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: page.colSize
-                                        text: "大小"
+                                        text: qsTr("大小")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -810,7 +819,7 @@ Item {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "路径"
+                                        text: qsTr("路径")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -820,7 +829,7 @@ Item {
                                     Text {
                                         Layout.preferredWidth: page.colAction
                                         Layout.rightMargin: Theme.s2
-                                        text: "操作"
+                                        text: qsTr("操作")
                                         horizontalAlignment: Text.AlignRight
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -844,7 +853,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         visible: page.filteredAssets.length === 0
-                                        text: "该分类下暂无资产"
+                                        text: qsTr("该分类下暂无资产")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
@@ -922,11 +931,11 @@ Item {
                                                     text: {
                                                         if (assetRow.downloading)
                                                             return assetRow.percent >= 0
-                                                                   ? "下载中 " + assetRow.percent + "%"
-                                                                   : "下载中…"
+                                                                   ? qsTr("下载中 %1%").arg(assetRow.percent)
+                                                                   : qsTr("下载中…")
                                                         if (assetRow.modelData.placeholder)
-                                                            return "暂不支持"
-                                                        return assetRow.modelData.installed ? "卸载" : "下载"
+                                                            return qsTr("暂不支持")
+                                                        return assetRow.modelData.installed ? qsTr("卸载") : qsTr("下载")
                                                     }
 
                                                     // 占位资产（清单里 urls 为空，比如还没发布的 Linux 运行时）不给点。
@@ -959,8 +968,8 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "数据"
-                                hint: "安装根目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。"
+                                title: qsTr("数据")
+                                hint: qsTr("安装根目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。")
                                 Stub { }
 
                                 // ---- 安装根目录 ----
@@ -974,7 +983,7 @@ Item {
 
                                         Text {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: "安装根目录"
+                                            text: qsTr("安装根目录")
                                             font.family: Theme.fontUi
                                             font.pixelSize: Theme.fontSizeBody
                                             font.weight: Font.DemiBold
@@ -986,7 +995,7 @@ Item {
                                         Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: "打开目录"
+                                            text: qsTr("打开目录")
                                             variant: "outline"
                                         }
                                     }
@@ -1041,7 +1050,7 @@ Item {
 
                                         Text {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: "日志目录"
+                                            text: qsTr("日志目录")
                                             font.family: Theme.fontUi
                                             font.pixelSize: Theme.fontSizeBody
                                             font.weight: Font.DemiBold
@@ -1053,14 +1062,14 @@ Item {
                                         Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: "打开"
+                                            text: qsTr("打开")
                                             variant: "outline"
                                         }
 
                                         Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: "清理 30 天前"
+                                            text: qsTr("清理 30 天前")
                                             variant: "text"
                                         }
                                     }
@@ -1090,7 +1099,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "重置会清掉配置与缓存（保留已装资产），迁移把整个安装根目录搬到新位置。"
+                                        text: qsTr("重置会清掉配置与缓存（保留已装资产），迁移把整个安装根目录搬到新位置。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1100,14 +1109,14 @@ Item {
                                     Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "迁移目录"
+                                        text: qsTr("迁移目录")
                                         variant: "outline"
                                     }
 
                                     Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: "重置应用"
+                                        text: qsTr("重置应用")
                                         variant: "danger"
                                     }
                                 }
@@ -1122,8 +1131,8 @@ Item {
                                 Layout.fillWidth: true
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
-                                title: "关于"
-                                hint: "版本 / 第三方组件 / 许可证。"
+                                title: qsTr("关于")
+                                hint: qsTr("版本 / 第三方组件 / 许可证。")
 
                                 // ---- 版本条 ----
                                 RowLayout {
@@ -1144,10 +1153,8 @@ Item {
 
                                         Text {
                                             Layout.fillWidth: true
-                                            text: "版本 " + appVersion
-                                                  + " · 提交 " + appCommit
-                                                  + " · 构建 " + buildArch
-                                                  + " / Qt " + qtVersion
+                                            text: qsTr("版本 %1 · 提交 %2 · 构建 %3 / Qt %4")
+                                                  .arg(appVersion).arg(appCommit).arg(buildArch).arg(qtVersion)
                                             wrapMode: Text.Wrap
                                             font.family: Theme.fontMono
                                             font.pixelSize: Theme.fontSizeSmall
@@ -1189,7 +1196,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: 200
-                                        text: "第三方组件"
+                                        text: qsTr("第三方组件")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -1197,7 +1204,7 @@ Item {
                                     }
                                     Text {
                                         Layout.preferredWidth: 110
-                                        text: "版本"
+                                        text: qsTr("版本")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -1205,7 +1212,7 @@ Item {
                                     }
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "用途"
+                                        text: qsTr("用途")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -1213,7 +1220,7 @@ Item {
                                     }
                                     Text {
                                         Layout.preferredWidth: 130
-                                        text: "许可证"
+                                        text: qsTr("许可证")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.DemiBold
@@ -1229,10 +1236,10 @@ Item {
 
                                 Repeater {
                                     model: [
-                                        { name: "onnxruntime",  version: "1.31.1", use: "本地 MT 推理运行时", license: "Apache-2.0" },
-                                        { name: "sentencepiece", version: "0.2.0",  use: "分词",               license: "Apache-2.0" },
-                                        { name: "monocypher",   version: "4.0.2",  use: "清单验签 / 加密",     license: "BSD-2-Clause" },
-                                        { name: "miniz",        version: "3.0.2",  use: "资产 zip 解压",       license: "MIT" }
+                                        { name: "onnxruntime",  version: "1.31.1", use: qsTr("本地 MT 推理运行时"), license: "Apache-2.0" },
+                                        { name: "sentencepiece", version: "0.2.0",  use: qsTr("分词"),               license: "Apache-2.0" },
+                                        { name: "monocypher",   version: "4.0.2",  use: qsTr("清单验签 / 加密"),     license: "BSD-2-Clause" },
+                                        { name: "miniz",        version: "3.0.2",  use: qsTr("资产 zip 解压"),       license: "MIT" }
                                     ]
 
                                     delegate: RowLayout {
@@ -1287,13 +1294,13 @@ Item {
                                     spacing: Theme.s3
 
                                     AppButton {
-                                        text: "查看许可证"
+                                        text: qsTr("查看许可证")
                                         variant: "outline"
                                         onClicked: licensePopup.open()
                                     }
 
                                     AppButton {
-                                        text: "第三方声明"
+                                        text: qsTr("第三方声明")
                                         variant: "text"
                                         onClicked: thirdPartyPopup.open()
                                     }
@@ -1334,7 +1341,7 @@ Item {
             spacing: Theme.s3
 
             Text {
-                text: "卸载资产"
+                text: qsTr("卸载资产")
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSection
                 font.weight: Font.DemiBold
@@ -1343,7 +1350,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: "确定删除 " + uninstallConfirm.assetId + " ？\n文件会被移除，之后可以重新下载。"
+                text: qsTr("确定删除 %1 ？\n文件会被移除，之后可以重新下载。").arg(uninstallConfirm.assetId)
                 wrapMode: Text.Wrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -1357,12 +1364,12 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 AppButton {
-                    text: "取消"
+                    text: qsTr("取消")
                     onClicked: uninstallConfirm.close()
                 }
 
                 AppButton {
-                    text: "卸载"
+                    text: qsTr("卸载")
                     variant: "danger"
                     onClicked: {
                         backend.uninstallAsset(uninstallConfirm.assetId)
@@ -1418,7 +1425,7 @@ Item {
                 spacing: Theme.s2
 
                 Text {
-                    text: appName + " 许可证"
+                    text: qsTr("%1 许可证").arg(appName)
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSection
                     font.weight: Font.DemiBold
@@ -1428,7 +1435,7 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 AppButton {
-                    text: "复制"
+                    text: qsTr("复制")
                     variant: "text"
                     onClicked: {
                         backend.copyText(page.mitLicenseText)
@@ -1436,7 +1443,7 @@ Item {
                 }
 
                 AppButton {
-                    text: "关闭"
+                    text: qsTr("关闭")
                     variant: "text"
                     onClicked: licensePopup.close()
                 }
@@ -1495,7 +1502,7 @@ Item {
                 spacing: Theme.s2
 
                 Text {
-                    text: "第三方声明"
+                    text: qsTr("第三方声明")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSection
                     font.weight: Font.DemiBold
@@ -1505,7 +1512,7 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 AppButton {
-                    text: "关闭"
+                    text: qsTr("关闭")
                     variant: "text"
                     onClicked: thirdPartyPopup.close()
                 }
@@ -1534,25 +1541,25 @@ Item {
                     font.family: Theme.fontMono
                     font.pixelSize: Theme.fontSizeSmall
                     text:
-                        "本程序包含以下第三方开源组件，各自遵循其原始许可证：\n\n"
+                        qsTr("本程序包含以下第三方开源组件，各自遵循其原始许可证：\n\n")
                         + "onnxruntime 1.31.1 — Microsoft — Apache License 2.0\n"
-                        + "  本地 MT（OPUS-MT / Marian）推理运行时\n"
+                        + qsTr("  本地 MT（OPUS-MT / Marian）推理运行时\n")
                         + "  https://github.com/microsoft/onnxruntime\n\n"
                         + "sentencepiece 0.2.0 — Google — Apache License 2.0\n"
-                        + "  源文本 / 译文分词（SentencePiece 模型）\n"
+                        + qsTr("  源文本 / 译文分词（SentencePiece 模型）\n")
                         + "  https://github.com/google/sentencepiece\n\n"
                         + "monocypher 4.0.2 — Loup Vaillant — BSD-2-Clause OR CC0-1.0\n"
-                        + "  资产清单的 ed25519 签名校验\n"
+                        + qsTr("  资产清单的 ed25519 签名校验\n")
                         + "  https://monocypher.org\n\n"
-                        + "miniz 3.0.2 — Rich Geldreich 等 — MIT / Public Domain\n"
-                        + "  资产 zip 包解压\n"
+                        + qsTr("miniz 3.0.2 — Rich Geldreich 等 — MIT / Public Domain\n")
+                        + qsTr("  资产 zip 包解压\n")
                         + "  https://github.com/richgel999/miniz\n\n"
-                        + "Qt 6 — The Qt Company — LGPL-3.0（动态链接使用）\n"
+                        + qsTr("Qt 6 — The Qt Company — LGPL-3.0（动态链接使用）\n")
                         + "  https://www.qt.io\n\n"
-                        + "字体：\n"
-                        + "  思源黑体 Source Han Sans SC — Adobe — SIL Open Font License 1.1\n"
-                        + "  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1\n\n"
-                        + "以上组件的完整许可证文本随各自的源分发提供。"
+                        + qsTr("字体：\n")
+                        + qsTr("  思源黑体 Source Han Sans SC — Adobe — SIL Open Font License 1.1\n")
+                        + qsTr("  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1\n\n")
+                        + qsTr("以上组件的完整许可证文本随各自的源分发提供。")
                 }
             }
         }
