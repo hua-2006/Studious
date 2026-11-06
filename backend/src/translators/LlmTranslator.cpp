@@ -201,6 +201,34 @@ bool matchesTargetScript(const QString &text, const QString &dstLang)
     return hasLatinLetter(text) && !containsCjk(text);
 }
 
+// 缓存标签里的地址归一化：回环地址去掉端口。
+// 本地 llama-server 每次启动都是动态端口，端口进了 key 会让本地引擎的缓存永远不命中；
+// 云端网关的端口可能区分不同服务，所以只动回环地址，其它地址原样保留（也保住已有缓存命中率）。
+QString cacheTagBaseUrl(const QString &baseUrl)
+{
+    const QString trimmed = baseUrl.trimmed();
+    if (trimmed.isEmpty()) {
+        return QString();
+    }
+
+    const QUrl url(trimmed);
+    const QString scheme = url.scheme();
+    const QString host = url.host();
+    const bool loopback = host.compare(QLatin1String("127.0.0.1"), Qt::CaseInsensitive) == 0
+        || host.compare(QLatin1String("localhost"), Qt::CaseInsensitive) == 0
+        || host == QLatin1String("::1");
+    if (!loopback || scheme.isEmpty()) {
+        // 非回环地址：完整保留原串（含端口与路径），避免打乱已有缓存。
+        return trimmed;
+    }
+
+    // QUrl::host() 取出的 IPv6 不带方括号，这里还原成 scheme://[::1] 的形式。
+    if (host.contains(QLatin1Char(':'))) {
+        return scheme + QStringLiteral("://[") + host + QLatin1Char(']');
+    }
+    return scheme + QStringLiteral("://") + host;
+}
+
 } // namespace
 
 LlmTranslator::LlmTranslator() = default;
@@ -407,7 +435,8 @@ QString LlmTranslator::chatCompletionsUrl() const
 QString LlmTranslator::cacheTag() const
 {
     // 模型或网关一变，同一句原文的译文可能完全不同，缓存必须分开。
-    return QStringLiteral("%1|%2|%3").arg(id(), m_cfg.model.trimmed(), m_cfg.baseUrl.trimmed());
+    // 地址走 cacheTagBaseUrl()：本地 llama-server 是动态端口，端口进 key 会让本地缓存永远不命中。
+    return QStringLiteral("%1|%2|%3").arg(id(), m_cfg.model.trimmed(), cacheTagBaseUrl(m_cfg.baseUrl));
 }
 
 QString LlmTranslator::effectiveSystemPrompt() const

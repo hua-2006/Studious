@@ -1,5 +1,6 @@
 #include "contract/LanguageRegistry.h"
 
+#include <QCoreApplication>
 #include <QHash>
 #include <QSet>
 
@@ -122,26 +123,6 @@ const QHash<QString, QString> &marianTable()
     return table;
 }
 
-const QHash<QString, QString> &displayTable()
-{
-    static const QHash<QString, QString> table = {
-        {QStringLiteral("auto"),  QStringLiteral("自动检测")},
-        {QStringLiteral("zh"),    QStringLiteral("中文(简体)")},
-        {QStringLiteral("zh-TW"), QStringLiteral("中文(繁体)")},
-        {QStringLiteral("en"),    QStringLiteral("英语")},
-        {QStringLiteral("ja"),    QStringLiteral("日语")},
-        {QStringLiteral("ko"),    QStringLiteral("韩语")},
-        {QStringLiteral("fr"),    QStringLiteral("法语")},
-        {QStringLiteral("de"),    QStringLiteral("德语")},
-        {QStringLiteral("es"),    QStringLiteral("西班牙语")},
-        {QStringLiteral("ru"),    QStringLiteral("俄语")},
-        {QStringLiteral("pt"),    QStringLiteral("葡萄牙语")},
-        {QStringLiteral("pt-BR"), QStringLiteral("葡萄牙语(巴西)")},
-        {QStringLiteral("it"),    QStringLiteral("意大利语")},
-    };
-    return table;
-}
-
 } // namespace
 
 QString LanguageRegistry::normalize(const QString &code)
@@ -187,11 +168,54 @@ QString LanguageRegistry::normalize(const QString &code)
 QString LanguageRegistry::displayName(const QString &internal)
 {
     const QString n = normalize(internal);
-    const auto &table = displayTable();
-    const auto it = table.constFind(n);
-    if (it != table.constEnd()) {
-        return it.value();
+
+    // 语言名是面向用户的文案，必须跟**界面语言**走 —— 不是跟后端错误文案的语言走。
+    // 界面语言由 QTranslator 决定，QML 的 qsTr() 也走同一套，
+    // 所以这里用 QCoreApplication::translate：中英文条目都在 .ts 里，前端不再存一份。
+    const auto tr = [](const char *source) {
+        return QCoreApplication::translate("LanguageRegistry", source);
+    };
+
+    if (n == QLatin1String("auto")) {
+        return tr("自动检测");
     }
+    if (n == QLatin1String("zh")) {
+        return tr("中文(简体)");
+    }
+    if (n == QLatin1String("zh-TW")) {
+        return tr("中文(繁体)");
+    }
+    if (n == QLatin1String("en")) {
+        return tr("英语");
+    }
+    if (n == QLatin1String("ja")) {
+        return tr("日语");
+    }
+    if (n == QLatin1String("ko")) {
+        return tr("韩语");
+    }
+    if (n == QLatin1String("fr")) {
+        return tr("法语");
+    }
+    if (n == QLatin1String("de")) {
+        return tr("德语");
+    }
+    if (n == QLatin1String("es")) {
+        return tr("西班牙语");
+    }
+    if (n == QLatin1String("ru")) {
+        return tr("俄语");
+    }
+    if (n == QLatin1String("pt")) {
+        return tr("葡萄牙语");
+    }
+    if (n == QLatin1String("pt-BR")) {
+        return tr("葡萄牙语(巴西)");
+    }
+    if (n == QLatin1String("it")) {
+        return tr("意大利语");
+    }
+
     return internal;
 }
 

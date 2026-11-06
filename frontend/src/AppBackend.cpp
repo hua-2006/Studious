@@ -26,8 +26,12 @@
 #include <studious/asset/Manifest.h>
 #include <studious/cache/TranslationCache.h>
 #include <studious/contract/LanguageRegistry.h>
+#include <studious/i18n/LanguageDetector.h>
+#include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
 #include <studious/router/TranslatorRouter.h>
+#include <studious/translators/LocalMtTranslator.h>
+#include <studious/translators/WebProvider.h>
 
 #include <algorithm>
 #include <utility>
@@ -65,10 +69,12 @@ QVariantMap entry(const QString &code, const QString &label)
 // 资产归类。依据是清单里的 family 和 id 前缀，不靠猜：
 //   · opus-mt 家族、mt.opus.* 语言对、onnxruntime 运行时 → 本地 MT
 //   · 其余（qwen 模型、llama.cpp 运行时）→ LLM
-// 自动引擎的四个真实成员。mock 是开发占位，不进界面。
+// 自动引擎的四个真实成员，用的是**界面 id 空间**（与 backend.engines、
+// settings 里的 engine/id 一致）：web / llm-cloud / llm-local / local-mt。
+// mock 是开发占位，不进界面。
 QStringList knownEngineIds()
 {
-    return {QStringLiteral("web"), QStringLiteral("llm"),
+    return {QStringLiteral("web"), QStringLiteral("llm-cloud"),
             QStringLiteral("llm-local"), QStringLiteral("local-mt")};
 }
 
@@ -210,6 +216,22 @@ bool parseBundledManifest(studious::asset::Manifest *out)
     return true;
 }
 
+// 把「设置里存的模型文件名」翻成 LocalEngineConfig.modelPath。
+// 空文件名必须原样传空串：LocalEngine::resolveModelPath() 的「空 = 第一个可用模型」
+// 分支只在真正收到空串时才走。以前这里写的是 modelsDir() + "/" + fileName，空名字就变成
+// "…\assets\models\"（一个目录），绕过那条分支后 llama-server 拿到 -m <目录>，
+// 直接 gguf_init_from_file: failed to open GGUF file —— 界面就只剩一串英文日志。
+QString localModelPathFrom(const QString &fileName)
+{
+    const QString trimmed = fileName.trimmed();
+    if (trimmed.isEmpty()) {
+        return QString();
+    }
+    const QFileInfo info(trimmed);
+    return info.isAbsolute() ? info.absoluteFilePath()
+                             : QDir(LocalEngine::modelsDir()).filePath(trimmed);
+}
+
 } // namespace
 
 AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent)
@@ -238,14 +260,23 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_webProviderId = settings.webProviderId;
     m_localModel = settings.localModelFileName;
     m_localUseGpu = settings.localUseGpu;
+    m_localContextSize = settings.localContextSize;
+    m_localThreads = settings.localThreads;
+    m_localGpuLayers = settings.localGpuLayers;
+    m_localExtraArgs = settings.localExtraArgs;
     // load() 已经过滤过非法值，这里拿到的要么是 "#RRGGBB"，要么是空（= 默认紫）。
     m_accentColor = settings.accentSeed;
 
     // 设置里存的是 Router 引擎 id，QML 用带语义的 id，这里做一次映射。
+    // 老值只有 web / local-mt / llm + llm/useLocalEngine 一个开关；新值可能已经是
+    // llm-cloud / llm-local（手改注册表、或以后界面自己写），两种都认。
     if (settings.engineId == QLatin1String("web")) {
         m_engineId = QStringLiteral("web");
     } else if (settings.engineId == QLatin1String("local-mt")) {
         m_engineId = QStringLiteral("local-mt");
+    } else if (settings.engineId == QLatin1String("llm-cloud")
+               || settings.engineId == QLatin1String("llm-local")) {
+        m_engineId = settings.engineId;
     } else if (settings.engineId == QLatin1String("llm")) {
         m_engineId = settings.useLocalEngine ? QStringLiteral("llm-local")
                                              : QStringLiteral("llm-cloud");
@@ -264,6 +295,8 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     connect(m_job, &TranslateJob::finished, this, &AppBackend::onTranslationFinished);
 
     refreshAssets();
+    // 本地 MT 的语言对表同样来自磁盘扫描，和资产一起在首屏前刷一次。
+    refreshMtPairs();
 
     // 首屏就要有状态：构造函数里先探一次，别等用户去动语言选择器。
     refreshEngineStatuses();
@@ -541,6 +574,11 @@ void AppBackend::translate()
     req.llm = settings.llm;
     req.cache = m_cache;
     req.cacheEnabled = settings.cacheEnabled;
+    // Web 来源：界面只让选一个（后端 AppSettings 也只存一个 id），
+    // 但装配接口要的是"顺序表"，所以包成单元素列表；空串 = 走后端默认顺序。
+    if (!settings.webProviderId.isEmpty()) {
+        req.webProviders = {settings.webProviderId};
+    }
 
     m_lastParagraphs = paragraphs;
     m_lastEngineLabel = m_engineId.isEmpty() ? i18n::s().translate.engineAuto : m_engineId;
@@ -549,8 +587,12 @@ void AppBackend::translate()
     if (useLocalEngine()) {
         // 本地引擎：先把 llama-server 拉起来（阻塞约 1 秒），再提交翻译。
         LocalEngineConfig cfg;
-        cfg.modelPath = LocalEngine::modelsDir() + QLatin1Char('/') + settings.localModelFileName;
+        cfg.modelPath = localModelPathFrom(settings.localModelFileName);
         cfg.preferGpu = settings.localUseGpu;
+        cfg.contextSize = settings.localContextSize;
+        cfg.threads = settings.localThreads;
+        cfg.gpuLayers = settings.localGpuLayers;
+        cfg.extraArgs = settings.localExtraArgs;
 
         QString error;
         if (!m_localEngine.ensureStarted(cfg, &error)) {
@@ -561,7 +603,16 @@ void AppBackend::translate()
         req.llm.baseUrl = m_localEngine.baseUrl();
         req.llm.apiKey = QStringLiteral("local");
         req.llm.model = m_localEngine.currentModel();
+        // 采样参数（temperature / maxTokens / 系统提示词）沿用配置页「云端 LLM」里那份：
+        // 它们描述的是"翻译该怎么说话"，换引擎不该换口味，也没必要为此再摆一套 UI。
+        // 只覆盖本地特有的三项：
+        //   batchSize = 1       小模型做不好"一次返回 JSON 数组"，合并只会白花一次请求；
+        //   reasoningEffort=""  本地模型没有思考等级这个概念，别往请求里塞无意义字段；
+        //   stripModelNotes     本地 0.5B 爱加「【中文】」「（翻译结果：…）」这类注记，
+        //                       该开关只删整行括注，正文一个字不动。
         req.llm.batchSize = 1;
+        req.llm.reasoningEffort.clear();
+        req.llm.stripModelNotes = true;
         req.engineId = QStringLiteral("llm");
         m_lastEngineLabel = i18n::s().translate.engineLlmLocal;
     }
@@ -663,19 +714,31 @@ void AppBackend::refreshEngineStatuses()
     AppSettings settings = AppSettings::load();
 
     studious::net::QtHttpClient http;
-    auto translators = studious::factory::makeDefaultTranslators(http, settings.llm, {});
-    // Router 只认 web / llm / local-mt。
-    // llm-local 走 LocalEngine 分支、不参与降级链，但界面排序里有它 —— 这里滤掉，
-    // 免得把未知 id 塞进 Router 的 priority。
+    // 状态探测也要用同一套装配参数，否则会出现「状态说 web 就绪、真翻译却走另一个来源」。
+    const QStringList webOrder = settings.webProviderId.isEmpty()
+                                     ? QStringList{}
+                                     : QStringList{settings.webProviderId};
+    auto translators = studious::factory::makeDefaultTranslators(http, settings.llm, webOrder);
+    // Router 用的是另一套 id（"llm" 代表云端），而设置与界面统一用
+    // "llm-cloud"。这里做一次映射，界面上就只存在一套 id。
+    // llm-local 走 LocalEngine 分支、不参与降级链，跳过。
     const QStringList stored = settings.enginePriority.isEmpty()
                                    ? knownEngineIds()
                                    : settings.enginePriority;
     QStringList priority;
-    for (const QString &id : stored) {
-        if (id != QLatin1String("llm-local") && !priority.contains(id)) {
-            priority.append(id);
+    for (const QString &uiId : stored) {
+        if (uiId == QLatin1String("llm-local")) {
+            continue;
         }
-    }    const studious::router::TranslatorRouter router(std::move(translators), priority);
+        const QString routerId = (uiId == QLatin1String("llm-cloud"))
+                                     ? QStringLiteral("llm")
+                                     : uiId;
+        if (!priority.contains(routerId)) {
+            priority.append(routerId);
+        }
+    }
+
+    const studious::router::TranslatorRouter router(std::move(translators), priority);
 
     const QString dst = m_dstLangs.value(0, QStringLiteral("zh"));
     QVariantList list;
@@ -684,8 +747,13 @@ void AppBackend::refreshEngineStatuses()
         if (row.first == QLatin1String("mock")) {
             continue;
         }
+        // Router 报的是 "llm"，界面上统一叫 "llm-cloud"。
+        const QString uiId = (row.first == QLatin1String("llm"))
+                                 ? QStringLiteral("llm-cloud")
+                                 : row.first;
+
         QVariantMap item;
-        item.insert(QStringLiteral("id"), row.first);
+        item.insert(QStringLiteral("id"), uiId);
         item.insert(QStringLiteral("ready"), row.second.ready);
         item.insert(QStringLiteral("detail"), row.second.reason);
         // 三态给界面用：就绪 / 缺资产 / 未就绪。
@@ -779,13 +847,23 @@ void AppBackend::startLocalServer()
 {
     AppSettings settings = AppSettings::load();
     LocalEngineConfig cfg;
-    cfg.modelPath = LocalEngine::modelsDir() + QLatin1Char('/') + settings.localModelFileName;
+    cfg.modelPath = localModelPathFrom(settings.localModelFileName);
     cfg.preferGpu = settings.localUseGpu;
+    cfg.contextSize = settings.localContextSize;
+    cfg.threads = settings.localThreads;
+    cfg.gpuLayers = settings.localGpuLayers;
+    cfg.extraArgs = settings.localExtraArgs;
 
     QString error;
     if (!m_localEngine.ensureStarted(cfg, &error)) {
+        // 翻译页底部状态行就能看见原因；配置页靠「日志」面板看细节（refreshLocalState 会刷新）。
+        // errorRaised 目前没有 QML 消费者，留着给以后的通知中心用，别指望它显示。
+        setStatus(error, true);
         emit errorRaised(i18n::s().config.localLlmSection, error);
+    } else {
+        setStatus(i18n::s().common.ready, false);
     }
+    refreshLocalState();
     refreshEngineStatuses();
 }
 
@@ -920,6 +998,8 @@ void AppBackend::downloadAsset(const QString &id)
                     emit errorRaised(i18n::s().settings.assets, result.error);
                 }
                 refreshAssets();
+                // 下载/卸载的都是磁盘资产，本地 MT 的语言对表要跟着重扫。
+                refreshMtPairs();
             });
 
     // 工作线程内构造 QtHttpClient / Registry / Downloader：
@@ -958,7 +1038,8 @@ void AppBackend::cancelAssetDownload(const QString &id)
 }
 
 void AppBackend::uninstallAsset(const QString &id)
-{    studious::asset::Manifest manifest;
+{
+    studious::asset::Manifest manifest;
     if (!parseBundledManifest(&manifest)) {
         emit errorRaised(i18n::s().settings.assets,
                          QStringLiteral("找不到或无法解析资产清单"));
@@ -973,6 +1054,7 @@ void AppBackend::uninstallAsset(const QString &id)
         emit errorRaised(i18n::s().settings.assets, error);
     }
     refreshAssets();
+    refreshMtPairs();
 }
 
 bool AppBackend::llamaRuntimeInstalled() const
@@ -1058,8 +1140,108 @@ void AppBackend::setLocalUseGpu(bool enabled)
     emit localUseGpuChanged();
 }
 
+// 本地 LLM 的四个启动参数：统一落盘 + 统一发 localLaunchChanged。
+// 它们不立即重启 llama-server —— 服务只在真正要翻译 / 用户点「启动」时才拉起，
+// 那时候 ensureStarted() 会拿新配置和正在跑的那份比，不一致才重启（见 LocalEngine）。
+
+void AppBackend::setLocalContextSize(int tokens)
+{
+    if (m_localContextSize == tokens) {
+        return;
+    }
+    m_localContextSize = tokens;
+
+    AppSettings settings = AppSettings::load();
+    settings.localContextSize = tokens;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalThreads(int threads)
+{
+    if (m_localThreads == threads) {
+        return;
+    }
+    m_localThreads = threads;
+
+    AppSettings settings = AppSettings::load();
+    settings.localThreads = threads;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalGpuLayers(int layers)
+{
+    if (m_localGpuLayers == layers) {
+        return;
+    }
+    m_localGpuLayers = layers;
+
+    AppSettings settings = AppSettings::load();
+    settings.localGpuLayers = layers;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalExtraArgs(const QString &args)
+{
+    const QString next = args.trimmed();
+    if (m_localExtraArgs == next) {
+        return;
+    }
+    m_localExtraArgs = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.localExtraArgs = next;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::refreshMtPairs()
+{
+    // 本地 MT 的"装了什么"完全由磁盘决定，所以这里现扫一遍，
+    // 不复用资产清单 —— 资产页只管下载，用户也可能手动把目录拷进来。
+    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+
+    QVariantList list;
+    const QStringList pairs = mt.installedPairs();
+    list.reserve(pairs.size());
+    for (const QString &pair : pairs) {
+        const QStringList missing = mt.missingFiles(pair);
+        QVariantMap item;
+        item.insert(QStringLiteral("pair"), pair);
+        item.insert(QStringLiteral("path"),
+                    QDir(LocalEngine::modelsDir()).filePath(QStringLiteral("mt.opus.") + pair));
+        item.insert(QStringLiteral("missing"), missing);
+        // 目录在 ≠ 能用：缺了 config.json / vocab.json 一样加载不了。
+        item.insert(QStringLiteral("usable"), missing.isEmpty());
+        list.append(item);
+    }
+
+    m_mtPairs = list;
+    emit mtPairsChanged();
+}
+
+QString AppBackend::mtRouteFor(const QString &src, const QString &dst) const
+{
+    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    // routeId() 为空 = 这条语言对根本没有可用路线（含"源语言是 auto"）。
+    // 这种情况返回空串，让界面说人话；错误细节（vocab.json 里没有 auto 的 token 之类）
+    // 不该直接怼到用户脸上。
+    if (mt.routeId(src, dst).isEmpty()) {
+        return QString();
+    }
+    // routeDescription 走 i18n，会跟着界面语言变（后端 i18n 已与界面语言同步）。
+    return mt.routeDescription(src, dst);
+}
+
 void AppBackend::setUiLanguage(const QString &code)
-{    const QString next = (code == QLatin1String("zh") || code == QLatin1String("en"))
+{
+    const QString next = (code == QLatin1String("zh") || code == QLatin1String("en"))
                              ? code
                              : QStringLiteral("system");
     if (m_uiLanguage == next) {
@@ -1090,7 +1272,8 @@ void AppBackend::restartApplication()
 }
 
 void AppBackend::copyText(const QString &text)
-{    if (text.isEmpty()) {
+{
+    if (text.isEmpty()) {
         return;
     }
     QGuiApplication::clipboard()->setText(text);
@@ -1135,6 +1318,207 @@ void AppBackend::applyPalette(const QVariantMap &colors)
     pal.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
     pal.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
     QGuiApplication::setPalette(pal);
+}
+
+// ============================================================================
+// 后端能力的界面出口
+// ============================================================================
+
+QVariantList AppBackend::webProviders() const
+{
+    // 直接问后端要，前端不再自己维护一份列表 —— 后端加一个来源，界面自动多一项。
+    QVariantList list;
+    for (const auto &info : studious::translate::listWebProviders()) {
+        QVariantMap item;
+        item.insert(QStringLiteral("id"), info.id);
+        item.insert(QStringLiteral("displayName"), info.displayName);
+        item.insert(QStringLiteral("requiresApiKey"), info.requiresApiKey);
+        item.insert(QStringLiteral("configured"), info.configured);
+        item.insert(QStringLiteral("note"), info.note);
+        list.append(item);
+    }
+    return list;
+}
+
+QStringList AppBackend::localModels() const
+{
+    return LocalEngine::availableModels();
+}
+
+bool AppBackend::localGpuAvailable() const
+{
+    return LocalEngine::isGpuAvailable();
+}
+
+bool AppBackend::localCpuAvailable() const
+{
+    return LocalEngine::isCpuAvailable();
+}
+
+int AppBackend::localPort() const
+{
+    return m_localEngine.port();
+}
+
+qint64 AppBackend::localPid() const
+{
+    return m_localEngine.processId();
+}
+
+QString AppBackend::localBackend() const
+{
+    return m_localEngine.currentBackend();
+}
+
+qint64 AppBackend::localStartupMs() const
+{
+    return m_localEngine.lastStartupMs();
+}
+
+QString AppBackend::localModelPath() const
+{
+    return m_localEngine.modelPath();
+}
+
+QString AppBackend::localLogTail() const
+{
+    return m_localEngine.logTail(200);
+}
+
+QString AppBackend::localLogPath() const
+{
+    return m_localEngine.logFilePath();
+}
+
+void AppBackend::refreshLocalState()
+{
+    // 端口 / pid / 日志都可能被 llama-server 那一侧改掉，界面定时拉一次就够。
+    emit localStateChanged();
+}
+
+QString AppBackend::detectLanguage(const QString &text)
+{
+    if (text.trimmed().isEmpty()) {
+        return QString();
+    }
+    const auto detected = studious::i18n::detectLanguage(text);
+    // 置信度太低就当没测出来，免得给用户一个错的结论。
+    if (detected.confidence < 0.3) {
+        return QString();
+    }
+    return detected.code;
+}
+
+void AppBackend::fetchCloudModels()
+{
+    if (m_cloudBusy) {
+        return;
+    }
+
+    const studious::config::LlmConfig cfg =
+        llmConfigFromMap(m_llmConfig, studious::config::LlmConfig{});
+
+    m_cloudBusy = true;
+    emit cloudBusyChanged();
+    m_cloudProbeResult.clear();
+    emit cloudProbeResultChanged();
+
+    auto *watcher = new QFutureWatcher<studious::llm::ModelListResult>(this);
+    connect(watcher, &QFutureWatcher<studious::llm::ModelListResult>::finished, this,
+            [this, watcher]() {
+                const auto result = watcher->result();
+                watcher->deleteLater();
+
+                m_cloudBusy = false;
+                emit cloudBusyChanged();
+
+                if (!result.ok) {
+                    m_cloudModels.clear();
+                    emit cloudModelsChanged();
+                    emit errorRaised(QStringLiteral("Model list fetch failed"), result.error);
+                    return;
+                }
+
+                QVariantList list;
+                for (const auto &model : result.models) {
+                    QVariantMap item;
+                    item.insert(QStringLiteral("id"), model.id);
+                    item.insert(QStringLiteral("name"),
+                                model.name.isEmpty() ? model.id : model.name);
+                    item.insert(QStringLiteral("ownedBy"), model.ownedBy);
+                    item.insert(QStringLiteral("supportsReasoning"), model.supportsReasoning);
+                    item.insert(QStringLiteral("supportsTools"), model.supportsTools);
+                    item.insert(QStringLiteral("maxInputTokens"), model.maxInputTokens);
+                    item.insert(QStringLiteral("maxOutputTokens"), model.maxOutputTokens);
+                    list.append(item);
+                }
+                m_cloudModels = list;
+                emit cloudModelsChanged();
+            });
+
+    watcher->setFuture(QtConcurrent::run([cfg]() {
+        // QNetworkAccessManager 有线程亲和，必须在工作线程内构造客户端。
+        studious::net::QtHttpClient http;
+        return studious::llm::listModels(cfg, http);
+    }));
+}
+
+void AppBackend::probeCloudReasoning()
+{
+    if (m_cloudBusy) {
+        return;
+    }
+
+    const studious::config::LlmConfig cfg =
+        llmConfigFromMap(m_llmConfig, studious::config::LlmConfig{});
+
+    m_cloudBusy = true;
+    emit cloudBusyChanged();
+    m_cloudProbeResult.clear();
+    emit cloudProbeResultChanged();
+
+    auto *watcher = new QFutureWatcher<studious::llm::ReasoningProbeResult>(this);
+    connect(watcher, &QFutureWatcher<studious::llm::ReasoningProbeResult>::finished, this,
+            [this, watcher]() {
+                const auto result = watcher->result();
+                watcher->deleteLater();
+
+                m_cloudBusy = false;
+                emit cloudBusyChanged();
+
+                if (!result.ok) {
+                    m_cloudProbeResult = QStringLiteral("Probe failed: %1").arg(result.error);
+                    emit cloudProbeResultChanged();
+                    return;
+                }
+
+                using studious::llm::ReasoningProbe;
+                QString verdict;
+                switch (result.probe) {
+                case ReasoningProbe::Disabled:
+                    verdict = QStringLiteral("reasoning can be disabled");
+                    break;
+                case ReasoningProbe::StillThinking:
+                    verdict = QStringLiteral("still thinking, parameter ignored");
+                    break;
+                case ReasoningProbe::Unknown:
+                default:
+                    verdict = QStringLiteral("inconclusive");
+                    break;
+                }
+                m_cloudProbeResult =
+                    QStringLiteral("%1 · reasoning_tokens=%2%3")
+                        .arg(verdict)
+                        .arg(result.reasoningTokens)
+                        .arg(result.hasReasoningContent ? QStringLiteral(" · has reasoning_content")
+                                                        : QString());
+                emit cloudProbeResultChanged();
+            });
+
+    watcher->setFuture(QtConcurrent::run([cfg]() {
+        studious::net::QtHttpClient http;
+        return studious::llm::probeReasoning(cfg, http);
+    }));
 }
 
 } // namespace studious::ui

@@ -120,11 +120,4 @@ struct Strings {
 // 当前语言的文案表。
 const Strings &s();
 
-// 后端错误文案使用的语言。
-//
-// 按产品约定：前端界面中英双语可切，但**后端返回的错误文案固定英文**，
-// 前端拿到什么就显示什么，不再二次翻译、也不拼前缀。
-// 想改回跟随界面语言，把这里换成 Language::Chinese 的判定即可。
-bool backendMessagesInEnglish();
-
 } // namespace studious::ui::i18n

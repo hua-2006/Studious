@@ -4,11 +4,35 @@
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
 #include "i18n/LanguageDetector.h"
-#include "i18n/L10n.h"
+
+#include <QMutex>
+#include <QMutexLocker>
+#include <QSet>
 
 #include <utility>
 
 namespace studious::router {
+
+namespace {
+
+// 同一条「状态矛盾」只打一次。status() 会被界面反复调用（每次刷新引擎状态一次），
+// 每帧都打就会把 stderr 刷满同一行，真出问题时反而看不见。
+void warnContradictionOnce(const QString &engineId, const QString &reason)
+{
+    static QMutex mutex;
+    static QSet<QString> seen;
+    const QString key = engineId + QLatin1Char('|') + reason;
+    QMutexLocker locker(&mutex);
+    if (seen.contains(key)) {
+        return;
+    }
+    seen.insert(key);
+    qWarning("engine %s: isReady() but resolve() refused: %s",
+             qUtf8Printable(engineId),
+             qUtf8Printable(reason));
+}
+
+}   // namespace
 
 TranslatorRouter::TranslatorRouter(TranslatorList translators, QStringList priority)
     : m_translators(std::move(translators))
@@ -314,10 +338,9 @@ QVector<QPair<QString, core::ResolveResult>> TranslatorRouter::status(const QStr
             rr.reason = i18n::s("组件未就绪", "The engine is not ready");
         }
         if (t->isReady() && !rr.ready) {
-            // 组件自认可用但 resolve 说不行：以 resolve 为准，同时把矛盾暴露出来。
-            rr.reason = i18n::s("组件状态与 resolve 结果不一致：",
-                                "The engine state contradicts its resolve() result: ")
-                        + rr.reason;
+            // 组件自认可用但 resolve 说不行。用户看到的应该是 resolve 的理由本身，
+            // 「状态矛盾」是给开发者的信息，打进日志就够，别塞进界面。
+            warnContradictionOnce(t->id(), rr.reason);
         }
         rows.push_back(qMakePair(t->id(), rr));
     }

@@ -25,6 +25,10 @@ const char *const kServerExeName = "llama-server.exe";
 // 只把 exe 换成 vulkan 版而不传 -ngl，它照样用 CPU 算——启动日志里也不会出现 device Vulkan0。
 constexpr int kVulkanGpuLayers = 99;
 
+// 一次只翻几句，2048 够用且省内存。界面「0 = 自动」时落到这个值，
+// 用户显式填的数不去夹逼——分配失败是用户自己的选择，我们不替他猜。
+constexpr int kDefaultContextSize = 2048;
+
 QString runtimeExePath(const QString &runtimeId)
 {
     return QDir(LocalEngine::installRoot())
@@ -61,6 +65,64 @@ QString resolveModelPath(const QString &requested)
         return QString();
     }
     return QDir(LocalEngine::modelsDir()).filePath(models.first());
+}
+
+// 实际会用哪个运行时：只有一个判据，任何地方要问「这次是 Vulkan 还是 CPU」都走这里，
+// 免得 ensureStarted 里算一套、比较里算另一套，两边口径一歪就变成永远重启或永远不重启。
+QString resolveBackend(bool preferGpu)
+{
+    return (preferGpu && LocalEngine::isGpuAvailable()) ? QStringLiteral("vulkan")
+                                                        : QStringLiteral("cpu");
+}
+
+// -ngl 的语义分三种，这里一次说清：
+//   负数（-1）= 自动：Vulkan 给满层，CPU 给 0；
+//   0          = 用户明确要求「一层都不卸载」——Vulkan exe 也照样不传 -ngl（纯 CPU 算，
+//                这是 LlamaServerOptions 的既有语义，不是取巧）；
+//   正数       = 用户要的层数原样传下去（放不下就让 llama-server 自己报错，别偷偷改）。
+int resolvedGpuLayers(int requested, const QString &backend)
+{
+    if (requested >= 0) {
+        return requested;
+    }
+    return backend == QLatin1String("vulkan") ? kVulkanGpuLayers : 0;
+}
+
+// 「用户写的配置」折算成「进程真正吃到的参数」。
+// 热切换比较和真正起进程都用这一份，比较的就是实际会变的东西。
+struct EffectiveLaunchConfig {
+    QString backend;        // "vulkan" / "cpu"
+    QString modelPath;      // 绝对路径
+    int     contextSize = 0;
+    int     threads = 0;
+    int     gpuLayers = 0;
+    QString extraArgs;
+};
+
+EffectiveLaunchConfig effectiveConfig(const LocalEngineConfig &cfg)
+{
+    EffectiveLaunchConfig out;
+    out.backend = resolveBackend(cfg.preferGpu);
+    out.modelPath = resolveModelPath(cfg.modelPath);
+    out.contextSize = cfg.contextSize > 0 ? cfg.contextSize : kDefaultContextSize;
+    out.threads = cfg.threads > 0 ? cfg.threads : preferredThreads(out.backend);
+    out.gpuLayers = resolvedGpuLayers(cfg.gpuLayers, out.backend);
+    // 附加参数按去掉首尾空白后的串比较：界面在输入框里多敲一个空格不该触发一次十几秒的重启。
+    out.extraArgs = cfg.extraArgs.trimmed();
+    return out;
+}
+
+// 「这次要的配置」与「当前跑着的那份」是否等价——热切换的唯一判据。
+// 比的是折算后的生效值，所以 contextSize=0 与 2048、gpuLayers=-1 与 99（Vulkan）算同一个配置，
+// 不会因为「自动」和「恰好等于默认值」的写法不同就白重启一次。
+// 四项运行参数必须全在比较里：漏一项，用户改完点「应用」界面上就毫无反应。
+bool sameLaunchConfig(const LocalEngineConfig &a, const LocalEngineConfig &b)
+{
+    const EffectiveLaunchConfig ea = effectiveConfig(a);
+    const EffectiveLaunchConfig eb = effectiveConfig(b);
+    return ea.backend == eb.backend && ea.modelPath == eb.modelPath
+        && ea.contextSize == eb.contextSize && ea.threads == eb.threads
+        && ea.gpuLayers == eb.gpuLayers && ea.extraArgs == eb.extraArgs;
 }
 
 } // namespace
@@ -162,19 +224,20 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
     using studious::i18n::s;
     using studious::i18n::sf;
 
-    // 后端：preferGpu 且有 vulkan 运行时 -> vulkan，否则 cpu。
-    const QString backend = (cfg.preferGpu && isGpuAvailable()) ? QStringLiteral("vulkan")
-                                                               : QStringLiteral("cpu");
+    // 先把「界面给的原样配置」折算成「实际生效的参数」，后面的比较和起进程都用这一份，
+    // 保证「判等时以为要跑的」和「真正跑起来的」不可能出现分歧。
+    const EffectiveLaunchConfig effective = effectiveConfig(cfg);
+    const QString backend = effective.backend;
     const QString exe = runtimeExePath(backend == QLatin1String("vulkan")
                                            ? QString::fromLatin1(kVulkanRuntimeId)
                                            : QString::fromLatin1(kCpuRuntimeId));
-    const QString model = resolveModelPath(cfg.modelPath);
+    const QString model = effective.modelPath;
     const QString modelFile = QFileInfo(model).fileName();
 
-    // 幂等：模型 + 后端 + 路径都没变，且服务还活着 -> 直接复用（不重新加载权重）。
-    // 热切换的判据就是这一段：任何一项不同，下面都会先 shutdown() 再重启。
-    if (m_server != nullptr && m_server->isRunning() && m_backend == backend
-        && m_modelFile == modelFile && m_modelPath == model) {
+    // 幂等：配置等价 + 服务还活着 -> 直接复用（不重新加载权重，省十几秒）。
+    // 判据全在 sameLaunchConfig 里，含模型、后端、上下文、线程、GPU 层数、附加参数；
+    // 任何一项不同都会走到下面的 shutdown() 再重启。
+    if (m_server != nullptr && m_server->isRunning() && sameLaunchConfig(m_runningCfg, cfg)) {
         m_lastStartupMs = 0;
         if (error != nullptr) {
             error->clear();
@@ -202,7 +265,10 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
                        "Please download a model on the Assets page.",
                        {QDir::toNativeSeparators(modelsDir())}));
     }
-    if (!QFileInfo::exists(model)) {
+    // 目录也算"没有模型"：ui 里选「自动（第一个可用）」时，如果上游把 modelsDir 当成
+    // 文件路径传下来，llama-server 只会回一句 gguf_init_from_file failed，用户看不懂。
+    const QFileInfo modelInfo(model);
+    if (!modelInfo.exists() || !modelInfo.isFile()) {
         return fail(sf("本地引擎缺少模型：%1\n请在「资产」页下载这个模型。",
                        "The local engine model is missing: %1\n"
                        "Please download this model on the Assets page.",
@@ -220,10 +286,12 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
     studious::runtime::LlamaServerOptions options;
     options.executablePath = exe;
     options.modelPath = model;
-    options.contextSize = 2048;   // 一次只翻几句，2048 够用且省内存
-    options.threads = preferredThreads(backend);
-    // CPU 不传 -ngl；Vulkan 必须给足层数，否则等于白装一个 40MB 的 DLL。
-    options.gpuLayers = backend == QLatin1String("vulkan") ? kVulkanGpuLayers : 0;
+    // 全部取折算后的值：界面填 0 / -1 / 空 时这里已经换成内置默认或按后端算出来的数。
+    options.contextSize = effective.contextSize;
+    options.threads = effective.threads;
+    // Vulkan 默认必须给足层数，否则等于白装一个 40MB 的 DLL；CPU 给 0 就是「不传 -ngl」。
+    options.gpuLayers = effective.gpuLayers;
+    options.extraArgs = effective.extraArgs;
     options.startupTimeoutMs = 120000;
 
     auto server = std::make_unique<studious::runtime::LlamaServer>(std::move(options));
@@ -244,6 +312,9 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
     m_backend = backend;
     m_modelFile = modelFile;
     m_modelPath = model;
+    // 只有真正起来了才记「当前这份配置」：下次 ensureStarted 拿它比，
+    // 起失败时 m_runningCfg 保持空（fail() 里已 shutdown），下一次必然重试而不是误判成已就绪。
+    m_runningCfg = cfg;
 
     if (error != nullptr) {
         error->clear();
@@ -262,6 +333,9 @@ void LocalEngine::shutdown()
     m_backend.clear();
     m_modelFile.clear();
     m_modelPath.clear();
+    // 清掉「当前生效配置」：这是热切换判据的另一半，不清就会出现
+    // 「进程已经停了但配置还写着旧参数」的错觉，下次 ensureStarted 可能误判成可复用。
+    m_runningCfg = LocalEngineConfig{};
     m_lastStartupMs = 0;
 }
 
@@ -298,6 +372,16 @@ int LocalEngine::port() const
 qint64 LocalEngine::processId() const
 {
     return m_server != nullptr ? m_server->processId() : 0;
+}
+
+QString LocalEngine::logFilePath() const
+{
+    return m_server != nullptr ? m_server->logFilePath() : QString();
+}
+
+QString LocalEngine::logTail(int maxLines) const
+{
+    return m_server != nullptr ? m_server->logTail(maxLines) : QString();
 }
 
 QString LocalEngine::executablePath() const

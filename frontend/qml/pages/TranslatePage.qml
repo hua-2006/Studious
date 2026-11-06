@@ -44,25 +44,10 @@ Item {
     readonly property int hMenuItem: 40     // .menu-item 高
     readonly property int paneFontSize: 16  // textarea.src 1rem
 
-    // 语言名本地化表。
-    // 后端 LanguageRegistry 的 displayTable() 把 13 个语言名硬编码成中文，
-    // 英文模式下会残留中文。后端不归前端改，这里按 code 重新取词。
-    // 中文原文与后端保持一致，别各写一套。
-    readonly property var languageNames: ({
-        "auto":  qsTr("自动检测"),
-        "zh":    qsTr("中文(简体)"),
-        "zh-TW": qsTr("中文(繁体)"),
-        "en":    qsTr("英语"),
-        "ja":    qsTr("日语"),
-        "ko":    qsTr("韩语"),
-        "fr":    qsTr("法语"),
-        "de":    qsTr("德语"),
-        "es":    qsTr("西班牙语"),
-        "ru":    qsTr("俄语"),
-        "pt":    qsTr("葡萄牙语"),
-        "pt-BR": qsTr("葡萄牙语(巴西)"),
-        "it":    qsTr("意大利语")
-    })
+    // 语言名直接用后端给的：LanguageRegistry::displayName() 已经按界面语言双语取词，
+    // 前端不再自己维护一份 code→中文映射表（两份表迟早会不一致）。
+    // 注意不要把后端的 label 再塞进 entryLabel() 里二次映射 ——
+    // 引擎里也有 code 为 "auto" 的项，会串味成「自动检测」。
 
     // 取语言 / 引擎条目的显示名（条目形如 {code,label}）。
     function entryLabel(entry) {
@@ -78,24 +63,7 @@ Item {
         return entry.code !== undefined ? entry.code : String(entry)
     }
 
-    // 语言列表的本地化视图。
-    // 后端 backend.languages 的 label 是硬编码中文（C++ 侧 displayTable），
-    // 这里按 code 换成当前语言的显示名，其它字段原样保留。
-    // 注意不要把这个映射塞进 entryLabel() —— 引擎里也有 code 为 "auto" 的项，
-    // 会出现「自动」被写成「自动检测」的串味。
-    readonly property var languages: {
-        var out = []
-        var src = backend.languages
-        for (var i = 0; i < src.length; ++i) {
-            var code = entryCode(src[i])
-            out.push({
-                "code": code,
-                "label": languageNames[code] !== undefined ? languageNames[code]
-                                                           : entryLabel(src[i])
-            })
-        }
-        return out
-    }
+    readonly property var languages: backend.languages
 
     // 语言码 → 显示名。
     function langName(code) {
@@ -135,6 +103,11 @@ Item {
         }
         return out
     }
+
+    // 语言检测：后端 i18n::detectLanguage 一直在，只是界面从没用过。
+    // 只在源语言是「自动」时显示 —— 用户已经手选了语言，再报一个检测结果纯属噪音。
+    readonly property string detectedLang: backend.srcLang === "auto"
+                                           ? backend.detectLanguage(backend.sourceText) : ""
 
     // 目标语言增删；删空时回落到中文(简体)，保证至少一个目标。
     // 目标语言单选：后端接口仍然支持多目标（dstLangs 是数组），
@@ -181,8 +154,9 @@ Item {
             Layout.topMargin: Theme.s6
             spacing: Theme.s4
 
-            // 语言组：源语言 + 目标语言并排。
-            // 显式给两个字段宽 + 间距，否则外层 RowLayout 会把组撑开、把两个下拉拉开。
+            // 语言组：源语言在左、目标语言在右（横排，每列按单个字段宽）。
+            // 用 Row 而不是 RowLayout：子项自带 width，位置器不会重新协商宽度，
+            // 否则两个下拉会被外层 RowLayout 撑开。
             Row {
                 id: langGroup
                 Layout.alignment: Qt.AlignTop
@@ -196,7 +170,10 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("源语言")
+                    text: page.detectedLang.length > 0
+                          ? qsTr("源语言 · 检测到%1").arg(page.langName(page.detectedLang))
+                          : qsTr("源语言")
+                    elide: Text.ElideRight
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.DemiBold
@@ -935,6 +912,7 @@ Item {
             color: Theme.surfaceLow
             border.width: 1
             border.color: Theme.outlineVariant
+            clip: true
 
             RowLayout {
                 anchors.fill: parent

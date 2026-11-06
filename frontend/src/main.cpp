@@ -983,12 +983,10 @@ int main(int argc, char *argv[])
     app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/Studious/resources/brand.png")));
 
     // 界面语言必须在加载 QML 之前落地：之后所有 i18n::s 才对得上配置。
+    // 后端文案跟着一起切（applyUiLanguage 里已同步 studious::i18n）——
+    // 以前这里强行把后端固定成英文，结果中文界面里引擎状态那一行会冒出
+    // "The engine state contradicts its resolve() result: …" 这种英文长句。
     applyUiLanguageFromSettings();
-
-    // 产品约定：界面中英双语可切，但**后端返回的错误文案固定英文**。
-    if (studious::ui::i18n::backendMessagesInEnglish()) {
-        studious::i18n::setLanguage(studious::i18n::Language::English);
-    }
 
     // Controls 样式必须是 Basic：Windows 原生样式不认 background / contentItem，
     // 会静默忽略页面里所有定制（探针实测：把背景改成纯红也不生效）。

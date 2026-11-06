@@ -52,6 +52,15 @@ public:
     // 当前已安装的语言对（"en-zh" 形式），供 UI 展示。
     QStringList installedPairs() const;
 
+    // 一个语言对目录里必须存在的文件（不含可选的 decoder_model_merged_quantized.onnx）。
+    // 返回值与 modelFor() 构造 MtPaths 时用的文件名逐字一致，顺序即 UI/自测的展示顺序。
+    static QStringList requiredFiles();
+
+    // missingFiles: 该语言对的目录里缺了哪些必备文件（只列相对文件名）。
+    // 目录不存在时返回全部必备文件 —— 因为"目录缺失"和"文件缺失"对调用方来说是同一件事：
+    // 这个对不能用。想区分的话调用方自己 QDir 看一眼即可。
+    QStringList missingFiles(const QString &pair) const;
+
     // src→dst 是否要走英文中转（直连模型可用时返回 false）。
     // 只是把 translate() 内部的选择结果提前暴露出来，供 UI/自测展示。
     bool pivotsThroughEnglish(const QString &src, const QString &dst) const;

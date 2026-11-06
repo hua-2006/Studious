@@ -535,10 +535,4 @@ const Strings &s()
     return tableFor(current());
 }
 
-bool backendMessagesInEnglish()
-{
-    // 产品约定：后端错误文案固定英文，前端原样显示。
-    return true;
-}
-
 } // namespace studious::ui::i18n

@@ -157,7 +157,9 @@ set(STUDIOUS_TS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/translations/studious_en.ts
 )
 
-qt_add_lupdate(studious TS_FILES ${STUDIOUS_TS_FILES})
+qt_add_lupdate(studious TS_FILES ${STUDIOUS_TS_FILES}
+                # 后端也有面向用户的文案（语言名），跟界面一起抽，别让前端各存一份映射表。
+                SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../backend/src/contract/LanguageRegistry.cpp)
 qt_add_lrelease(studious TS_FILES ${STUDIOUS_TS_FILES}
                 QM_FILES_OUTPUT_VARIABLE STUDIOUS_QM_FILES)
 qt_add_resources(studious "translations"

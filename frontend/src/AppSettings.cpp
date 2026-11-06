@@ -49,6 +49,10 @@ AppSettings AppSettings::defaults()
     s.useLocalEngine = false;   // 默认走云端：本地引擎要用户自己去「资产」页下载
     s.localModelFileName.clear();   // 空 = 第一个可用模型
     s.localUseGpu = true;           // 装了 vulkan 运行时就用 GPU（实测 0.5B 单句快 4 倍多）
+    s.localContextSize = 2048;      // llama-server -c
+    s.localThreads = 0;             // 0 = 自动（不传 -t）
+    s.localGpuLayers = -1;          // -1 = 自动（跟随 localUseGpu）
+    s.localExtraArgs.clear();       // 空 = 不加额外参数
     s.uiLanguage.clear();   // 空 = 跟随系统语言
     s.accentSeed.clear();   // 空 = 默认紫 #6750A4
     return s;
@@ -122,6 +126,20 @@ AppSettings AppSettings::load()
     s.localModelFileName = store.value(key("llm/localModel")).toString().trimmed();
     s.localUseGpu = store.value(key("llm/localUseGpu"), def.localUseGpu).toBool();
 
+    // 本地 llama-server 运行时参数。注册表可以被手改（甚至改成字符串 / 负数），
+    // 越界值一律夹回边界而不是丢弃：丢掉只会让用户以为"改了没生效"，
+    // 夹紧至少还是个能跑起来的可用值。
+    s.localContextSize = clampedInt(
+        store.value(key("llm/localContextSize"), def.localContextSize).toInt(), 512, 32768);
+    // 0 是合法值（= 自动，不传 -t），所以下界就是 0，不能夹成 1。
+    s.localThreads =
+        clampedInt(store.value(key("llm/localThreads"), def.localThreads).toInt(), 0, 64);
+    // -1 是合法值（= 自动，跟随 localUseGpu），下界就是 -1。
+    s.localGpuLayers =
+        clampedInt(store.value(key("llm/localGpuLayers"), def.localGpuLayers).toInt(), -1, 999);
+    // 额外参数是自由文本：空串合法（= 不加），所以不走 textOr，只 trim。
+    s.localExtraArgs = store.value(key("llm/localExtraArgs")).toString().trimmed();
+
     // 界面语言：空串是有意义的值（= 跟随系统），所以不做 textOr 回落。
     // 注册表可能被手改成乱七八糟的值，不在白名单里就当"跟随系统"。
     const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
@@ -170,6 +188,11 @@ void AppSettings::save() const
     store.setValue(key("llm/useLocalEngine"), useLocalEngine);
     store.setValue(key("llm/localModel"), localModelFileName);   // 空 = 第一个可用模型
     store.setValue(key("llm/localUseGpu"), localUseGpu);
+    // 下面 4 个也是"结构体有字段但 save() 漏写就会重启回默认"的那类，别再漏。
+    store.setValue(key("llm/localContextSize"), localContextSize);   // 512~32768
+    store.setValue(key("llm/localThreads"), localThreads);           // 0 = 自动
+    store.setValue(key("llm/localGpuLayers"), localGpuLayers);       // -1 = 自动
+    store.setValue(key("llm/localExtraArgs"), localExtraArgs.trimmed());   // 空 = 不加参数
     store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
     store.setValue(key("ui/theme"), themeMode);       // system / light / dark
     store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小

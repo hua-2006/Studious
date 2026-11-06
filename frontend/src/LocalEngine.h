@@ -14,8 +14,16 @@ struct LocalEngineConfig {
     // <root>/models/<file>。也可以只给文件名（相对路径），内部会拼到 models 目录下。
     // 空 = 用 availableModels() 的第一个（与界面「空 = 第一个可用模型」的约定一致）。
     QString modelPath;
-    // true 且 Vulkan 运行时存在 -> 用 Vulkan（带 -ngl 99）；否则回落 CPU（不传 -ngl）。
+    // true 且 Vulkan 运行时存在 -> 用 Vulkan（默认 -ngl 99）；否则回落 CPU（不传 -ngl）。
     bool    preferGpu = true;
+
+    // 下面四项沿用「0 / -1 / 空 = 自动」的约定：界面把用户设置原样存下来交给这里，
+    // 折算成真实命令行参数只发生在 LocalEngine 内部，界面不必知道内置默认值是多少
+    // （默认值改在这里一次，界面和 --smoke 都跟着变，不会两头对不上）。
+    int     contextSize = 0;      // 0 = 用内置默认 2048
+    int     threads = 0;          // 0 = 按后端自动（CPU 6 / GPU 8，见 preferredThreads）
+    int     gpuLayers = -1;       // -1 = 自动（Vulkan 99 / CPU 0）；0 = 显式不卸载任何层
+    QString extraArgs;           // 追加到 llama-server 命令行的额外参数，空格分隔
 };
 
 // 本地 llama.cpp 引擎的轻量管理器（**主线程持有**）。
@@ -31,7 +39,10 @@ struct LocalEngineConfig {
 // 且内部是 QProcess（主线程亲和），**只能在主线程调用**；
 // 翻译本身仍然在工作线程里跑，靠把 baseUrl 快照传进去解耦。
 //
-// 热切换：ensureStarted(cfg) 发现模型或后端与当前运行的不同时，内部先 shutdown() 再重启。
+// 热切换：ensureStarted(cfg) 发现「这次要的配置」与「当前进程实际用的配置」不等价时，
+// 内部先 shutdown() 再重启。判据见 LocalEngine.cpp 的 sameLaunchConfig()：
+// 模型、后端、上下文、线程、GPU 层数、附加参数任何一项变了都算变了——
+// 少比一项，用户改了设置点「应用」就会看起来毫无反应（其实还在用旧参数）。
 // 旧进程一定会被 terminate/kill 掉（QProcess 析构前 waitForFinished），不留孤儿。
 class LocalEngine {
 public:
@@ -50,7 +61,7 @@ public:
     static bool isGpuAvailable();   // runtime.llama.vulkan.win-x64\llama-server.exe
     static bool isCpuAvailable();   // runtime.llama.cpu.win-x64\llama-server.exe
 
-    // 幂等启动：模型与后端都没变且服务还活着 -> 什么都不做（lastStartupMs()==0）。
+    // 幂等启动：配置与当前进程等价且服务还活着 -> 什么都不做（lastStartupMs()==0）。
     // 变了 / 进程已死 -> 先停旧的，再按新配置起一个新的。失败时 error 可直接展示。
     bool ensureStarted(const LocalEngineConfig &cfg, QString *error = nullptr);
 
@@ -65,6 +76,11 @@ public:
     qint64 lastStartupMs() const;
     int port() const;
     qint64 processId() const;   // 当前 llama-server 的 pid；未运行为 0
+
+    // llama-server 的 stdout/stderr 落盘路径与尾部若干行。
+    // 后端 LlamaServer 已经有这两个方法，这里只是转发给界面用。
+    QString logFilePath() const;
+    QString logTail(int maxLines = 200) const;
 
     // 供界面 / 排障显示用。
     QString executablePath() const;   // 当前后端对应的 exe 路径
@@ -83,5 +99,10 @@ private:
     QString m_backend;       // 当前服务实际用的后端（"vulkan" / "cpu"）
     QString m_modelFile;     // 当前服务加载的模型文件名
     QString m_modelPath;     // 当前服务加载的模型绝对路径
+    // 拉起当前进程时调用方给的那份配置。这里存原样、不预先折算：
+    // 等价性判断统一走 sameLaunchConfig()（内部折算生效值），
+    // 于是「0 与 2048 算同一个配置」这种语义只有一处，不会出现存的和比的口径不一致。
+    // shutdown() 会把它清回默认值，保证下次 ensureStarted 必然重新拉起。
+    LocalEngineConfig m_runningCfg;
     qint64 m_lastStartupMs = 0;
 };

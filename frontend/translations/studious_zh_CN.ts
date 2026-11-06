@@ -162,399 +162,454 @@
 <context>
     <name>ConfigPage</name>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="115"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="119"/>
         <source>Web</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="117"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="1153"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="121"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1156"/>
         <source>云端 LLM</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="121"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="1367"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="125"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1372"/>
         <source>本地 MT</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="130"/>
-        <source>Google 在线翻译</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="132"/>
-        <source>MyMemory 记忆库</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="134"/>
-        <source>Microsoft Azure 翻译</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="143"/>
-        <source>无需 key · 免费 · 国内通常需要代理；高频会限流</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="145"/>
-        <source>无需 key · 源语言未知时按 en 处理 · 额度有限</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="147"/>
-        <source>需要 key · v1 仅保留接口，填了也不参与翻译</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="85"/>
-        <source>已获取的模型会出现在下拉里；当前为占位项。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="86"/>
-        <source>尚未探测：会真的发一次翻译请求，用返回的 usage 判断思考是否被关掉。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="119"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="123"/>
         <source>本地 LLM</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="128"/>
-        <source>自动（google → mymemory）</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="141"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="65"/>
         <source>先试 Google，失败再退到 MyMemory；两个都不用 key。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="189"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="83"/>
+        <source>正在向网关请求…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="85"/>
+        <source>已拉取 %1 个聊天模型。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="167"/>
         <source>就绪</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="190"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="168"/>
         <source>缺资产</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="190"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="168"/>
         <source>未就绪</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="355"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="335"/>
         <source>自动（第一个可用）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="779"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="772"/>
         <source>配置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="788"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="781"/>
         <source>翻译链路怎么接通：选引擎、填凭据、装模型。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="802"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="795"/>
         <source>引擎</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="803"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="796"/>
         <source>自动按优先级降级，强制只用一个；点行跳到下面的对应配置。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="813"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="806"/>
         <source>自动选择</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="814"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="807"/>
         <source>强制引擎</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1028"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1021"/>
         <source>换引擎 / 换模型 / 换 Base URL 后，缓存键（含引擎标签）互不命中，同一句原文译文可能完全不同。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1043"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1036"/>
         <source>Web 来源</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1128"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1102"/>
+        <source>缺凭据</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1131"/>
         <source>填入 Key</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1138"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1141"/>
         <source>例如 eastasia</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="826"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1401"/>
+        <source>状态</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1453"/>
+        <source>缺少：%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1465"/>
+        <source>完整</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1465"/>
+        <source>不可用</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1474"/>
+        <source>一个语言对都没装，去资产页下载，或把 mt.opus.&lt;源&gt;-&lt;目标&gt; 目录直接拷进 models/。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1493"/>
+        <source>当前语言对走：%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1494"/>
+        <source>当前语言对没有可用的本地路径（本地 MT 不支持自动检测源语言，先在翻译页选定源语言）。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1527"/>
+        <source>从文件导入要按资产清单校验 sha256，等后端给出「按路径导入」接口再开。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1544"/>
+        <source>可用运行时</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1561"/>
+        <source>实心 = 已装（资产里已安装的 llama-server 运行时）</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1562"/>
+        <source>一个运行时都没装，先去资产页下载</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="819"/>
         <source>当前：自动</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="827"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="64"/>
+        <source>自动</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="820"/>
         <source>当前：%1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="829"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="822"/>
         <source>自动 = 优先级，前一个不可用才轮下一个</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1044"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1037"/>
         <source>单选；「自动」按 google → mymemory 依次尝试，固定某个来源后失败就直接报错，不会偷偷换源。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1154"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1157"/>
         <source>OpenAI 兼容接口；没填 API Key 时这条链路自动跳过。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1179"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1182"/>
         <source>模型</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1191"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1193"/>
         <source>获取模型</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1192"/>
-        <source>后端还没有「获取模型」接口，先按占位列表选。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1251"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1255"/>
         <source>留空使用内置提示词</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1284"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1288"/>
         <source>留空使用内置提示词。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1291"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1295"/>
         <source>思考等级</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1298"/>
         <source>关闭</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1298"/>
         <source>极低</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1298"/>
         <source>低</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1298"/>
         <source>中</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1298"/>
         <source>高</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1295"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1299"/>
         <source>跟随默认</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1304"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1307"/>
         <source>探测</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1305"/>
-        <source>后端还没有探测接口；接上后会真的发一次翻译请求。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1320"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1325"/>
         <source>批量合并段数</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1331"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1336"/>
         <source>重试预算</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1342"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1347"/>
         <source>清理模型注记</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1350"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1355"/>
         <source>清掉小模型加的「【中文】」注记，只删整行括注，正文不动。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1368"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1373"/>
         <source>按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1379"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1382"/>
         <source>语言对</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1388"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1391"/>
         <source>实际路径</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1435"/>
-        <source>需下载</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1450"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1509"/>
         <source>本地 LLM（llama-server）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1451"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1510"/>
         <source>由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1454"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1513"/>
         <source>模型文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1467"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1524"/>
         <source>浏览…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1468"/>
-        <source>后端还没有文件选择接口。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1473"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1576"/>
         <source>上下文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1484"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1596"/>
         <source>线程</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1495"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1616"/>
         <source>GPU 层数</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1505"/>
-        <source>Vulkan 构建需要 99</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1512"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1642"/>
         <source>优先 GPU</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1520"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1650"/>
         <source>装了 Vulkan 运行时就走 GPU；关掉只用 CPU。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1530"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1660"/>
         <source>附加参数</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1545"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1700"/>
         <source>运行中</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1545"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1700"/>
         <source>已停止</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1558"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1713"/>
+        <source>后端</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1729"/>
         <source>端口</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1599"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1761"/>
+        <source>启动耗时</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1770"/>
+        <source>%1 ms</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1804"/>
         <source>日志</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1609"/>
-        <source>llama-server 已就绪</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1609"/>
-        <source>等待启动…</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1618"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1780"/>
         <source>启动</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1625"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1586"/>
+        <source>token 数，对应 llama-server 的 -c。太小装不下长句，太大白吃内存。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1606"/>
+        <source>0 = 自动（按后端决定），对应 -t。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1626"/>
+        <source>-1 = 自动（Vulkan 99 / CPU 0）；0 = 不卸载任何层，纯 CPU 算</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1632"/>
+        <source>-1 = 自动，对应 -ngl。显存不够时手动降档。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1672"/>
+        <source>原样拼到 llama-server 命令行尾部，空格分隔。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1686"/>
+        <source>采样参数（temperature / maxTokens / 系统提示词）沿用上方「云端 LLM」里的设置；本地只额外固定「逐段请求」并清理小模型的括注噪声。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1787"/>
         <source>停止</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1667"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1813"/>
+        <source>（还没有日志文件）</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1821"/>
+        <source>刷新</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1843"/>
+        <source>启动本地 llama-server 后，这里显示它最近的输出。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1889"/>
         <source>%1 还没有配置好</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1677"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1899"/>
         <source>需要先填好连接参数才能使用。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1692"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1914"/>
         <source>取消</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1697"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1919"/>
         <source>去配置</source>
         <translation type="unfinished"></translation>
     </message>
@@ -704,6 +759,74 @@
     <message>
         <location filename="../qml/pages/HotkeysPage.qml" line="157"/>
         <source>清除</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LanguageRegistry</name>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="180"/>
+        <source>自动检测</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="183"/>
+        <source>中文(简体)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="186"/>
+        <source>中文(繁体)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="189"/>
+        <source>英语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="192"/>
+        <source>日语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="195"/>
+        <source>韩语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="198"/>
+        <source>法语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="201"/>
+        <source>德语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="204"/>
+        <source>西班牙语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="207"/>
+        <source>俄语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="210"/>
+        <source>葡萄牙语</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="213"/>
+        <source>葡萄牙语(巴西)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../../backend/src/contract/LanguageRegistry.cpp" line="216"/>
+        <source>意大利语</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -1305,192 +1428,132 @@
 <context>
     <name>TranslatePage</name>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="52"/>
-        <source>自动检测</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="53"/>
-        <source>中文(简体)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="54"/>
-        <source>中文(繁体)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="55"/>
-        <source>英语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="56"/>
-        <source>日语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="57"/>
-        <source>韩语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="58"/>
-        <source>法语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="59"/>
-        <source>德语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="60"/>
-        <source>西班牙语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="61"/>
-        <source>俄语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="62"/>
-        <source>葡萄牙语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="63"/>
-        <source>葡萄牙语(巴西)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="64"/>
-        <source>意大利语</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="159"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="132"/>
         <source>欢迎来到 Studious</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="170"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="143"/>
         <source>文字如舟，渡你过语言的河。选好目标语言就能出发。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="199"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="174"/>
+        <source>源语言 · 检测到%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/TranslatePage.qml" line="175"/>
         <source>源语言</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="308"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="285"/>
         <source>目标语言</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="392"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="369"/>
         <source>引擎</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="420"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="397"/>
         <source>原文对照</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="442"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="419"/>
         <source>缓存键含引擎</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="467"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="444"/>
         <source>翻译中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="467"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="444"/>
         <source>开始翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="492"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="469"/>
         <source>点击开始翻译 · 翻译中可取消</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="544"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="521"/>
         <source>原文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="551"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="528"/>
         <source>%1 段</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="556"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="533"/>
         <source>粘贴</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="562"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="539"/>
         <source>清空</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="587"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="564"/>
         <source>在这里输入或粘贴要翻译的文字…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="627"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="604"/>
         <source>源语言 · %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="635"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="612"/>
         <source>UTF-8 · %1 字符</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="678"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="655"/>
         <source>译文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="732"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="709"/>
         <source>复制全部</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="759"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="736"/>
         <source>译文会出现在这里</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="793"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="770"/>
         <source>这是原文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="817"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="794"/>
         <source>（该段无译文）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="859"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="836"/>
         <source>引擎 · %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="870"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="847"/>
         <source>命中 %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="970"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="948"/>
         <source>查看引擎状态</source>
         <translation type="unfinished"></translation>
     </message>

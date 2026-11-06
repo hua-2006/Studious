@@ -12,14 +12,8 @@
 namespace studious::translate {
 namespace {
 
-// 一个语言对目录里必须具备的文件。缺任何一个都视为该对不可用。
-const char *const kRequiredPairFiles[] = {
-    "encoder_model_quantized.onnx",
-    "decoder_model_quantized.onnx",
-    "source.spm",
-    "target.spm",
-    "vocab.json",
-};
+// 一个语言对目录里必须具备的文件清单见 LocalMtTranslator::requiredFiles()（唯一来源），
+// 缺任何一个都视为该对不可用。
 
 QString defaultModelsRoot()
 {
@@ -109,8 +103,11 @@ QString LocalMtTranslator::pairDir(const QString &src, const QString &dst) const
 bool LocalMtTranslator::pairAvailable(const QString &src, const QString &dst) const
 {
     const QString dir = pairDir(src, dst);
-    for (const char *name : kRequiredPairFiles) {
-        if (!QFileInfo::exists(QDir(dir).filePath(QString::fromUtf8(name)))) {
+    // 判据与 missingFiles() 完全一致（同一张表 + isFile()），否则会出现"界面说缺文件、
+    // 路由却认为可用"的错位：曾经 kRequiredPairFiles 少 config.json 且用 exists()，
+    // 目录里同名子目录也能算"有文件"，最后在 MtModel::load 里才炸。
+    for (const QString &name : requiredFiles()) {
+        if (!QFileInfo(QDir(dir).filePath(name)).isFile()) {
             return false;
         }
     }
@@ -136,6 +133,48 @@ QStringList LocalMtTranslator::installedPairs() const
         }
     }
     return pairs;
+}
+
+QStringList LocalMtTranslator::requiredFiles()
+{
+    // 必须与 modelFor() 里拼 MtPaths 的文件名逐字一致（见 MtModel::load 的存在性检查）。
+    // 这张表是唯一来源：pairAvailable()、installedPairs()、missingFiles() 都用它，
+    // 界面上"缺哪些文件"和路由判断"这对能不能用"因此永远一致。
+    // vocab.json 缺了会退回 spm 自己的 id 空间（译文是错的），config.json 缺了
+    // MtModel::load 直接失败（decoder_start_token_id / num_beams 在里面），都算必备。
+    return {
+        QStringLiteral("encoder_model_quantized.onnx"),
+        QStringLiteral("decoder_model_quantized.onnx"),
+        QStringLiteral("source.spm"),
+        QStringLiteral("target.spm"),
+        QStringLiteral("vocab.json"),
+        QStringLiteral("config.json"),
+        // decoder_model_merged_quantized.onnx 是可选加速项（KV cache），不算必备。
+    };
+}
+
+QStringList LocalMtTranslator::missingFiles(const QString &pair) const
+{
+    const QStringList required = requiredFiles();
+    const QString suffix = pair.trimmed();
+    if (suffix.isEmpty()) {
+        return required;   // 没给 pair 等于目录不可用，按"全缺"处理
+    }
+
+    // 直接拼 "mt.opus.<pair>"，刻意不走 pairDir(src, dst)：pair 已经是拼好的目录后缀，
+    // 再按 '-' 拆成两段只是在"能不能原样拼回来"上赌一把（mul 伪语言标签、zh-TW 这类带
+    // 横线的目标语言段都在赌注里），而目录名本身就等于 "mt.opus." + pair，一步拼完最稳，
+    // 也和 installedPairs() 反过来剥前缀的写法对称。
+    const QDir dir(QDir(m_modelsRoot).filePath(QStringLiteral("mt.opus.") + suffix));
+    QStringList missing;
+    missing.reserve(required.size());
+    for (const QString &name : required) {
+        // isFile() 而不是 exists()：同名目录不算文件，缺了就是缺了。
+        if (!QFileInfo(dir.filePath(name)).isFile()) {
+            missing << name;
+        }
+    }
+    return missing;
 }
 
 bool LocalMtTranslator::isReady() const

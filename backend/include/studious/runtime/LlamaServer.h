@@ -53,6 +53,11 @@ public:
     int port() const;         // 实际选中的端口；未启动为 0
     qint64 processId() const; // 子进程 pid；未启动为 0（热切换时用来证明进程真的换了）
 
+    // 排障用：llama-server 的 stdout/stderr 落盘位置与尾部若干行。
+    // 界面「本地 LLM」卡片要原样显示，所以从这里公开出去。
+    QString logFilePath() const;
+    QString logTail(int maxLines = 200) const;
+
 private:
     bool pickPort(QString *error);
     bool prepareLogFile(QString *logPath, QString *error);
@@ -61,8 +66,6 @@ private:
 
     QStringList arguments() const;
     QString installRoot() const;
-    QString logFilePath() const;
-    QString logTail(int maxLines) const;
     void recordError(const QString &text);
 
     LlamaServerOptions m_options;

@@ -44,6 +44,26 @@ struct AppSettings {
     // 「优先」是刻意的措辞：没装 vulkan 运行时不会报错，只是当成 false。
     bool localUseGpu = true;
 
+    // ---- 本地 llama-server 运行时参数（下面 4 个一起喂给 LocalEngine 启动进程）----
+
+    // 上下文窗口 token 数（键 settings/llm/localContextSize，默认 2048，合法 512~32768）。
+    // 对应 llama-server 的 -c。太小装不下长句，太大白吃内存 / 显存。
+    int localContextSize = 2048;
+
+    // CPU 线程数（键 settings/llm/localThreads，默认 0，合法 0~64）。
+    // 0 = 自动：不传 -t，交给 llama.cpp 自己按物理核心数决定。
+    int localThreads = 0;
+
+    // 卸载到 GPU 的层数（键 settings/llm/localGpuLayers，默认 -1，合法 -1~999）。
+    // -1 = 自动：沿用 localUseGpu 的老逻辑（装了 vulkan 就 -ngl 99，否则全 CPU）；
+    // 0 = 强制全 CPU；>0 = 只卸这么多层（显存不够时手动降档）。
+    int localGpuLayers = -1;
+
+    // 额外命令行参数原样拼到 llama-server 命令行尾部
+    // （键 settings/llm/localExtraArgs，默认空串 = 不加）。
+    // 存 trim 后的串；合法性由用户自己负责（这是给高级用户留的口子）。
+    QString localExtraArgs;
+
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
     // 不改翻译本身的目标语言（那是 dstLang 的事）。

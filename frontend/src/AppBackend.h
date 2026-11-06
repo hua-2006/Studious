@@ -83,6 +83,27 @@ class AppBackend : public QObject {
     // ---- 主题："system" / "light" / "dark"，落 QSettings ----
     Q_PROPERTY(QString themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged)
 
+    // ---- 后端能力的界面出口（去重后由后端供给，前端不再自己存一份）----
+    // Web 来源注册表：来自后端 listWebProviders()，含 id / 显示名 / 说明 / 是否需要 key
+    Q_PROPERTY(QVariantList webProviders READ webProviders CONSTANT)
+
+    // 本地 LLM 运行期实况
+    Q_PROPERTY(QStringList localModels READ localModels CONSTANT)
+    Q_PROPERTY(bool localGpuAvailable READ localGpuAvailable CONSTANT)
+    Q_PROPERTY(bool localCpuAvailable READ localCpuAvailable CONSTANT)
+    Q_PROPERTY(int localPort READ localPort NOTIFY localStateChanged)
+    Q_PROPERTY(qint64 localPid READ localPid NOTIFY localStateChanged)
+    Q_PROPERTY(QString localBackend READ localBackend NOTIFY localStateChanged)
+    Q_PROPERTY(qint64 localStartupMs READ localStartupMs NOTIFY localStateChanged)
+    Q_PROPERTY(QString localModelPath READ localModelPath NOTIFY localStateChanged)
+    Q_PROPERTY(QString localLogTail READ localLogTail NOTIFY localStateChanged)
+    Q_PROPERTY(QString localLogPath READ localLogPath NOTIFY localStateChanged)
+
+    // 云端 LLM：模型列表与思考探测（都是网络请求，异步回传）
+    Q_PROPERTY(QVariantList cloudModels READ cloudModels NOTIFY cloudModelsChanged)
+    Q_PROPERTY(bool cloudBusy READ cloudBusy NOTIFY cloudBusyChanged)
+    Q_PROPERTY(QString cloudProbeResult READ cloudProbeResult NOTIFY cloudProbeResultChanged)
+
     // ---- 配置页用：引擎具体配置的读写 ----
     // 云端 LLM 的全部连接与采样参数（对应 config::LlmConfig）。
     // 键：baseUrl / apiKey / model / timeoutMs / maxTokens / temperature /
@@ -94,6 +115,20 @@ class AppBackend : public QObject {
     // 本地 LLM：模型文件名（空 = 用第一个可用模型）+ 是否优先 GPU。
     Q_PROPERTY(QString localModel READ localModel WRITE setLocalModel NOTIFY localModelChanged)
     Q_PROPERTY(bool localUseGpu READ localUseGpu WRITE setLocalUseGpu NOTIFY localUseGpuChanged)
+
+    // 本地 LLM 的启动参数。三者都有「自动」语义，所以界面上的默认值就是
+    // 0 / 0 / -1，而不是把 2048 之类写死到 QML 里 —— 默认值只活在 LocalEngine 一处。
+    Q_PROPERTY(int localContextSize READ localContextSize WRITE setLocalContextSize
+                   NOTIFY localLaunchChanged)
+    Q_PROPERTY(int localThreads READ localThreads WRITE setLocalThreads NOTIFY localLaunchChanged)
+    Q_PROPERTY(int localGpuLayers READ localGpuLayers WRITE setLocalGpuLayers
+                   NOTIFY localLaunchChanged)
+    Q_PROPERTY(QString localExtraArgs READ localExtraArgs WRITE setLocalExtraArgs
+                   NOTIFY localLaunchChanged)
+
+    // 本地 MT 已装的语言对：来自后端 installedPairs() + missingFiles()。
+    // 每项：pair / path / missing（QStringList）/ usable（bool）
+    Q_PROPERTY(QVariantList mtPairs READ mtPairs NOTIFY mtPairsChanged)
 
     // ---- 界面语言 ----
     // 取值："system" | "zh" | "en"。
@@ -173,6 +208,23 @@ public:
     QVariantMap llmConfig() const { return m_llmConfig; }
     void setLlmConfig(const QVariantMap &config);
 
+    QVariantList webProviders() const;
+
+    QStringList localModels() const;
+    bool localGpuAvailable() const;
+    bool localCpuAvailable() const;
+    int localPort() const;
+    qint64 localPid() const;
+    QString localBackend() const;
+    qint64 localStartupMs() const;
+    QString localModelPath() const;
+    QString localLogTail() const;
+    QString localLogPath() const;
+
+    QVariantList cloudModels() const { return m_cloudModels; }
+    bool cloudBusy() const { return m_cloudBusy; }
+    QString cloudProbeResult() const { return m_cloudProbeResult; }
+
     QString webProviderId() const { return m_webProviderId; }
     void setWebProviderId(const QString &id);
 
@@ -181,6 +233,21 @@ public:
 
     bool localUseGpu() const { return m_localUseGpu; }
     void setLocalUseGpu(bool enabled);
+
+    int localContextSize() const { return m_localContextSize; }
+    void setLocalContextSize(int tokens);
+    int localThreads() const { return m_localThreads; }
+    void setLocalThreads(int threads);
+    int localGpuLayers() const { return m_localGpuLayers; }
+    void setLocalGpuLayers(int layers);
+    QString localExtraArgs() const { return m_localExtraArgs; }
+    void setLocalExtraArgs(const QString &args);
+
+    // 本地 MT 已装语言对（含缺文件信息）。
+    QVariantList mtPairs() const { return m_mtPairs; }
+    void refreshMtPairs();
+    // 该语言对实际走的路线说明（"直接翻译" / "经英语中转" …）；不可用返回空串。
+    Q_INVOKABLE QString mtRouteFor(const QString &src, const QString &dst) const;
 
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
     QString accentColor() const;
@@ -214,6 +281,15 @@ public slots:
 
     // 重启本程序（界面语言这类要重启才生效的设置，改完直接调它）。
     Q_INVOKABLE void restartApplication();
+
+    // 重新读一次本地引擎实况（端口 / pid / 日志尾部都要重新取）。
+    Q_INVOKABLE void refreshLocalState();
+    // 去网关拉模型列表（GET {baseUrl}/models）。
+    Q_INVOKABLE void fetchCloudModels();
+    // 探测网关的「思考可关闭」能力，结果写进 cloudProbeResult。
+    Q_INVOKABLE void probeCloudReasoning();
+    // 语言检测，返回内部语言码（"en" / "zh" …），失败返回空串。
+    Q_INVOKABLE QString detectLanguage(const QString &text);
 
     // 把 QPalette 同步成当前主题。
     // QML 侧是配色唯一来源，这里只负责把它转交给 Qt ——
@@ -254,6 +330,12 @@ signals:
     void webProviderIdChanged();
     void localModelChanged();
     void localUseGpuChanged();
+    void localLaunchChanged();
+    void mtPairsChanged();
+    void localStateChanged();
+    void cloudModelsChanged();
+    void cloudBusyChanged();
+    void cloudProbeResultChanged();
     void accentColorChanged();
 
     // 供 QML 弹提示 / 打开对话框
@@ -301,6 +383,14 @@ private:
     QString m_webProviderId;
     QString m_localModel;
     bool m_localUseGpu = true;
+    int m_localContextSize = 2048;
+    int m_localThreads = 0;
+    int m_localGpuLayers = -1;
+    QString m_localExtraArgs;
+    QVariantList m_mtPairs;
+    QVariantList m_cloudModels;
+    bool m_cloudBusy = false;
+    QString m_cloudProbeResult;
     // 规范化的 "#RRGGBB"（大写）；空 = 用默认紫，由 accentColor() 兜底。
     QString m_accentColor;
 

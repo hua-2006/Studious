@@ -4,6 +4,7 @@
 #include "net/QtHttpClient.h"
 
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -260,12 +261,18 @@ bool LlamaServer::waitUntilReady(QString *error)
         // 典型原因：模型文件损坏、命令行参数不认识、端口被别人抢走。
         if (m_process == nullptr || m_process->state() == QProcess::NotRunning) {
             const int code = m_process != nullptr ? m_process->exitCode() : -1;
-            const QString tail = logTail(kLogTailLines);
+            // 完整日志只进日志文件/stderr：界面要的是「谁错了、下一步做什么」，
+            // 不是二十几行 llama.cpp 的 C 风格输出。
+            qWarning("[local] llama-server exited early (code %d), log: %s\n%s",
+                     code,
+                     qUtf8Printable(logFilePath()),
+                     qUtf8Printable(logTail(kLogTailLines)));
             const QString text = i18n::sf(
-                "本地引擎进程提前退出（退出码 %1）。日志尾部：\n%2",
-                "The local engine process exited early (code %1). Log tail:\n%2",
-                {QString::number(code),
-                 tail.isEmpty() ? i18n::s("（日志为空）", "(the log is empty)") : tail});
+                "本地引擎启动失败：llama-server 提前退出（退出码 %1）。\n"
+                "详细日志见配置页「本地 LLM」的日志面板（%2）。",
+                "The local engine failed to start: llama-server exited early (code %1).\n"
+                "See the log panel in Configuration → Local LLM (%2) for details.",
+                {QString::number(code), QDir::toNativeSeparators(logFilePath())});
             if (error != nullptr) {
                 *error = text;
             }
@@ -285,16 +292,20 @@ bool LlamaServer::waitUntilReady(QString *error)
         }
 
         if (timer.elapsed() >= timeoutMs) {
-            const QString tail = logTail(kLogTailLines);
+            qWarning("[local] llama-server did not become ready within %lld ms (last probe: HTTP %d %s), log: %s\n%s",
+                     static_cast<long long>(timer.elapsed()),
+                     lastStatus,
+                     qUtf8Printable(lastTransportError),
+                     qUtf8Printable(logFilePath()),
+                     qUtf8Printable(logTail(kLogTailLines)));
             const QString text = i18n::sf(
-                "本地引擎启动超时（%1 ms，最后一次探测：HTTP %2 %3）。日志尾部：\n%4",
-                "The local engine did not become ready within %1 ms (last probe: HTTP %2 %3). "
-                "Log tail:\n%4",
+                "本地引擎启动超时（%1 ms 内没有就绪，最后一次探测：HTTP %2）。\n"
+                "详细日志见配置页「本地 LLM」的日志面板（%3）。",
+                "The local engine did not become ready within %1 ms (last probe: HTTP %2).\n"
+                "See the log panel in Configuration → Local LLM (%3) for details.",
                 {QString::number(timer.elapsed()),
                  QString::number(lastStatus),
-                 lastTransportError.isEmpty() ? i18n::s("无传输层错误", "no transport error")
-                                              : lastTransportError,
-                 tail.isEmpty() ? i18n::s("（日志为空）", "(the log is empty)") : tail});
+                 QDir::toNativeSeparators(logFilePath())});
             if (error != nullptr) {
                 *error = text;
             }
