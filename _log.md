@@ -682,3 +682,102 @@ msedge --headless=new --virtual-time-budget=1500 --window-size=1440,900 --screen
 - 写完 QML 用 `[System.IO.File]::WriteAllText` 时要显式传 `UTF8Encoding($false)`，且改完核对 CRLF 计数为 0。- 追加修正：内容面板最初用 `Theme.surfaceDim`（深色下比卡片更暗），用户反馈「背景太深了」→ 改成 `Theme.surfaceLow`。
   深色下 `surfaceDim`(0.03) / `surfaceLow`(0.07) / `surfaceMid`(0.09) / `surfaceHigh`(0.12) / `surfaceHighest`(0.15)
   是按 seed 混进底色的比例，所以「标题条 surfaceHigh + 内容面板 surfaceLow」是既有层次又不压暗内容的组合。
+## 翻译页重做成入口页（2026-11-07）
+
+用户要求：原文对照挪到「开始翻译」的位置、删掉原文/译文/开始翻译、空位放三张卡片
+（小窗口 / 截图翻译 / 实时翻译），带图标和悬浮动画，事件先预留。
+
+改动：
+- `frontend/qml/pages/TranslatePage.qml` 整体重写（1055 → 约 730 行）。
+  - 删掉整块双栏（原文 TextArea + 译文分栏 + 块渲染 + 逐段原文 + FAB），
+    连带 `srcArea/translatedArea/paneBodyMinHeight/paneMinHeight` 等一整套。
+  - 语言对（源/目标两列，各 200px）、引擎 Segmented、状态行、警告条、引擎状态条保留。
+  - 「原文对照」开关移到右侧（原 FAB 位置），旁边是缓存键 Badge 与提示文案。
+  - 新增内联 `component LauncherCard`：32px 图标（`MultiEffect` 按主题重上色）、
+    标题、描述、要点一行、底部「接口已预留」+ 悬浮时才出现的 →。
+    悬浮：底色 `surface → surfaceHigh`、描边 `outlineVariant → primary`、
+    整卡 `scale 1.0 → 1.012`、图标/要点变强调色，全部 150ms（`Theme.durFast`）。
+    交互用 `HoverHandler` + `TapHandler`（`MouseArea` 会吞掉子项 hover）。
+  - 预留信号 `launchRequested(string kind)`，kind = `"mini" / "capture" / "live"`；
+    `Main.qml` 暂无消费者。
+- 新增图标 `frontend/resources/icons/{mini,screenshot,realtime}.svg`（24×24 描边，
+  与既有图标同款），加进 `frontend/CMakeLists.txt` 的 `RESOURCES`。
+- 状态条：`detailMaxWidth` 220 → 120、项间距 `s5` → `s4`，1120 宽下四项都能露出。
+- 译文：`update_translations` 12 条新文案全部补英文，`studious_en.ts` unfinished = 0。
+
+验证：
+- 构建 `[9/9] Linking CXX executable studious.exe`，页面无 QML 警告。
+- 截图 `docs/ui-shots-qml/launcher4.png`（深色）、`launcher4_light.png`（浅色）、
+  `launcher_en.png`（英文，临时改注册表 `ui/language=en`，截完已复原 `zh`）。
+
+坑：
+- `Row` 里 delegate 用 `width/height` 会让 `ScrollView.contentHeight` 归零，
+  必须用 `implicitWidth/implicitHeight`（状态条那次已经踩过一次，这里沿用）。
+- 卡片用 `Layout.fillHeight: true` 撑满剩余高度后中段会空一大块，
+  补一行要点 + 底部 1px 分隔线才不至于像个空盒子。
+## 深色主题图标看不见：根因与修法（2026-11-07）
+
+现象：深色主题下所有单色图标（左栏、设置导航、引擎行、入口卡）都是暗的，几乎看不清。
+
+根因：`MultiEffect` 的 `colorization` 是**把源像素乘以 colorizationColor**，
+不是替换颜色。图标 SVG 的描边原本写死 `#4C3B79`（深紫），乘一个亮色仍然暗 ——
+所以不管 tint 给多亮，图标都还是深的。之前的「按主题重新上色」一直没真正生效。
+
+修法：把 14 个图标的描边/填充从 `#4C3B79` 改成 `#FFFFFF`（纯白）。
+白色 × 任何 tint = tint，于是每处 `colorizationColor` 就成了图标的精确颜色：
+- 左栏选中 `railIconActive`（深色主题近白）/ 未选中 `railIconIdle`
+- 设置导航、引擎行同理
+- 入口卡：常态 `inkVariant`（深色主题浅灰）、悬浮 `primary`（浅紫）
+- 品牌图标：`primaryText`（深色主题深色，压在浅紫圆片上，对比度正好）
+
+走过一条弯路：先试了自写 `ShaderEffect`（片元着色器只取 alpha、RGB 换成 tint）。
+Qt 6 里 `fragmentShader` 的**内联字符串会被当成相对 URL**，报
+`ShaderEffect: shader preparation failed`；改成外部 `.frag` 文件放进 RESOURCES
+依然同样报错（这个 MinGW 构建没跑通运行时 shader 编译）。组件已删除，
+CMake 里的 `Icon.qml` / `icon.frag` 条目也回滚了。
+
+验证：`icons_dark.png`（深色，三张卡图标浅紫、侧栏亮）、`icons_page2.png`
+（配置页四行引擎图标全可见）、`icons_page3.png`（设置七个分区图标全可见）、
+`icons_light.png`（浅色仍为深色描边，未变淡）。
+---
+
+## 平台层收口 + 双平台兼容检查（2026-11-07，版本 0.9.0-separate）
+
+### 做了什么
+1. **孤儿守护搬家**：新建 `frontend/src/platform/ProcessGuard.{h,cpp}`，把原本写在 `LocalEngine.cpp` 里的
+   Job Object 代码（`CreateJobObjectW` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` + `AssignProcessToJobObject`）
+   整块搬进平台层。`LocalEngine.h` 现在只持有一个 `studious::platform::ProcessGuard m_guard`，
+   并在 `start()` 成功后 `m_guard.attach(processId())`、`shutdown()` 里 `m_guard.release()`。
+   于是 `frontend/src` 里 `#include <windows.h>` 只剩 `platform/Desktop.cpp` 与 `platform/ProcessGuard.cpp` 两处。
+2. **去掉 win-x64 / llama-server.exe 硬编码**：`LocalEngine.cpp` 的 `kCpuRuntimeId` / `kVulkanRuntimeId` /
+   `kServerExeName` 三个常量删掉，换成 `cpuRuntimeId()` / `vulkanRuntimeId()` / `serverExeName()`，
+   内部走 `IPlatform::runtimeAssetSuffix()` 与 `IPlatform::serverExecutableName()`。报错文案里的资产 id 也改成拼出来的。
+3. **`createOverlay()` 返回类型 `QWidget*` → `QWindow*`**：界面是 Qt Quick，浮层要用 `QQuickWindow` 画，
+   Widgets 从没进过链接表。`IPlatform.h` / `NullPlatform.h` / `.cpp` 同步改。
+4. **Linux 开机自启真实现**：`Desktop::setAutoStart` / `autoStartRegistered` 的 `#else` 分支不再返回
+   "当前平台暂不支持"，改成写 `\/autostart/studious.desktop`（Exec 加引号，兼容带空格的路径）。
+5. **`backend/src/runtime/LlamaServer.cpp` 报错文案去平台化**：不再点名 `runtime.llama.cpu.win-x64`，
+   改成"对应的 llama.cpp 运行时"（具体 id 由前端 `LocalEngine` 补，那边知道平台后缀）。
+6. **界面文案去 Windows 化**：设置页"已写入当前用户的启动项（HKCU\...\Run）" → "已写入当前用户的自启动项。"
+7. **底层总结**：新增 `frontend/src/platform/README.md`——文件清单、平台头规则、能力矩阵（Windows / Linux 逐项）、
+   静态入口、加平台的四个步骤、已知遗留（Linux llama 运行时占位、onnxruntime 只有 Windows 版、Wayland 抓屏限制）。
+
+### 验证（全部在本机 Windows 上真跑）
+- 构建：`cmake --build frontend/build` → `[13/13] Linking CXX executable studious.exe`，0 error。
+- `--smoke "Hello, world!" --from en --to zh --engine local-mt` → 你好,世界观!，exit 0。
+- `--smoke "The quick brown fox..." --from en --to zh --local` → 后端=vulkan、pid、baseUrl 18080、
+  译文正确、停服务 3077 ms、`llama-server` 残留 0（说明平台后缀拼出的 exe 路径对）。
+- Job Object 兜底：置 `localPreheat=1` 起 GUI → 9 秒后 `llama-server` = 1 → `Stop-Process studious -Force`
+  → 5 秒后 `llama-server` = 0（ProcessGuard 生效）。
+- `backend_selftest.exe` → `ALL CORE TESTS PASSED`。
+- `--ui-shot` 两张：`docs/ui-shots-qml/plat_config.png`（配置页四行引擎照旧全绿）、`about_090.png`；
+  `[appinfo] Studious 版本 0.9.0-separate`。
+- 翻译：`update_translations` → 335 条、4 new（三条自启报错 + 一条成功提示），补完 `unfinished = 0`。
+
+### 坑
+- `ProcessGuard.cpp` 里必须 `#if defined(Q_OS_WIN)` 包住整段，否则 Linux 上 `HANDLE` 未定义；
+  非 Windows 分支写成显式空实现（而不是不定义函数），这样 POSIX 版本补进来时只改这一个文件。
+- `Desktop.cpp` 的 `xdgAutoStartFile()` 放在 `#ifndef Q_OS_WIN` 的匿名命名空间里，
+  否则 Windows 构建会有"未使用函数"告警。
+- 之前那条"`--ui-section 6` 拍关于页"的钩子在 `if (sectionIndex > 0)` 里，行为正常；
+  但设置页分区下标改动过，拍关于页要重新确认下标（本次用 `[appinfo]` 行验证版本号即可）。

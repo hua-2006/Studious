@@ -25,7 +25,7 @@ public:
     CaptureResult captureInteractive() override;
     void cancelInteractive() override;
 
-    QWidget *createOverlay(const OverlayOptions &) override;
+    QWindow *createOverlay(const OverlayOptions &) override;
 
     bool registerHotkey(const HotkeySpec &) override;
     void unregisterHotkey(const QString &id) override;

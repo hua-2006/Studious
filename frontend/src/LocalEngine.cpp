@@ -1,6 +1,7 @@
 #include "LocalEngine.h"
 
 #include "AppSettings.h"
+#include "platform/IPlatform.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -14,26 +15,28 @@
 #include <algorithm>
 #include <utility>
 
-#ifdef Q_OS_WIN
-// 只用 Job Object 那几个 API，不需要别的 Win32 声明。
-// 这里放宽是为了让 backend 保持「零平台头依赖」那条硬约束成立：平台粘合留在前端。
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
-#endif
-
 namespace {
 
-// 固定资产 id：与 backend/asset/manifest.json 里的 id 一一对应。
-// 两个运行时是同一份 llama.cpp b12102，只有编译进去的 ggml 后端不同（vulkan 版多带
-// ggml-vulkan.dll），所以"选后端"= 选 exe 路径 + 决定要不要 -ngl。
-const char *const kCpuRuntimeId = "runtime.llama.cpu.win-x64";
-const char *const kVulkanRuntimeId = "runtime.llama.vulkan.win-x64";
-const char *const kServerExeName = "llama-server.exe";
+// 运行时 id 由平台层拼出来：Windows 是 runtime.llama.{cpu,vulkan}.win-x64，
+// Linux 是 ...linux-x64。以前这里写死 win-x64，Linux 上永远报"缺运行时"。
+// 两个运行时是同一份 llama.cpp，只有编译进去的 ggml 后端不同（vulkan 版多带
+// ggml-vulkan.dll / libggml-vulkan.so），所以"选后端"= 选 exe 路径 + 决定要不要 -ngl。
+QString cpuRuntimeId()
+{
+    return QStringLiteral("runtime.llama.cpu.") + studious::platform::IPlatform::runtimeAssetSuffix();
+}
+
+QString vulkanRuntimeId()
+{
+    return QStringLiteral("runtime.llama.vulkan.")
+        + studious::platform::IPlatform::runtimeAssetSuffix();
+}
+
+// 服务端可执行名：Windows "llama-server.exe"，其它平台 "llama-server"。
+QString serverExeName()
+{
+    return studious::platform::IPlatform::serverExecutableName();
+}
 
 // 实测结论：Vulkan 构建必须显式给 -ngl 99（整个模型上卡）。
 // 只把 exe 换成 vulkan 版而不传 -ngl，它照样用 CPU 算——启动日志里也不会出现 device Vulkan0。
@@ -46,8 +49,7 @@ constexpr int kDefaultContextSize = 2048;
 QString runtimeExePath(const QString &runtimeId)
 {
     return QDir(LocalEngine::installRoot())
-        .filePath(QStringLiteral("runtime/%1/%2")
-                      .arg(runtimeId, QString::fromLatin1(kServerExeName)));
+        .filePath(QStringLiteral("runtime/%1/%2").arg(runtimeId, serverExeName()));
 }
 
 // 线程数：CPU 实测 -t 6（12 线程机器留余量给界面与系统）。
@@ -198,12 +200,12 @@ QStringList LocalEngine::availableModels()
 
 bool LocalEngine::isGpuAvailable()
 {
-    return QFileInfo::exists(runtimeExePath(QString::fromLatin1(kVulkanRuntimeId)));
+    return QFileInfo::exists(runtimeExePath(vulkanRuntimeId()));
 }
 
 bool LocalEngine::isCpuAvailable()
 {
-    return QFileInfo::exists(runtimeExePath(QString::fromLatin1(kCpuRuntimeId)));
+    return QFileInfo::exists(runtimeExePath(cpuRuntimeId()));
 }
 
 QString LocalEngine::shortModelName(const QString &fileName)
@@ -248,9 +250,8 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
     // 保证「判等时以为要跑的」和「真正跑起来的」不可能出现分歧。
     const EffectiveLaunchConfig effective = effectiveConfig(cfg);
     const QString backend = effective.backend;
-    const QString exe = runtimeExePath(backend == QLatin1String("vulkan")
-                                           ? QString::fromLatin1(kVulkanRuntimeId)
-                                           : QString::fromLatin1(kCpuRuntimeId));
+    const QString exe = runtimeExePath(backend == QLatin1String("vulkan") ? vulkanRuntimeId()
+                                                                          : cpuRuntimeId());
     const QString model = effective.modelPath;
     const QString modelFile = QFileInfo(model).fileName();
 
@@ -295,12 +296,10 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
                        {QDir::toNativeSeparators(model)}));
     }
     if (!QFileInfo::exists(exe)) {
-        return fail(sf("本地引擎缺少运行时：%1\n请在「资产」页下载 runtime.llama.cpu.win-x64 或 "
-                       "runtime.llama.vulkan.win-x64。",
-                       "The local engine runtime is missing: %1\nPlease download "
-                       "runtime.llama.cpu.win-x64 or runtime.llama.vulkan.win-x64 on the "
-                       "Assets page.",
-                       {QDir::toNativeSeparators(exe)}));
+        return fail(sf("本地引擎缺少运行时：%1\n请在「资产」页下载 %2 或 %3。",
+                       "The local engine runtime is missing: %1\nPlease download %2 or %3 "
+                       "on the Assets page.",
+                       {QDir::toNativeSeparators(exe), cpuRuntimeId(), vulkanRuntimeId()}));
     }
 
     studious::runtime::LlamaServerOptions options;
@@ -329,7 +328,7 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
 
     m_lastStartupMs = timer.elapsed();
     m_server = std::move(server);
-    attachChildToJob();
+    m_guard.attach(processId());
     m_backend = backend;
     m_modelFile = modelFile;
     m_modelPath = model;
@@ -351,8 +350,8 @@ void LocalEngine::shutdown()
         m_server->stop();
         m_server.reset();
     }
-    // 进程已经停了，作业对象也可以拆了（句柄一关，Job 就没了）。
-    releaseJob();
+    // 进程已经停了，孤儿守护也可以撤了（句柄一关，容器就没了）。
+    m_guard.release();
     m_backend.clear();
     m_modelFile.clear();
     m_modelPath.clear();
@@ -414,84 +413,10 @@ QString LocalEngine::executablePath() const
                                 ? m_backend
                                 : (isGpuAvailable() ? QStringLiteral("vulkan")
                                                     : QStringLiteral("cpu"));
-    return runtimeExePath(backend == QLatin1String("vulkan")
-                              ? QString::fromLatin1(kVulkanRuntimeId)
-                              : QString::fromLatin1(kCpuRuntimeId));
+    return runtimeExePath(backend == QLatin1String("vulkan") ? vulkanRuntimeId() : cpuRuntimeId());
 }
 
 QString LocalEngine::modelPath() const
 {
     return isRunning() ? m_modelPath : QString();
-}
-
-// ----------------------------------------------------------------------- 作业对象
-
-#ifdef Q_OS_WIN
-// 把子进程挂进一个 KILL_ON_JOB_CLOSE 的作业对象：本进程的句柄消失时（包括被强杀、
-// 崩溃、任务管理器结束任务），系统会把 Job 里的所有进程一起杀掉。正常退出本来就走
-// shutdown()，这条是给「析构根本来不及执行」的情况兜底。
-//
-// 两个坑：
-//   1. Job 句柄必须**一直开着** —— 句柄一关就等于「Job 结束 = 杀光成员」；
-//   2. 父进程自身可能已在别的 Job 里（某些启动器会这么干）。Win8+ 支持嵌套，
-//      Win7 会返回 ERROR_ACCESS_DENIED，那种情况按「没兜底」处理，不影响功能。
-void LocalEngine::attachChildToJob()
-{
-    releaseJob();
-
-    const qint64 pid = processId();
-    if (pid <= 0) {
-        return;
-    }
-
-    HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
-    if (job == nullptr) {
-        qWarning("[local] CreateJobObject failed (%lu), orphan guard disabled", ::GetLastError());
-        return;
-    }
-
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))
-        == FALSE) {
-        qWarning("[local] SetInformationJobObject failed (%lu)", ::GetLastError());
-        ::CloseHandle(job);
-        return;
-    }
-
-    HANDLE child =
-        ::OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
-    if (child == nullptr) {
-        qWarning("[local] OpenProcess(%lld) failed (%lu)", static_cast<long long>(pid),
-                 ::GetLastError());
-        ::CloseHandle(job);
-        return;
-    }
-
-    if (::AssignProcessToJobObject(job, child) == FALSE) {
-        qWarning("[local] AssignProcessToJobObject failed (%lu), orphan guard disabled",
-                 ::GetLastError());
-        ::CloseHandle(child);
-        ::CloseHandle(job);
-        return;
-    }
-    ::CloseHandle(child);
-
-    // 句柄留着不关：它一关，Job 就结束，成员进程全被杀。
-    m_job = job;
-}
-#else
-// POSIX 侧的对应物是 prctl(PR_SET_PDEATHSIG)；本地引擎目前只在 Windows 上发
-// （manifest 里 llama 运行时只有 win 的 cpu/vulkan 是真条目），所以先不做。
-void LocalEngine::attachChildToJob() {}
-#endif
-
-void LocalEngine::releaseJob()
-{
-#ifdef Q_OS_WIN
-    if (m_job != nullptr) {
-        ::CloseHandle(static_cast<HANDLE>(m_job));
-        m_job = nullptr;
-    }
-#endif
 }

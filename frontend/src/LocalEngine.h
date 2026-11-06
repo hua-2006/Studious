@@ -1,5 +1,7 @@
 #pragma once
 
+#include "platform/ProcessGuard.h"
+
 #include <QString>
 #include <QStringList>
 
@@ -31,8 +33,9 @@ struct LocalEngineConfig {
 // 定位：把「选哪个运行时 / 用哪个模型 / 什么时候重启 / 起来后地址是多少」收在一处，
 // 让 MainWindow 与 --smoke / --switch-demo 用同一套逻辑，不必各自拼路径。
 //
-// 资产布局：
-//   runtime: <installRoot>/runtime/runtime.llama.{cpu,vulkan}.win-x64/llama-server.exe
+// 资产布局（后缀与可执行名由平台层给，见 IPlatform::runtimeAssetSuffix /
+// serverExecutableName，Windows 是 win-x64 / llama-server.exe）：
+//   runtime: <installRoot>/runtime/runtime.llama.{cpu,vulkan}.<平台后缀>/<服务端可执行名>
 //   model  : <installRoot>/models/<任意普通文件>（我们的资产就是无扩展名文件）
 //
 // 线程约束（重要）：ensureStarted() 会阻塞数百毫秒到数秒（GPU 冷启动实测约 2.2 秒），
@@ -57,9 +60,9 @@ public:
     // 不用修改时间是因为重下一次资产就会让下拉框顺序整体乱跳，用户点错模型代价是几秒重启。
     static QStringList availableModels();
 
-    // 运行时目录里有 llama-server.exe 就算可用（不探测显卡 / 驱动，扫描保持零成本）。
-    static bool isGpuAvailable();   // runtime.llama.vulkan.win-x64\llama-server.exe
-    static bool isCpuAvailable();   // runtime.llama.cpu.win-x64\llama-server.exe
+    // 运行时目录里有服务端可执行文件就算可用（不探测显卡 / 驱动，扫描保持零成本）。
+    static bool isGpuAvailable();   // runtime.llama.vulkan.<平台后缀>
+    static bool isCpuAvailable();   // runtime.llama.cpu.<平台后缀>
 
     // 幂等启动：配置与当前进程等价且服务还活着 -> 什么都不做（lastStartupMs()==0）。
     // 变了 / 进程已死 -> 先停旧的，再按新配置起一个新的。失败时 error 可直接展示。
@@ -95,13 +98,6 @@ public:
     static QString backendLabel(const QString &backend);
 
 private:
-    // Windows 兜底：把 llama-server 塞进一个 KILL_ON_JOB_CLOSE 的作业对象。
-    // 正常退出走 shutdown()，但任务管理器强杀 studious.exe 时析构根本不会执行，
-    // 只有 Job 能让系统顺手把子进程一起收掉。非 Windows 是空实现。
-    // 放在前端而不是 backend，是因为 backend 有一条「零平台头依赖」的硬约束。
-    void attachChildToJob();
-    void releaseJob();
-
     std::unique_ptr<studious::runtime::LlamaServer> m_server;
     QString m_backend;       // 当前服务实际用的后端（"vulkan" / "cpu"）
     QString m_modelFile;     // 当前服务加载的模型文件名
@@ -112,5 +108,7 @@ private:
     // shutdown() 会把它清回默认值，保证下次 ensureStarted 必然重新拉起。
     LocalEngineConfig m_runningCfg;
     qint64 m_lastStartupMs = 0;
-    void *m_job = nullptr;   // HANDLE；非 Windows 恒为 nullptr
+    // 孤儿兜底：正常退出走 shutdown()，被强杀时只有这个能让系统顺手收掉子进程。
+    // 实现全在 platform/ProcessGuard.cpp，本文件不含任何平台头。
+    studious::platform::ProcessGuard m_guard;
 };

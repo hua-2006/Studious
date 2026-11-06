@@ -334,7 +334,8 @@ Item {
                                     Item { Layout.fillWidth: true }
                                 }
 
-                                // 开机自启：写 HKCU\...\Run，失败时后端自己回滚并弹状态。
+                                // 开机自启：Windows 写 HKCU\...\Run，类 Unix 写
+                                // $XDG_CONFIG_HOME/autostart/*.desktop。失败时后端自己回滚并弹状态。
                                 ColumnLayout {
                                     Layout.fillWidth: true
                                     spacing: Theme.s1
@@ -347,7 +348,7 @@ Item {
                                             checked: backend.autoStart
                                             onToggled: {
                                                 backend.autoStart = checked
-                                                checked = backend.autoStart // 写注册表失败时后端会回滚，界面跟着拉回
+                                                checked = backend.autoStart // 写系统自启动项失败时后端会回滚，界面跟着拉回
                                             }
                                         }
 
@@ -358,7 +359,7 @@ Item {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
                                         text: backend.autoStart
-                                              ? qsTr("已写入当前用户的启动项（HKCU\\...\\Run）。")
+                                              ? qsTr("已写入当前用户的自启动项。")
                                               : qsTr("程序不会随系统启动。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi

@@ -1,6 +1,6 @@
 {
   "name": "Studious",
-  "version": "0.7.4",
-  "channel": "beta",
-  "channelLabel": "测试版"
+  "version": "0.9.0-separate",
+  "channel": "separate",
+  "channelLabel": "分离版"
 }

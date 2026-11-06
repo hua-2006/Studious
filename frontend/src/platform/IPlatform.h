@@ -3,8 +3,8 @@
 // 铁律：本文件（以及 Types.h）**绝不** include 任何平台原生头
 // （Win32 SDK 头 / Xlib 头 / Wayland 协议头 / POSIX 系统头）。
 //
-// QWidget 只在返回值里出现指针，故这里用**前向声明**而不是 #include <QWidget>：
-// 这样 studious_platform 只需要链 Qt6::Core + Qt6::Gui，不用把 Widgets 拖进平台层。
+// QWindow 只在返回值里出现指针，故这里用**前向声明**而不是 #include <QWindow>，
+// 免得平台层的头文件把 GUI 模块的细节（乃至 QWidget）拖进来。
 // 需要真正创建浮层的实现（platform/win、platform/linux）自己在 .cpp 里 include。
 #pragma once
 
@@ -16,7 +16,7 @@
 #include <QImage>
 #include <QVector>
 
-class QWidget; // 前向声明，勿改成 #include <QWidget>
+class QWindow; // 前向声明，勿改成 #include <QWindow>
 
 namespace studious::platform {
 
@@ -38,7 +38,10 @@ public:
     virtual void cancelInteractive() = 0;
 
     // 浮层。不支持时返回 nullptr，调用方据此降级。
-    virtual QWidget *createOverlay(const OverlayOptions &) = 0;
+    // 返回 QWindow 而不是 QWidget：界面是 Qt Quick / QML，浮层要用 QQuickWindow 画，
+    // 而 Widgets 从没进过这个项目的链接表。实现方负责设置窗口标志与生命周期
+    // （调用方拿到后自己 setParent / deleteLater）。
+    virtual QWindow *createOverlay(const OverlayOptions &) = 0;
 
     virtual bool registerHotkey(const HotkeySpec &) = 0;
     virtual void unregisterHotkey(const QString &id) = 0;

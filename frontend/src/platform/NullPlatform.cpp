@@ -79,7 +79,7 @@ void NullPlatform::cancelInteractive()
     // 没有进行中的交互，无事可做。
 }
 
-QWidget *NullPlatform::createOverlay(const OverlayOptions &)
+QWindow *NullPlatform::createOverlay(const OverlayOptions &)
 {
     // nullptr = 不支持浮层，调用方据此降级（例如改用普通窗口或状态栏提示）。
     return nullptr;

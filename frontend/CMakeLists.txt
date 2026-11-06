@@ -20,6 +20,8 @@ add_library(studious_platform STATIC
     src/platform/Desktop.h
     src/platform/NullPlatform.cpp
     src/platform/PlatformFactory.cpp
+    src/platform/ProcessGuard.cpp
+    src/platform/ProcessGuard.h
 )
 target_include_directories(studious_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Network：Desktop 的单实例走 QLocalServer/QLocalSocket（托盘与自启是纯 Win32，不需要额外依赖）。
@@ -93,6 +95,9 @@ qt_add_qml_module(studious
         resources/icons/download.svg
         resources/icons/folder.svg
         resources/icons/info.svg
+        resources/icons/mini.svg
+        resources/icons/screenshot.svg
+        resources/icons/realtime.svg
 )
 
 target_include_directories(studious PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

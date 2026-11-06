@@ -91,10 +91,9 @@ bool LlamaServer::start(QString *error)
     if (m_options.executablePath.trimmed().isEmpty()
         || !QFileInfo::exists(m_options.executablePath)) {
         return fail(i18n::sf(
-            "本地引擎缺少运行时：找不到 %1\n请在「资产」页下载 runtime.llama.cpu.win-x64 或 "
-            "runtime.llama.vulkan.win-x64。",
-            "The local engine runtime is missing: %1 was not found.\nPlease download "
-            "runtime.llama.cpu.win-x64 or runtime.llama.vulkan.win-x64 on the Assets page.",
+            "本地引擎缺少运行时：找不到 %1\n请在「资产」页下载对应的 llama.cpp 运行时。",
+            "The local engine runtime is missing: %1 was not found.\nPlease download the "
+            "matching llama.cpp runtime on the Assets page.",
             {m_options.executablePath}));
     }
     if (m_options.modelPath.trimmed().isEmpty() || !QFileInfo::exists(m_options.modelPath)) {

@@ -2,11 +2,13 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QSettings>
+#include <QStandardPaths>
 
 
 #include <cstring>
@@ -23,6 +25,21 @@
 #endif
 
 namespace studious::platform {
+
+#ifndef Q_OS_WIN
+namespace {
+
+// XDG autostart：$XDG_CONFIG_HOME/autostart/studious.desktop（默认 ~/.config/autostart）。
+// GNOME / KDE / XFCE / Cinnamon 都读这个目录，不需要任何平台头。
+QString xdgAutoStartFile()
+{
+    const QString configHome =
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    return QDir(configHome).filePath(QStringLiteral("autostart/studious.desktop"));
+}
+
+} // namespace
+#endif
 
 #ifdef Q_OS_WIN
 namespace {
@@ -327,11 +344,62 @@ bool Desktop::setAutoStart(bool enabled, QString *error)
     }
     return true;
 #else
-    Q_UNUSED(enabled);
-    if (error != nullptr) {
-        *error = QCoreApplication::translate("Desktop", "当前平台暂不支持开机自启。");
+    // 类 Unix：走 freedesktop 的 XDG autostart（GNOME / KDE / XFCE 都认）。
+    // 只写一个 .desktop 文件，不引任何平台头，也不需要守护进程。
+    const QString exePath = QCoreApplication::applicationFilePath();
+    if (enabled && !QFileInfo::exists(exePath)) {
+        if (error != nullptr) {
+            *error = QCoreApplication::translate("Desktop",
+                                                 "找不到程序自身路径，无法设置开机自启。");
+        }
+        return false;
     }
-    return false;
+
+    const QString desktopFile = xdgAutoStartFile();
+    if (!enabled) {
+        if (QFileInfo::exists(desktopFile) && !QFile::remove(desktopFile)) {
+            if (error != nullptr) {
+                *error = QCoreApplication::translate("Desktop", "删除自启动项失败，请检查文件权限。");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (!QDir().mkpath(QFileInfo(desktopFile).absolutePath())) {
+        if (error != nullptr) {
+            *error = QCoreApplication::translate("Desktop", "创建自启动目录失败。");
+        }
+        return false;
+    }
+
+    QFile file(desktopFile);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        if (error != nullptr) {
+            *error = QCoreApplication::translate("Desktop", "写入自启动项失败，请检查文件权限。");
+        }
+        return false;
+    }
+    // Exec 里的路径必须加引号：/opt/my apps/studious 之类带空格是常态。
+    const QString contents =
+        QStringLiteral("[Desktop Entry]\n"
+                       "Type=Application\n"
+                       "Name=Studious\n"
+                       "Comment=Studious text & screenshot translation\n"
+                       "Exec=\"%1\"\n"
+                       "Terminal=false\n"
+                       "X-GNOME-Autostart-enabled=true\n"
+                       "Categories=Utility;\n")
+            .arg(exePath);
+    file.write(contents.toUtf8());
+    file.close();
+    if (file.error() != QFileDevice::NoError) {
+        if (error != nullptr) {
+            *error = QCoreApplication::translate("Desktop", "写入自启动项失败，请检查文件权限。");
+        }
+        return false;
+    }
+    return true;
 #endif
 }
 
@@ -343,7 +411,7 @@ bool Desktop::autoStartRegistered()
     QSettings store(runKey, QSettings::NativeFormat);
     return store.contains(QStringLiteral("Studious"));
 #else
-    return false;
+    return QFileInfo::exists(xdgAutoStartFile());
 #endif
 }
 

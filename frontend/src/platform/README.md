@@ -1,109 +1,59 @@
-# 平台抽象层（platform seam）
+# 平台层（platform seam）
 
-截图 / OCR / 浮层 / 全局热键这四件平台能力的**唯一接缝**。本目录当前只有接口 +
-空实现（`NullPlatform`），真实实现留给 `win/` 和 `linux/` 子目录。
+所有与操作系统耦合的代码只允许出现在这个目录。这条规则不是风格问题，是构建约束：
 
-```
-frontend/src/platform/
-├─ Types.h              # 纯数据类型（无平台头）
-├─ IPlatform.h          # 接口（无平台头）
-├─ NullPlatform.h/.cpp  # 全部 Unsupported 的空实现
-├─ PlatformFactory.h/.cpp  # createPlatform() + IPlatform 的三个静态入口
-├─ win/.gitkeep         # 以后：DXGI 抓图 / 分层窗口浮层 / RegisterHotKey
-├─ linux/.gitkeep       # 以后：X11+XShm / xdg-desktop-portal
-└─ README.md
-```
+- `backend/` 有一条硬约束「零平台头依赖」（`backend/src` 里扫不到 `windows.h` / `X11/*` / `wayland-*`）。
+- QML 与 `AppBackend` 只认这里的接口，永远不 `#include` 平台头。
+- 于是「换平台」= 改这个目录，别处一行不动。
 
-## 1. 三条硬约束
+## 文件
 
-**1.1 头文件不许碰平台头。**
-`Types.h` 和 `IPlatform.h` 里出现 `windows.h` / `X11` / `xcb` / `dlfcn` / `unistd`
-就算违约。只允许 Qt Core / Qt Gui 类型（`QString` `QRect` `QImage` `QVector`
-`QStringList`）。
+| 文件 | 作用 | 平台头 |
+|---|---|---|
+| `Types.h` | 纯数据类型：`CaptureRect` / `CaptureResult` / `CapabilityReport` / `OcrWord` / `HotkeySpec` / `OverlayOptions` … | ❌ 一个都没有 |
+| `IPlatform.h` | 能力接口 + 三个静态工厂函数 | ❌（只前向声明 `QWindow`） |
+| `NullPlatform.*` | 空实现：全部 `Unsupported`，调用方据此降级 | ❌ |
+| `PlatformFactory.*` | `createPlatform()` 按 `Q_OS_*` 分支；`initProcessDpi()` / `runtimeAssetSuffix()` / `serverExecutableName()` 也在这里 | ❌ |
+| `Desktop.*` | 托盘图标、开机自启、单实例、正常退出 | ✅ `windows.h` + `shellapi.h`（`#ifdef Q_OS_WIN` 内） |
+| `ProcessGuard.*` | 子进程孤儿兜底（Job Object / 未来的 `PR_SET_PDEATHSIG`） | ✅ `windows.h`（同上） |
 
-原因：这两个头会被 UI 层 include。一旦把 `windows.h` 拉进来，`min` / `max` 宏
-（`NOMINMAX` 没定义时）会把 `std::min` 打死，`UNICODE` 宏会改变 Win32 API 的
-重载选择——UI 层会以一种和平台层毫无关系的方式编译失败。
+**规矩**：本目录下只有 `*.cpp` 可以出现平台头；`*.h` 里只允许 `void *` 句柄和前向声明。这条已经被 `ProcessGuard.h` 的写法验证过一遍。
 
-`IPlatform.h` 里的 `QWidget *` 用**前向声明**（`class QWidget;`）而不是
-`#include <QWidget>`：这样 `studious_platform` 只链 `Qt6::Core` + `Qt6::Gui`，
-不用把 Widgets 拖进平台层。要真正 new 浮层的实现自己在 `.cpp` 里 include。
+## 平台能力现状
 
-**1.2 平台层是独立静态库。**
-`studious_platform` 的编译选项 / 宏 / 链接库全在它自己的 target 上，
-不会污染 `studious` 可执行目标。
+| 能力 | Windows | Linux / 类 Unix | 说明 |
+|---|---|---|---|
+| 抓屏 / 框选 | ⬜ 未实现 | ⬜ 未实现 | 接口就绪；计划 GDI→DXGI，Linux 走 X11 / Wayland portal |
+| 全局热键 | ⬜ 未实现 | ⬜ 未实现 | 复用 `Desktop` 的消息窗口挂 `WM_HOTKEY`；Linux 走 XGrabKey / portal |
+| 结果浮层 | ⬜ 未实现 | ⬜ 未实现 | `createOverlay()` 返回 `QWindow*`（Qt Quick 下用 `QQuickWindow` 画） |
+| OCR | ⬜ 未实现 | ⬜ 未实现 | 计划 ONNX（det + rec），与平台无关，一张模型三平台通用 |
+| 托盘图标 | ✅ `Shell_NotifyIcon` | ⬜ 未实现（`trayAvailable()==false`，界面自动置灰） | 手搓，不链 QtWidgets |
+| 开机自启 | ✅ `HKCU\...\Run` | ✅ `$XDG_CONFIG_HOME/autostart/studious.desktop` | 两套都真实可用 |
+| 单实例 | ✅ `QLocalServer` | ✅ 同左（Unix socket） | 先 ping 再 `listen`，绝不先 `removeServer` |
+| 孤儿进程兜底 | ✅ Job Object + `KILL_ON_JOB_CLOSE` | ⬜ 未实现（等 Linux 运行时资产落地） | 见 `ProcessGuard.cpp` |
 
-**1.3 UI 只认工厂。**
-调用方只写：
-
-```cpp
-#include "platform/PlatformFactory.h"
-auto platform = studious::platform::createPlatform();   // unique_ptr<IPlatform>
-```
-
-禁止 `#include "platform/NullPlatform.h"`，禁止 `new NullPlatform`，
-禁止在 UI 里 `#ifdef Q_OS_WIN` 分支。换实现只改 `PlatformFactory.cpp` 一处。
-
-## 2. 调用时序契约
+## 静态入口（去掉各处硬编码）
 
 ```
-main()
-  └─ IPlatform::initProcessDpi();      // 必须在 QApplication 构造之前，且只调一次
-     QApplication app(...);
-     auto platform = createPlatform();
-     auto caps = platform->capabilities();   // 每一项都先看 available / status 再决定 UI
+IPlatform::runtimeAssetSuffix()    // "win-x64" / "linux-x64" / "macos-arm64"
+IPlatform::serverExecutableName()  // "llama-server.exe" / "llama-server"
+IPlatform::initProcessDpi()        // 必须在 QGuiApplication 构造之前调用
 ```
 
-- `initProcessDpi()` 提前的原因：Windows 的 DPI 感知是**一次性**的进程属性，
-  `QApplication` 一旦建起来（Qt 内部可能已经设过）再改无效。
-- `capabilities()` 是**决策入口**：`available == false` 时不要调对应方法，
-  直接把 `reason` 显示给用户（中文、可直接上屏）。
-- `virtualDesktopRect()` 返回**空 QRect 是事实**（Wayland 不给全局坐标），
-  不是错误，调用方不要当失败处理。
-- `captureInteractive()` 的实现铁律：**先抓整屏，再显示遮罩**。顺序反了遮罩会被
-  自己拍进截图（"截图里有截图框"的经典 bug）。`cancelInteractive()` 用于 ESC / 超时。
-- `createOverlay()` 返回 `nullptr` = 不支持浮层，调用方降级（普通窗口 / 状态栏）。
-  返回的 `QWidget` 所有权**归平台层**，调用方只 hide/deleteLater，不 delete。
-- `recognize()` **同步阻塞**，必须在工作线程调，GUI 线程直调会卡死界面。
-  与 `TranslateJob` 的线程模型一致：跨线程只搬纯数据（`OcrResult` 可拷贝）。
-- `registerHotkey()` 返回 `false` = 注册失败（被占用 / 不支持），调用方回滚 UI 状态；
-  `unregisterHotkey(id)` 用调用方自己给的 `id` 配对，平台层不生成 id。
+`LocalEngine` 曾经把 `runtime.llama.cpu.win-x64` 和 `llama-server.exe` 写死，Linux 上永远报「缺运行时」；
+现在这两个字符串全部由上面两个函数拼出来（`LocalEngine.cpp` 的 `cpuRuntimeId()` / `vulkanRuntimeId()` /
+`serverExeName()`），资产 id 与 manifest 里的 `runtime.llama.*.<平台后缀>` 自动对齐。
 
-## 3. NullPlatform 的行为
+## 加一个平台要做什么
 
-| 方法 | 返回 |
-|---|---|
-| `capabilities()` | 6 项全 `{false, Unsupported, "当前平台尚未实现"}`，`backendName = "null"` |
-| `backendName()` | `"null"` |
-| `monitors()` | 空 `QVector` |
-| `virtualDesktopRect()` | 空 `QRect` |
-| `captureRect` / `captureMonitor` / `captureInteractive` | `status = Unsupported`，`error = "当前平台尚未实现"` |
-| `cancelInteractive()` | 无操作 |
-| `createOverlay()` | `nullptr` |
-| `registerHotkey()` | `false` |
-| `ocrLanguages()` | 空 |
-| `recognize()` | `status = Unsupported`，`error` 同上 |
+1. 新建 `WinPlatform.cpp` / `X11Platform.cpp`（实现 `IPlatform`，平台头只写在 `.cpp`）。
+2. 在 `PlatformFactory.cpp` 的 `createPlatform()` 里加一支 `#ifdef`。
+3. 在 `NullPlatform` 已有的「不支持就返回 Unsupported」语义上，逐项把 `capabilities()` 改成 `available = true`。
+4. 界面**不需要改**：功能入口读 `capabilities()`，不支持就置灰并显示 `reason`。
 
-## 4. 加真实实现时改哪
+## 已知遗留
 
-1. `src/platform/win/`（或 `linux/`）下写实现类，`include "platform/IPlatform.h"`。
-2. `frontend/CMakeLists.txt` 里 `if(WIN32) / elseif(UNIX)` 分支加 `target_sources` +
-   `target_link_libraries`（分支已经留好，含建议的链接库注释）。
-3. `PlatformFactory.cpp` 的 `createPlatform()` 里加 `#ifdef` 分支。
-4. UI 一行不动。
-
-平台相关的资产命名走 `IPlatform::runtimeAssetSuffix()`（`win-x64` / `linux-x64`）和
-`IPlatform::serverExecutableName()`（`llama-server.exe` / `llama-server`），
-目的是把 UI 里写死的 `win-x64` / `llama-server.exe` 收口到这里。
-
-## 5. 构建
-
-```powershell
-$env:Path = "C:\Code\language\Qt\Tools\mingw1310_64\bin;C:\Code\language\Qt\Tools\CMake_64\bin;C:\Code\language\Qt\Tools\Ninja;C:\Code\language\Qt\6.12.0\mingw_64\bin;" + $env:Path
-cmake -S frontend -B frontend/build -G Ninja -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_PREFIX_PATH="C:/Code/language/Qt/6.12.0/mingw_64" `
-  -DCMAKE_CXX_COMPILER="C:/Code/language/Qt/Tools/mingw1310_64/bin/g++.exe"
-cmake --build frontend/build --target studious_platform
-```
-
-产物：`frontend/build/libstudious_platform.a`。
+- manifest 里 `runtime.llama.vulkan.linux-x64` 的 `urls` 是空的（占位条目），装了也没东西可下；
+  `runtime.llama.cpu.linux-x64` 干脆没有。Linux 本地 LLM 要能用，得先补这两条真地址 + 真 sha256。
+- onnxruntime 只 vendored 了 Windows 版；Linux 需要 `libonnxruntime.so` 交给 `backend/CMakeLists.txt` 的 `find_library`。
+- Wayland 下的抓屏只能走 PipeWire portal（每次询问用户），实时翻译在 Wayland 上建议不做。
