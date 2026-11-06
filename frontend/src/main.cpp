@@ -1386,8 +1386,10 @@ int main(int argc, char *argv[])
         const QString outPath = valueAfter("--ui-shot");
         const int pageIndex = valueAfter("--ui-page").toInt();
 
-        int width = 1440;
-        int height = 900;
+        // 不给 --ui-size 就按窗口自己的默认尺寸拍 —— 以前写死 1440×900，
+        // 于是截图永远看不出 Main.qml 里的真实默认大小。
+        int width = 0;
+        int height = 0;
         const QStringList sizeParts = valueAfter("--ui-size").split(QLatin1Char('x'));
         if (sizeParts.size() == 2) {
             width = sizeParts.at(0).toInt();
@@ -1400,7 +1402,9 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        window->resize(width, height);
+        if (width > 0 && height > 0) {
+            window->resize(width, height);
+        }
         window->setProperty("currentPage", pageIndex);
 
         // --ui-section N：设置页的左栏分区（0 通用 … 6 关于）。
@@ -1426,11 +1430,25 @@ int main(int argc, char *argv[])
         if (!uiCall.isEmpty()) {
             const QString uiArg = QString::fromUtf8(qgetenv("STUDIOUS_UI_ARG"));
             QEventLoop callLoop;
-            QMetaObject::invokeMethod(backend,
-                                      uiCall.constData(),
-                                      Qt::DirectConnection,
-                                      Q_ARG(QString, uiArg));
-            QTimer::singleShot(1200, &callLoop, &QEventLoop::quit);
+            // 有的 Q_INVOKABLE 是零参数的（startLocalServer / stopLocalServer），
+            // 硬塞一个 QString 会匹配不到方法、静默什么都不做。
+            const QMetaObject *mo = backend->metaObject();
+            const QMetaMethod method = mo->method(mo->indexOfMethod(
+                QByteArray(uiCall + "()").constData()));
+            const bool zeroArg = method.isValid() && method.parameterCount() == 0;
+            if (zeroArg) {
+                QMetaObject::invokeMethod(backend, uiCall.constData(), Qt::DirectConnection);
+            } else {
+                QMetaObject::invokeMethod(backend,
+                                          uiCall.constData(),
+                                          Qt::DirectConnection,
+                                          Q_ARG(QString, uiArg));
+            }
+            QTimer::singleShot(qEnvironmentVariableIntValue("STUDIOUS_UI_WAIT_MS") > 0
+                                   ? qEnvironmentVariableIntValue("STUDIOUS_UI_WAIT_MS")
+                                   : 1200,
+                               &callLoop,
+                               &QEventLoop::quit);
             callLoop.exec();
         }
 
@@ -1440,18 +1458,21 @@ int main(int argc, char *argv[])
         // 高 DPI 下二者不等（DPR 1.5 时 --ui-size 1280x800 存出来的是 1920x1200），
         // 以前只打后者，看起来就像 --ui-size 被忽略了。
         const qreal dpr = window->devicePixelRatio();
+        // 没给 --ui-size 时按窗口实际逻辑尺寸报，别打 0。
+        const int logicalWidth = width > 0 ? width : window->width();
+        const int logicalHeight = height > 0 ? height : window->height();
         const int pixelWidth =
-            shot.isNull() ? static_cast<int>(width * dpr + 0.5) : shot.width();
+            shot.isNull() ? static_cast<int>(logicalWidth * dpr + 0.5) : shot.width();
         const int pixelHeight =
-            shot.isNull() ? static_cast<int>(height * dpr + 0.5) : shot.height();
+            shot.isNull() ? static_cast<int>(logicalHeight * dpr + 0.5) : shot.height();
         std::printf("[ui-shot] %s -> %s (%dx%d @%.1fx, logical %dx%d)\n",
                     saved ? "saved" : "FAILED",
                     outPath.toUtf8().constData(),
                     pixelWidth,
                     pixelHeight,
                     static_cast<double>(dpr),
-                    width,
-                    height);
+                    logicalWidth,
+                    logicalHeight);
         return saved ? 0 : 1;
     }
 

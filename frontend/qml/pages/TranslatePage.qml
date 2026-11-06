@@ -1015,7 +1015,7 @@ Item {
                                     label: page.statusEngineName(statusSlot.modelData.id !== undefined
                                                                  ? String(statusSlot.modelData.id) : "")
                                     detail: statusSlot.modelData.detail !== undefined ? statusSlot.modelData.detail : ""
-                                    detailMaxWidth: 160
+                                    detailMaxWidth: 220
                                     // 颜色分三层：装好了且这条请求能走 = 绿；装好了但当前源语言/目标
                                     // 语言走不通（比如本地 MT 不支持自动检测源语言）= 黄；缺资产 = 红。
                                     state: statusSlot.modelData.state === "ready"

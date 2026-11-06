@@ -388,8 +388,10 @@ public:
     Q_INVOKABLE void applyPalette(const QVariantMap &colors);
 
     // ---- 本地引擎 ----
-    void startLocalServer();
-    void stopLocalServer();
+    // Q_INVOKABLE 不能少：QML 的「启动 / 停止」按钮直接绑这两个名字，
+    // 漏了就是"点了没反应"——QML 只在 stderr 里报一句 not a function。
+    Q_INVOKABLE void startLocalServer();
+    Q_INVOKABLE void stopLocalServer();
 
     // ---- 设置页：数据 ----
     // 用系统文件管理器打开一个路径（目录或文件所在目录）。空路径直接忽略。

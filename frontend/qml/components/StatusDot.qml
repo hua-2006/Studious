@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import Studious
 
 // 状态点 + 名称 + 说明。
@@ -39,13 +40,21 @@ Row {
     }
 
     Text {
+        id: detailText
         anchors.verticalCenter: parent.verticalCenter
         visible: text.length > 0
         text: dot.detail
+        // 省略之后悬停看全的：状态栏塞不下完整说明（"模型 · GPU · 端口 …"）。
+        readonly property bool truncated: implicitWidth > dot.detailMaxWidth
         width: Math.min(implicitWidth, dot.detailMaxWidth)
         elide: Text.ElideRight
         font.family: Theme.fontUi
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.inkVariant
+
+        HoverHandler { id: detailHover }
+        ToolTip.visible: detailHover.hovered && detailText.truncated
+        ToolTip.text: dot.detail
+        ToolTip.delay: 400
     }
 }

@@ -357,6 +357,41 @@ QString localModelPathFrom(const QString &fileName)
                              : QDir(LocalEngine::modelsDir()).filePath(trimmed);
 }
 
+// "model.qwen2.5-0.5b-instruct.q4km" → "qwen2.5-0.5b-instruct"
+// 引擎列表的副标题、翻译页状态条都只有一行宽度，只留"能认出是哪个模型"的中间那段。
+QString shortModelName(const QString &raw)
+{
+    QString name = raw.trimmed();
+    if (name.isEmpty()) {
+        return QString();
+    }
+    const int slash = qMax(name.lastIndexOf(QLatin1Char('/')), name.lastIndexOf(QLatin1Char('\\')));
+    if (slash >= 0) {
+        name = name.mid(slash + 1);
+    }
+    if (name.startsWith(QLatin1String("model."))) {
+        name = name.mid(6);
+    }
+    for (const QLatin1String suffix : {QLatin1String(".q4km"), QLatin1String(".q8_0"),
+                                      QLatin1String(".gguf"), QLatin1String(".bin")}) {
+        if (name.endsWith(suffix)) {
+            name.chop(static_cast<int>(suffix.size()));
+            break;
+        }
+    }
+    return name;
+}
+
+// 本地引擎实际会加载哪个模型：设置里选了就用它，选「自动」就是第一个可用模型。
+QString localModelLabel(const AppSettings &settings)
+{
+    QString name = settings.localModelFileName.trimmed();
+    if (name.isEmpty()) {
+        name = LocalEngine::availableModels().value(0);
+    }
+    return shortModelName(name);
+}
+
 } // namespace
 
 AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent)
@@ -1192,7 +1227,31 @@ void AppBackend::translate()
     }
 
     m_lastParagraphs = paragraphs;
-    m_lastEngineLabel = m_engineId.isEmpty() ? i18n::s().translate.engineAuto : m_engineId;
+    // 状态行要能看出"这次是谁翻的"：LLM 类引擎带上模型名，光写「本地 LLM」
+    // 看不出用的是 0.5B 还是 1.5B。
+    {
+        QString label;
+        if (m_engineId.isEmpty()) {
+            label = i18n::s().translate.engineAuto;
+        } else if (m_engineId == QLatin1String("web")) {
+            label = i18n::s().translate.engineWeb;
+        } else if (m_engineId == QLatin1String("llm-cloud")) {
+            label = i18n::s().translate.engineLlmCloud;
+            const QString model = shortModelName(settings.llm.model);
+            if (!model.isEmpty()) {
+                label = QStringLiteral("%1 · %2").arg(label, model);
+            }
+        } else if (m_engineId == QLatin1String("llm-local")) {
+            label = i18n::s().translate.engineLlmLocal;
+            const QString model = localModelLabel(settings);
+            if (!model.isEmpty()) {
+                label = QStringLiteral("%1 · %2").arg(label, model);
+            }
+        } else {
+            label = i18n::s().translate.engineMt;
+        }
+        m_lastEngineLabel = label;
+    }
     m_lastCacheEnabled = m_cacheEnabled;
 
     if (useLocalEngine()) {
@@ -1207,10 +1266,16 @@ void AppBackend::translate()
 
         QString error;
         if (!m_localEngine.ensureStarted(cfg, &error)) {
+            // 失败时日志面板才是最该刷的地方：llama-server 提前退出、参数写错，
+            // 唯一线索都在那条日志尾巴里。
+            refreshLocalState();
             emit errorRaised(i18n::s().config.localLlmSection, error);
             setStatus(error, true);
             return;
         }
+        // 服务是刚拉起来的：端口 / pid / 日志路径都变了，得让配置页那几个绑定重读。
+        // 以前只在「启动」按钮里刷，所以"翻译能跑、日志面板空着"。
+        refreshLocalState();
         req.llm.baseUrl = m_localEngine.baseUrl();
         req.llm.apiKey = QStringLiteral("local");
         req.llm.model = m_localEngine.currentModel();
@@ -1276,6 +1341,7 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
         emit translatedTextChanged();
         setStatus(result.outcome.error, true);
         refreshEngineStatuses();
+        refreshLocalState();
         return;
     }
 
@@ -1319,6 +1385,8 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
 
     refreshCacheStats();
     refreshEngineStatuses();
+    // 本地引擎在翻译过程中往日志里写了不少东西，跑完补刷一次，别让人对着旧尾巴猜。
+    refreshLocalState();
     // 一轮翻译跑完，空闲计时从现在开始重新数。
     touchLocalIdle();
 }
@@ -1377,6 +1445,35 @@ void AppBackend::refreshEngineStatuses()
         item.insert(QStringLiteral("state"), state);
         item.insert(QStringLiteral("missingAssets"), row.second.missingAssets.size());
 
+        // 云端 LLM：配好了就报"实际会用哪个模型"；没配好要说清缺哪一项 ——
+        // 后端 resolve() 只有一句"填写 API 地址 / Key / 模型"，用户看不出该补哪个。
+        // 注意 isValid() 只查 baseUrl + model，空 Key 是合法的（本地 /v1 网关）。
+        if (uiId == QLatin1String("llm-cloud")) {
+            const QString model = shortModelName(settings.llm.model);
+            if (row.second.ready) {
+                item.insert(QStringLiteral("detail"),
+                            model.isEmpty()
+                                ? studious::i18n::s("没填模型名，去下面的引擎配置填一个",
+                                                    "No model name set - pick one in the engine config below")
+                                : studious::i18n::sf("%1 · 云端", "%1 · cloud", {model}));
+            } else {
+                QStringList missing;
+                if (settings.llm.baseUrl.trimmed().isEmpty()) {
+                    missing << QStringLiteral("Base URL");
+                }
+                if (settings.llm.model.trimmed().isEmpty()) {
+                    missing << studious::i18n::s("模型名", "model");
+                }
+                if (!missing.isEmpty()) {
+                    item.insert(QStringLiteral("detail"),
+                                studious::i18n::sf("缺 %1 · 去下面的「引擎配置」填",
+                                                   "Missing %1 - fill it in the engine config below",
+                                                   {missing.join(studious::i18n::s("、", ", "))}));
+                }
+                // 都没缺时保留后端原话（比如地址格式不对、请求被拒之类）。
+            }
+        }
+
         // 本地 MT 单独改写三件事：
         //   state/available —— 按装了几个语言对算，跟这条请求能不能走无关；
         //   ready           —— 仍然是「这条请求能不能走」（源语言 auto 时为 false，
@@ -1421,36 +1518,70 @@ void AppBackend::refreshEngineStatuses()
     // 以前是「服务没在跑就报未就绪」，可服务本来就不该常驻：translate() 会
     // ensureStarted()，所以那种报法等于把「能用」说成「不能用」。
     const bool localRuntime = llamaRuntimeInstalled();
-    const bool localHasModel = !LocalEngine::availableModels().isEmpty();
+    // 设置里点名的模型文件可能已经被删了，而 models/ 里还留着别的模型 ——
+    // 只按 availableModels() 判会报"就绪"，一点翻译就变成"缺少模型"，两处打脸。
+    const QString configuredModelPath = localModelPathFrom(settings.localModelFileName);
+    const bool configuredModelExists =
+        !configuredModelPath.isEmpty() && QFileInfo(configuredModelPath).isFile();
+    const bool configuredModelMissing = !configuredModelPath.isEmpty() && !configuredModelExists;
+    // 绝对路径点到 models/ 外面的模型也算有模型（ensureStarted 认绝对路径）。
+    const bool localHasModel = !LocalEngine::availableModels().isEmpty() || configuredModelExists;
     const bool localAvailable = localRuntime && localHasModel;
     const bool localRunning = m_localEngine.isRunning();
 
     QString localDetail;
     if (localRunning) {
-        localDetail = m_localEngine.baseUrl();
-    } else if (localAvailable) {
-        localDetail = studious::i18n::s("模型就绪 · 翻译时自动启动服务",
-                                        "Model ready · the server starts on demand");
-    } else if (!localRuntime && !localHasModel) {
-        localDetail = studious::i18n::s("缺 llama 运行时和模型文件",
-                                        "Missing both the llama runtime and a model file");
-    } else if (!localRuntime) {
-        localDetail = studious::i18n::s(
-            "缺 llama 运行时，去资产页下载",
-            "No llama runtime installed. Download one on the Assets page.");
+        // 跑起来之后以引擎实况为准（选「自动」时实际加载的可能不是设置里那个）。
+        const QString runningModel = shortModelName(m_localEngine.currentModel());
+        const QString model = runningModel.isEmpty() ? localModelLabel(settings) : runningModel;
+        const QString mode = m_localEngine.currentBackend() == QLatin1String("vulkan")
+                                 ? QStringLiteral("GPU")
+                                 : QStringLiteral("CPU");
+        localDetail = studious::i18n::sf("%1 · %2 · 端口 %3",
+                                         "%1 · %2 · port %3",
+                                         {model, mode, QString::number(m_localEngine.port())});
+    } else if (!localRuntime || !localHasModel) {
+        // 先报"资产没装"：这时配置指向的模型当然也不在，说"配置的模型不在了"会误导人
+        // 跑去引擎配置改选，而实际该去资产页下载。
+        if (!localRuntime && !localHasModel) {
+            localDetail = studious::i18n::s("缺 llama 运行时和模型文件",
+                                            "Missing both the llama runtime and a model file");
+        } else if (!localRuntime) {
+            localDetail = studious::i18n::s(
+                "缺 llama 运行时，去资产页下载",
+                "No llama runtime installed. Download one on the Assets page.");
+        } else {
+            localDetail = studious::i18n::s(
+                "缺模型文件，去资产页下载",
+                "No model file installed. Download one on the Assets page.");
+        }
+    } else if (configuredModelMissing) {
+        // 资产齐备但配置指错了：该去引擎配置改选，胶囊给黄（未就绪）而不是红。
+        localDetail = studious::i18n::sf("配置的模型 %1 不在了 · 去「引擎配置」改选一个",
+                                         "The configured model %1 is gone - pick another one in the engine config",
+                                         {shortModelName(settings.localModelFileName)});
     } else {
-        localDetail = studious::i18n::s(
-            "缺模型文件，去资产页下载",
-            "No model file installed. Download one on the Assets page.");
+        // 没跑的时候按"待会儿会用哪份配置"报：模型 + 会不会走 GPU。
+        const QString model = localModelLabel(settings);
+        const QString mode = (settings.localUseGpu && localGpuAvailable())
+                                 ? QStringLiteral("GPU")
+                                 : QStringLiteral("CPU");
+        localDetail = studious::i18n::sf("%1 · %2 · 翻译时自动启动服务",
+                                         "%1 · %2 · the server starts on demand",
+                                         {model, mode});
     }
 
     QVariantMap local;
+    // 「配置指向的模型没了」= 资产齐备但配置错，胶囊该是黄的（未就绪），不是绿的。
+    const bool localUsable = localAvailable && !configuredModelMissing;
     local.insert(QStringLiteral("id"), QStringLiteral("llm-local"));
-    local.insert(QStringLiteral("ready"), localRunning || localAvailable);
-    local.insert(QStringLiteral("available"), localAvailable);
+    local.insert(QStringLiteral("ready"), localRunning || localUsable);
+    local.insert(QStringLiteral("available"), localUsable);
     local.insert(QStringLiteral("detail"), localDetail);
     local.insert(QStringLiteral("state"),
-                 localAvailable ? QStringLiteral("ready") : QStringLiteral("missing-assets"));
+                 localUsable ? QStringLiteral("ready")
+                             : (localAvailable ? QStringLiteral("not-ready")
+                                               : QStringLiteral("missing-assets")));
     local.insert(QStringLiteral("missingAssets"),
                  (localRuntime ? 0 : 1) + (localHasModel ? 0 : 1));
     list.append(local);

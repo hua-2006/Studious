@@ -599,3 +599,86 @@ msedge --headless=new --virtual-time-budget=1500 --window-size=1440,900 --screen
 - CLI 的 auto 一旦把 `req.engineId` 写成选中的那个，Router 就当成"强制引擎"、失败不降级 ——
   auto 必须留空 + 只给 priority。
 - `QNetworkProxyFactory::setProxyFactory` 不接管所有权，工厂要以 NAM 为 parent。
+## 配置页：四张引擎配置卡合并成 tab 版（2026-11-07）
+
+需求：引擎配置区从"Web 来源 / 云端 LLM / 本地 LLM / 本地 MT"四张竖排卡改成一张卡 + 分段控件切换，分段项要带状态点，且与上方引擎列表联动。
+
+改动（只两个文件）：
+
+- `frontend/qml/components/Segmented.qml`：新增 `property var badges: ({})`（code → 颜色）。delegate 标签前画 6px 圆点，只有在 `badges[code]` 有值时才画，宽度公式把圆点算进 `Layout.preferredWidth`。其它页面不传 `badges` 时视觉零变化。
+- `frontend/qml/pages/ConfigPage.qml`（2236 → 2333 行）：
+  - webCard/cloudCard/localCard/mtCard 四张卡合并成 `id: detailCard` 的「引擎配置」卡，卡内 `Segmented` 四项（Web / 云端 LLM / 本地 LLM / 本地 MT）+ 四个 `ColumnLayout` 面板，各自 `visible: page.configTab === "<code>"`；
+  - 新增 `property string configTab`、`configTabFor(key)`（`llm` → `llm-cloud`，其余原样，auto/空 → `""`）、`configTabBadges`（`engineState()` 的 ready/missing-assets/其它 → `Theme.good/danger/caution`）；
+  - `cardForEngine()` 五 key 一律返回 `detailCard`；`openEngineConfig()` 先切 tab 再 `expanded = true` / 滚动 / `focusTimer`（下拉仍按 key 开 `cloudModelCombo` 或 `localModelCombo`）；
+  - `Component.onCompleted` 与 `onEngineIdChanged` 按 `backend.engineId` 定初始 tab（自动模式留默认 `llm-cloud`）；
+  - 原卡的 `hint` 挪成各面板顶部一行 Text；本地 LLM / 本地 MT 的「下载 / 导入」从 `headerActions` 挪到面板顶部右对齐。
+
+验证：构建 `[11/11] Linking CXX executable studious.exe`；`--ui-shot --ui-page 2` 三个 tab 各截一张（`tab_config.png` / `tab_local.png` / `tab_mt.png` / `tab_light.png`）；把注册表 `engine\id` 改成 `local-mt` 重启后 tab 自动落在「本地 MT」（联动生效），验完复位成空；`studious_en.ts` 补 2 条（引擎配置 / 卡 hint）后 unfinished = 0；`--smoke ... --engine local-mt` → 你好,世界观! 1378 ms；`backend_selftest` → ALL CORE TESTS PASSED。
+
+坑：
+- 子代理搬最后一段（mt 面板）时少了一个收尾 `}`，会让 Popup 落进 ScrollView、根 Item 永不闭合。括号配平能过是因为少的是成对结构之外的一层——查法是数 `CollapsibleCard {` 次数 + 看 `Item{}` 与 ScrollView 的闭合顺序。
+- 验证 tab 联动不要用 `STUDIOUS_UI_CALL`（它只能调 backend 的 Q_INVOKABLE），直接改注册表 `engine\id` 重启最快；或临时把 `configTab` 默认值改成目标 tab 截图，截完必须改回。
+
+## 引擎描述带模型 + 去掉两张卡的折叠（2026-11-07 02:20）
+
+用户要求：本地 LLM / 云端 LLM 的副标题要写"用的哪个模型 + CPU/GPU"，翻译页状态条同步；点状态胶囊跳转后分段控件高亮与控件值不刷新；把「引擎」「引擎配置」两张卡的折叠去掉。
+
+改动：
+- rontend/src/AppBackend.cpp：匿名命名空间加 shortModelName()（去目录、去 model. 前缀、去 .q4km/.q8_0/.gguf/.bin 后缀）与 localModelLabel()（设置里没选就用第一个可用模型）；	ranslate() 的 m_lastEngineLabel 改成 if 链，LLM 类引擎带模型名；efreshEngineStatuses() 里云端 LLM 就绪时 detail = 「模型 · 云端」，本地 LLM 跑着时 = 「模型 · GPU/CPU · 端口 N」，没跑时 = 「模型 · GPU/CPU · 翻译时自动启动服务」（模式按 settings.localUseGpu && localGpuAvailable() 推）。
+- rontend/qml/pages/ConfigPage.qml：内联 CollapsibleCard 加 property bool collapsible: true（false 时不画箭头、头部 MouseArea disabled、内容恒显），engineCard 与 detailCard 都设成 false；页面加 onConfigTabChanged —— 程序化切 tab 时手动回写 configTabBar.current 并调 syncLlmControls()/syncLocalModelCombo()（Segmented 点击时内部自己写 current，会把父级绑定打断，所以之前只有面板换、高亮和控件值不动）。
+- rontend/qml/pages/TranslatePage.qml：StatusDot.detailMaxWidth 160 → 220（塞得下「模型 · GPU」）。
+- rontend/qml/components/StatusDot.qml：detail 被省略时悬停出 ToolTip 看全（HoverHandler + ToolTip，import QtQuick.Controls）。
+
+验证：
+- --ui-shot --ui-page 2 截图里两卡都无折叠箭头，四行副标题分别为「在线接口，无需下载资产」「qwen2.5-0.5b-instruct · GPU · 翻译时自动启动服务」「直连 (mt.opus.en-zh)」「deepseek-v4.1-flash · 云端」。
+- 跳转联调：临时在 Component.onCompleted 末尾 Qt.callLater(... openEngineConfig("local-mt", false))，截图可见「本地 MT」分段高亮 + 面板切到语言对表（**验完已删除**）。
+- update_translations → 339 条 0 new（新增文案走后端 i18n::s(zh,en) 双参，不进 ts）。
+
+踩坑：给 engineCard 补 collapsible: false 时多写了一行 expanded: true，qmlcachegen 直接报 Property value set multiple times；studious.exe 残留会让链接报 cannot open output file studious.exe: Permission denied。
+
+## 未配置状态说清缺什么 + 窗口默认 1120×720（2026-11-07 02:40）
+
+用户要求：把「云端 LLM 没配 / 本地 LLM 没模型 / 引擎没用」的副标题补上；窗口改成 1680×1080（微信截图的物理像素）。
+
+改动：
+- `frontend/src/AppSettings.cpp`：新增 `textOrKeepEmpty`，`llm/baseUrl` 与 `llm/model` 改用「只有注册表没这个键才用默认值」。**这是行为变更**：以前用 `textOr`，空串会被默认值（`http://127.0.0.1:3065/v1` / `deepseek-v4.1-flash`）悄悄填回去，于是 `LlmConfig::isValid()` 恒真、云端永远是绿的，用户清空后重启又"自己好了"。
+- `frontend/src/AppBackend.cpp`：
+  - 云端 LLM 就绪 → 「模型 · 云端」；未就绪 → 按缺项拼「缺 Base URL、模型名 · 去下面的「引擎配置」填」，都填了才回落到后端 `resolve()` 原话。注意 `isValid()` 只查 baseUrl + model，**空 API Key 合法**（本地 /v1 网关）。
+  - 本地 LLM 分支重排：先判资产（缺运行时和模型 / 缺运行时 / 缺模型 → 红「缺资产」），再判「配置点名的模型文件没了 → 黄「未就绪」+「配置的模型 xxx 不在了 · 去「引擎配置」改选一个」」，最后才是正常文案。`localHasModel` 也算上"配置里写的绝对路径存在"这一种。以前只要 models/ 里还有别的模型就报就绪，一点翻译却说"缺少模型"。
+- `frontend/qml/Main.qml`：`width/height` 改为 1120×720 逻辑（= 用户量的 1680×1080 物理 ÷1.5），并 `min(…, 可用区域 × 0.92)` 防小屏溢出；`minimumWidth/Height` 1120×720 → 1040×660。
+- `frontend/src/main.cpp`：`--ui-shot` 不给 `--ui-size` 时不再写死 1440×900，改为沿用窗口真实尺寸（以前截图永远看不出默认大小）。
+
+验证：
+- `--ui-shot` 不带 `--ui-size` → `1680x1080 @1.5x, logical 1120x720`。
+- 场景矩阵（改注册表造态，截完均已还原）：本地 LLM 配置模型不存在 → 黄 + 「配置的模型 does-not-exist 不在了…」；assetRoot 指向空目录 → 本地 LLM 红「缺 llama 运行时和模型文件」、本地 MT 红「没装任何语言对…」、云端保持绿；baseUrl+model 清空 → 黄 +「缺 Base URL、模型名 · 去下面的「引擎配置」填」；只清 model → 「缺模型名 · …」。
+- `backend_selftest.exe` → `ALL CORE TESTS PASSED`；`--smoke … --engine local-mt` → 「你好,世界观!」1342 ms exit 0。
+- 截图：`docs/ui-shots-qml/size_1680.png`、`state_model_gone*.png`、`state_cloud_empty*.png`、`state_cloud_model_empty*.png`、`state_no_assets2*.png`、`state_normal2*.png`、`llm_row_noassets.png`。
+
+坑：注册表里 `-1` 写成 `REG_DWORD 0xFFFFFFFF`、`localModel` 才是模型文件名（不是 `localModelFileName`）；`Set-ItemProperty -Value ""` 与「键不存在」在 `textOr` 眼里一样，造"未配置"态必须走 `textOrKeepEmpty` 这种「存在但空」的判据。
+## 配置页：给「高级设置」加底色与悬浮（2026-11-07）
+
+问题：`ConfigPage.qml` 的内联 `SubSection` 只有一行文字 + 一个 ▾，直接画在卡片底色上，
+既看不出这是一组设置，也看不出能点开。
+
+改法（只动 `frontend/qml/pages/ConfigPage.qml` 的 `component SubSection`）：
+
+- 标题条换成 `Rectangle { id: headBox }`，`radius: Theme.rSm`、1px 边框、`implicitHeight: sectionHead.implicitHeight + Theme.s2 * 2`；
+  底色 `Theme.surfaceHigh`，悬浮或展开时抬到 `Theme.surfaceHighest`，边框 `outlineVariant` → `outline`；
+  两者都套 `Behavior on color { ColorAnimation { duration: Theme.durFast } }`。
+- 交互从 `MouseArea` 换成 `HoverHandler { cursorShape: Qt.PointingHandCursor }` + `TapHandler { onTapped: section.expanded = !section.expanded }`，
+  这样悬浮态和点击态可以分开描述，光标也不会在禁用时还是手型。
+- 标题与箭头的文字色统一成 `Theme.ink`（原来折叠态是 `inkVariant`，在 `surfaceHigh` 上偏灰）。
+- 展开后的内容再套一层 `Rectangle { id: bodyBox }`：`color: Theme.surfaceDim`（比卡片更深 = 内嵌下凹）、
+  同圆角 + `outlineVariant` 边、`implicitHeight: body.implicitHeight + Theme.s4 * 2`；
+  里面的 `ColumnLayout { id: body }` 用 `x/y: Theme.s4` + `width: bodyBox.width - Theme.s4 * 2`，
+  不用 `anchors.fill`，避免 `implicitHeight` 依赖子项、子项又依赖父高度的循环绑定。
+
+踩坑：
+
+- 第一版用 `surfaceLow`（深色 ≈ 卡片底色），截图里几乎看不出来；逐步抬到 `surfaceMid` → `surfaceHigh` 才够。
+  结论：深色主题下"能看出是一个控件"的最低档是 `surfaceHigh`，`surfaceLow/Mid` 只适合做内嵌内容区。
+- 展开态截图要临时给两个 `SubSection` 加 `expanded: true`（`ConfigPage.qml` 的 1467 / 1753 行附近），
+  截完必须删掉 —— `grep TEMP-SHOT` 应为 0。
+- 写完 QML 用 `[System.IO.File]::WriteAllText` 时要显式传 `UTF8Encoding($false)`，且改完核对 CRLF 计数为 0。- 追加修正：内容面板最初用 `Theme.surfaceDim`（深色下比卡片更暗），用户反馈「背景太深了」→ 改成 `Theme.surfaceLow`。
+  深色下 `surfaceDim`(0.03) / `surfaceLow`(0.07) / `surfaceMid`(0.09) / `surfaceHigh`(0.12) / `surfaceHighest`(0.15)
+  是按 seed 混进底色的比例，所以「标题条 surfaceHigh + 内容面板 surfaceLow」是既有层次又不压暗内容的组合。

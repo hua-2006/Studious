@@ -13,14 +13,14 @@ Window {
     id: root
     // 尺寸单位是「逻辑像素」，不是截图里的物理像素。
     // 本机屏幕 2560×1600 @150% → 逻辑 1707×1067。
-    // 写死 1650×1050 会被再乘 1.5 变成 2475×1575，几乎铺满整屏 —— 这就是之前"窗口很大"的原因。
-    // 所以改成按可用屏幕比例算，并给一个上限，换分辨率也不会失控。
-    width: Math.min(1440, Math.round(Screen.desktopAvailableWidth * 0.85))
-    height: Math.min(900, Math.round(Screen.desktopAvailableHeight * 0.88))
+    // 用户量的 1680×1080 是微信截图的物理像素，÷1.5 才是这里的数：1120×720。
+    // 屏幕比这还小时按可用区域收缩（换台 1366×768 的本子不会开出屏幕外）。
+    width: Math.min(1120, Math.round(Screen.desktopAvailableWidth * 0.92))
+    height: Math.min(720, Math.round(Screen.desktopAvailableHeight * 0.92))
     // 最小尺寸按「翻译页双栏 + 页脚状态条」的实测需求抬上来：
     // 980×620 时原文/译文面板的正文区会被压成 0 高，状态条右侧也会被窗口边缘裁掉。
-    minimumWidth: 1120
-    minimumHeight: 720
+    minimumWidth: 1040
+    minimumHeight: 660
     visible: true
     title: "Studious"
 

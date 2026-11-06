@@ -82,12 +82,21 @@ AppSettings AppSettings::load()
         const QString value = store.value(k).toString().trimmed();
         return value.isEmpty() ? fallback : value;
     };
+    // 地址 / 模型这两项允许"留空 = 还没配"：只有注册表里根本没有这个键时才用默认值。
+    // 否则用户把 Base URL 清掉，重启又被默认端点悄悄填回去，界面永远不说「未配置」，
+    // 状态胶囊一直绿 —— 而那个默认端点（127.0.0.1:3065）在别人机器上根本没在跑。
+    const auto textOrKeepEmpty = [&store](const QString &k, const QString &fallback) {
+        if (!store.contains(k)) {
+            return fallback;
+        }
+        return store.value(k).toString().trimmed();
+    };
 
     AppSettings s = def;
 
-    s.llm.baseUrl = textOr(key("llm/baseUrl"), def.llm.baseUrl);
+    s.llm.baseUrl = textOrKeepEmpty(key("llm/baseUrl"), def.llm.baseUrl);
     s.llm.apiKey = textOr(key("llm/apiKey"), def.llm.apiKey);
-    s.llm.model = textOr(key("llm/model"), def.llm.model);
+    s.llm.model = textOrKeepEmpty(key("llm/model"), def.llm.model);
     // systemPrompt 不做空值回落：留空是有意义的状态。
     s.llm.systemPrompt = store.value(key("llm/systemPrompt")).toString();
     s.llm.timeoutMs = clampedInt(store.value(key("llm/timeoutMs"), def.llm.timeoutMs).toInt(),
