@@ -9,6 +9,8 @@
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -16,7 +18,10 @@
 #include <QGuiApplication>
 #include <QPalette>
 #include <QProcess>
+#include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
+#include <QUrl>
 #include <QVariantMap>
 #include <QtConcurrent>
 
@@ -26,6 +31,7 @@
 #include <studious/asset/Manifest.h>
 #include <studious/cache/TranslationCache.h>
 #include <studious/contract/LanguageRegistry.h>
+#include <studious/i18n/L10n.h>
 #include <studious/i18n/LanguageDetector.h>
 #include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
@@ -38,6 +44,9 @@
 
 namespace studious::ui {
 namespace {
+
+// 单实例的名字：QLocalServer 在 Windows 上就是命名管道名，别用带空格的路径。
+constexpr const char *kInstanceName = "studious-single-instance";
 
 // 目标语言在 QSettings 里以逗号分隔串保存（AppSettings::dstLang 仍是单个 QString）。
 QStringList splitLangs(const QString &joined)
@@ -182,8 +191,44 @@ QString findManifestPath()
 
 QString assetInstallRootPath()
 {
+    // 用户可以在设置里把安装根目录挪到别的盘（键 settings/asset/root）。
+    // 空 = 默认位置。每次调用都读一次 QSettings：这些调用点全部是低频操作
+    // （刷资产表 / 下载 / 迁移），换来的好处是"改完立刻全链路生效"。
+    const AppSettings settings = AppSettings::load();
+    if (!settings.assetRoot.isEmpty()) {
+        return QDir::cleanPath(settings.assetRoot);
+    }
     return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
         .filePath(QStringLiteral("assets"));
+}
+
+// 跨盘迁移时的慢路径：递归复制目录内容（不保留属主，保留时间戳）。
+bool copyDirRecursive(const QString &from, const QString &to)
+{
+    const QDir source(from);
+    if (!QDir().mkpath(to)) {
+        return false;
+    }
+
+    const QFileInfoList entries =
+        source.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden);
+    for (const QFileInfo &entry : entries) {
+        const QString target = QDir(to).filePath(entry.fileName());
+        if (entry.isDir()) {
+            if (!copyDirRecursive(entry.absoluteFilePath(), target)) {
+                return false;
+            }
+            continue;
+        }
+        // 已存在就覆盖：迁移期间目标目录本该是空的，有残留说明上次半途而废。
+        if (QFile::exists(target) && !QFile::remove(target)) {
+            return false;
+        }
+        if (!QFile::copy(entry.absoluteFilePath(), target)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // 解析仓库里这份示例清单（未签名、sha256 占位，所以放宽两项校验）。
@@ -264,8 +309,29 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_localThreads = settings.localThreads;
     m_localGpuLayers = settings.localGpuLayers;
     m_localExtraArgs = settings.localExtraArgs;
+    m_localStopOnSwitch = settings.localStopOnSwitch;
+    m_localPreheat = settings.localPreheat;
+    m_localIdleStop = settings.localIdleStop;
+    m_localIdleMinutes = settings.localIdleMinutes;
     // load() 已经过滤过非法值，这里拿到的要么是 "#RRGGBB"，要么是空（= 默认紫）。
     m_accentColor = settings.accentSeed;
+
+    // ---- 设置页开关 ----
+    m_cacheEnabled = settings.cacheEnabled;
+    m_sameLangHint = settings.sameLangHint;
+    m_suspiciousLangWarn = settings.suspiciousLangWarn;
+    m_autoDetectSource = settings.autoDetectSource;
+    m_proxyUrl = settings.proxyUrl;
+    m_httpTimeoutMs = settings.httpTimeoutMs;
+    m_minimizeToTray = settings.minimizeToTray;
+    m_closeToTray = settings.closeBehavior == QLatin1String("tray");
+    m_singleInstance = settings.singleInstance;
+    // 开机自启以注册表为准：用户可能在任务管理器 / 别的工具里删过，
+    // 界面不该还显示"已开启"然后点了没反应。
+    m_autoStart = studious::platform::Desktop::autoStartRegistered();
+
+    // 网络设置在第一次请求之前就得落成环境变量 —— 后端的 HttpClient 只在构造时读。
+    applyNetworkEnvironment();
 
     // 设置里存的是 Router 引擎 id，QML 用带语义的 id，这里做一次映射。
     // 老值只有 web / local-mt / llm + llm/useLocalEngine 一个开关；新值可能已经是
@@ -294,6 +360,30 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
 
     connect(m_job, &TranslateJob::finished, this, &AppBackend::onTranslationFinished);
 
+    // ---- 单实例 / 托盘 ----
+    // 先 ping 再 listen：活着的实例会被 ping 通，这时直接认作重复实例并退出；
+    // 反之 ping 不通才去占名字（startSingleInstance 内部会顺手清死 socket）。
+    // 顺序反过来的话，removeServer 会把正在跑的实例踢出命名管道表，多开就防不住了。
+    if (m_singleInstance) {
+        if (studious::platform::Desktop::pingRunningInstance(kInstanceName)) {
+            m_duplicateInstance = true;
+        } else if (!m_desktop.startSingleInstance(kInstanceName)) {
+            setStatus(studious::i18n::s("占不上单实例通道，这次启动可能允许多开。",
+                                        "Could not claim the single-instance channel; "
+                                        "duplicate launches may be allowed this time."),
+                      true);
+        }
+    }
+    connect(&m_desktop,
+            &studious::platform::Desktop::restoreRequested,
+            this,
+            &AppBackend::restoreWindowRequested);
+    connect(&m_desktop,
+            &studious::platform::Desktop::quitRequested,
+            this,
+            &AppBackend::quitApplication);
+    syncTrayState();
+
     refreshAssets();
     // 本地 MT 的语言对表同样来自磁盘扫描，和资产一起在首屏前刷一次。
     refreshMtPairs();
@@ -313,6 +403,29 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
                 emit assetProgressChanged();
             },
             Qt::QueuedConnection);
+
+    // 空闲自动停用：只在开关打开（且服务在跑）时有意义，其余时候定时器闲着。
+    m_localIdleTimer = new QTimer(this);
+    m_localIdleTimer->setSingleShot(true);
+    connect(m_localIdleTimer, &QTimer::timeout, this, [this] {
+        if (!m_localIdleStop || !m_localEngine.isRunning()) {
+            return;
+        }
+        shutdownLocalEngine(studious::i18n::sf("本地引擎已空闲 %1 分钟，服务已自动停止。",
+                                               "Local engine idle for %1 min - service stopped automatically.",
+                                               {QString::number(m_localIdleMinutes)}));
+    });
+
+    // 启动预热：只在用户明确打开时做，而且延迟 1.5 秒 —— 别跟首屏抢 CPU，
+    // 也别让 llama-server 的日志输出插到窗口还没画出来的那一段。
+    if (m_localPreheat) {
+        QTimer::singleShot(1500, this, [this] {
+            if (!m_localPreheat || m_localEngine.isRunning()) {
+                return;
+            }
+            startLocalServer();
+        });
+    }
 }
 
 AppBackend::~AppBackend() = default;
@@ -369,6 +482,10 @@ void AppBackend::setEngineId(const QString &id)
     m_engineId = id;
     saveSettings();
     emit engineIdChanged();
+    // 「切走就停」：用户选的，默认关 —— 关着就保留 llama-server 热着，下次切回来直接翻。
+    if (m_localStopOnSwitch && id != QLatin1String("llm-local") && m_localEngine.isRunning()) {
+        shutdownLocalEngine(QString());
+    }
     refreshEngineStatuses();
 }
 
@@ -530,6 +647,423 @@ void AppBackend::setAccentColor(const QString &color)
     emit accentColorChanged();
 }
 
+// ------------------------------------------------------- 设置页：翻译行为开关
+
+void AppBackend::setCacheEnabled(bool on)
+{
+    if (m_cacheEnabled == on) {
+        return;
+    }
+    m_cacheEnabled = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.cacheEnabled = on;
+    settings.save();
+
+    // 关缓存不改已存内容，只是以后不再查 / 不再写；打开时条数照旧。
+    emit prefsChanged();
+    refreshCacheStats();
+}
+
+void AppBackend::setSameLangHint(bool on)
+{
+    if (m_sameLangHint == on) {
+        return;
+    }
+    m_sameLangHint = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.sameLangHint = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setSuspiciousLangWarn(bool on)
+{
+    if (m_suspiciousLangWarn == on) {
+        return;
+    }
+    m_suspiciousLangWarn = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.suspiciousLangWarn = on;
+    settings.save();
+
+    emit prefsChanged();
+    // 原始警告一直攒在 m_statusWarning 里，getter 按开关过滤，
+    // 所以这里只要通知一次，界面就能立刻显 / 隐。
+    emit statusWarningChanged();
+}
+
+void AppBackend::setAutoDetectSource(bool on)
+{
+    if (m_autoDetectSource == on) {
+        return;
+    }
+    m_autoDetectSource = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.autoDetectSource = on;
+    settings.save();
+
+    // 关掉自动检测时如果当前就停在 auto，得给个具体语言，否则翻译会被
+    // 「本地 MT 需要明确的源语言」这类校验直接拒掉。
+    if (!on && m_srcLang == QLatin1String("auto")) {
+        const QString detected = detectLanguage(m_sourceText);
+        setSrcLang(detected.isEmpty() ? QStringLiteral("en") : detected);
+    }
+
+    emit prefsChanged();
+}
+
+// --------------------------------------------------------- 设置页：网络
+
+void AppBackend::applyNetworkEnvironment()
+{
+    // 代理：空串 = 不覆盖，让后端继续按 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY 探测。
+    if (m_proxyUrl.isEmpty()) {
+        qunsetenv("STUDIOUS_HTTP_PROXY");
+    } else {
+        qputenv("STUDIOUS_HTTP_PROXY", m_proxyUrl.toUtf8());
+    }
+
+    // 超时是"全局下限"：后端只往上抬各调用点自己的超时，回环地址不受影响。
+    qputenv("STUDIOUS_HTTP_TIMEOUT", QByteArray::number(m_httpTimeoutMs));
+}
+
+void AppBackend::setProxyUrl(const QString &url)
+{
+    const QString trimmed = url.trimmed();
+    if (m_proxyUrl == trimmed) {
+        return;
+    }
+    m_proxyUrl = trimmed;
+
+    AppSettings settings = AppSettings::load();
+    settings.proxyUrl = m_proxyUrl;
+    settings.save();
+
+    applyNetworkEnvironment();
+    emit prefsChanged();
+    // 说清楚生效时机：QtHttpClient 在构造时读环境变量，已建的实例不会回溯。
+    setStatus(trimmed.isEmpty() ? i18n::s().common.ready
+                                : studious::i18n::s("代理已更新，下一次网络请求生效。",
+                                                    "Proxy updated; applies to the next request."),
+              false);
+}
+
+void AppBackend::setHttpTimeoutMs(int ms)
+{
+    const int clamped = std::clamp(ms, 1000, 600000);
+    if (m_httpTimeoutMs == clamped) {
+        return;
+    }
+    m_httpTimeoutMs = clamped;
+
+    AppSettings settings = AppSettings::load();
+    settings.httpTimeoutMs = clamped;
+    settings.save();
+
+    applyNetworkEnvironment();
+    emit prefsChanged();
+}
+
+// ----------------------------------------------------- 设置页：桌面集成
+
+void AppBackend::setAutoStart(bool on)
+{
+    if (m_autoStart == on) {
+        return;
+    }
+
+    QString error;
+    if (!studious::platform::Desktop::setAutoStart(on, &error)) {
+        // 失败不改内存值也不落盘：界面上那个开关应该自己弹回去。
+        setStatus(error, true);
+        emit prefsChanged();
+        return;
+    }
+
+    m_autoStart = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.autoStart = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setMinimizeToTray(bool on)
+{
+    if (m_minimizeToTray == on) {
+        return;
+    }
+    m_minimizeToTray = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.minimizeToTray = on;
+    settings.save();
+
+    syncTrayState();
+    emit prefsChanged();
+}
+
+void AppBackend::setCloseToTray(bool on)
+{
+    if (m_closeToTray == on) {
+        return;
+    }
+    m_closeToTray = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.closeBehavior = on ? QStringLiteral("tray") : QStringLiteral("exit");
+    settings.save();
+
+    syncTrayState();
+    emit prefsChanged();
+}
+
+void AppBackend::setSingleInstance(bool on)
+{
+    if (m_singleInstance == on) {
+        return;
+    }
+    m_singleInstance = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.singleInstance = on;
+    settings.save();
+
+    emit prefsChanged();
+    // 当前进程的本地 socket 已经绑好了，改这个只能下次启动生效 —— 明说，别让人以为没生效。
+    setStatus(studious::i18n::s("单实例设置已保存，重启后生效。",
+                                "Single-instance setting saved; takes effect after a restart."),
+              false);
+}
+
+bool AppBackend::trayAvailable()
+{
+    return m_desktop.trayAvailable();
+}
+
+void AppBackend::syncTrayState()
+{
+    const bool needed = m_minimizeToTray || m_closeToTray;
+    m_desktop.setTrayEnabled(needed);
+    if (needed && !m_desktop.trayAvailable()) {
+        setStatus(studious::i18n::s("这个会话里装不上托盘图标，托盘相关设置暂时无效。",
+                                    "Tray icon is unavailable in this session; tray settings are ignored."),
+                  true);
+    }
+}
+
+// --------------------------------------------------------- 设置页：数据
+
+void AppBackend::openPath(const QString &path)
+{
+    const QString trimmed = path.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    const QFileInfo info(trimmed);
+    const QString target = info.isDir() ? info.absoluteFilePath()
+                                        : info.absolutePath();   // 文件就打开它所在的目录
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
+        setStatus(studious::i18n::s("打不开这个目录（可能已被删除，或被系统策略拦住）。",
+                                    "Cannot open the folder (missing, or blocked by policy)."),
+                  true);
+    }
+}
+
+int AppBackend::clearOldLogs(int days)
+{
+    const int keepDays = std::max(1, days);
+    const QDir logDir(QDir(assetInstallRootPath()).filePath(QStringLiteral("logs")));
+    if (!logDir.exists()) {
+        return 0;
+    }
+
+    const QDateTime cutoff = QDateTime::currentDateTime().addDays(-keepDays);
+    int removed = 0;
+    const QFileInfoList entries =
+        logDir.entryInfoList({QStringLiteral("*.log")}, QDir::Files | QDir::NoSymLinks);
+    for (const QFileInfo &entry : entries) {
+        if (entry.lastModified() >= cutoff) {
+            continue;
+        }
+        if (QFile::remove(entry.absoluteFilePath())) {
+            ++removed;
+        }
+    }
+
+    setStatus(studious::i18n::sf("已清理 %1 个 %2 天前的日志文件。",
+                                 "Removed %1 log file(s) older than %2 days.",
+                                 {removed, keepDays}),
+              false);
+    return removed;
+}
+
+void AppBackend::resetApplication()
+{
+    // 先把本地服务停干净：它握着模型文件，重启后新旧进程抢同一份会很别扭。
+    shutdownLocalEngine(QString());
+
+    // 清配置（QSettings 会一起清掉语言、主题、强调色、引擎选择…），
+    // 再清翻译缓存。资产目录刻意不动 —— 那是几 GB 的下载，不是"配置"。
+    QSettings store(QStringLiteral("Studious"), QStringLiteral("Studious"));
+    store.clear();
+    store.sync();
+
+    clearCache();
+
+    restartApplication();
+}
+
+void AppBackend::quitApplication()
+{
+    // 退出前把托盘摘掉，否则任务栏通知区会留一个点不动的幽灵图标，
+    // 要等鼠标划过去才消失。
+    m_desktop.shutdown();
+    QCoreApplication::quit();
+}
+
+bool AppBackend::migrateAssetRoot(const QString &newRoot)
+{
+    const QString target = QDir::cleanPath(newRoot.trimmed());
+    const QString current = QDir::cleanPath(assetInstallRootPath());
+
+    if (target.isEmpty()) {
+        return false;
+    }
+    if (target == current) {
+        setStatus(studious::i18n::s("新目录和当前目录是同一个。", "The new folder is the same as the current one."),
+                  true);
+        return false;
+    }
+    // 不允许把根目录挪进自己里面，否则搬着搬着就把源目录搬没了。
+    if (target.startsWith(current + QLatin1Char('/'))) {
+        setStatus(studious::i18n::s("新目录不能是当前目录的子目录。",
+                                    "The new folder cannot be inside the current one."),
+                  true);
+        return false;
+    }
+    if (QDir(target).exists() && !QDir(target).isEmpty()) {
+        setStatus(studious::i18n::s("新目录必须是空目录（或不存在）。",
+                                    "The target folder must be empty or not exist yet."),
+                  true);
+        return false;
+    }
+
+    // 模型 / 运行时都握在本地服务手里，搬之前必须停。
+    shutdownLocalEngine(QString());
+
+    if (!QDir().mkpath(target)) {
+        setStatus(studious::i18n::s("建不了目标目录，检查权限或磁盘。",
+                                    "Cannot create the target folder — check permissions or disk."),
+                  true);
+        return false;
+    }
+
+    const QDir source(current);
+    const QStringList subdirs = {QStringLiteral("runtime"),
+                                 QStringLiteral("models"),
+                                 QStringLiteral("downloads"),
+                                 QStringLiteral("logs")};
+
+    // 同盘 rename 是瞬时的；跨盘会失败（EXDEV），退回 copy + remove 的慢路径。
+    for (const QString &name : subdirs) {
+        if (!source.exists(name)) {
+            continue;
+        }
+        const QString from = source.filePath(name);
+        const QString to = QDir(target).filePath(name);
+        if (QDir().rename(from, to)) {
+            continue;
+        }
+        if (QDir(from).exists()) {
+            copyDirRecursive(from, to);
+        }
+        QDir(from).removeRecursively();
+    }
+
+    // 落盘新根目录，然后重扫一遍资产表与语言对表（它们都按根目录算路径）。
+    AppSettings settings = AppSettings::load();
+    settings.assetRoot = target;
+    settings.save();
+
+    refreshAssets();
+    refreshMtPairs();
+    refreshLocalState();
+
+    setStatus(studious::i18n::sf("安装目录已迁移到 %1。",
+                                 "Install folder moved to %1.",
+                                 {QDir::toNativeSeparators(target)}),
+              false);
+    return true;
+}
+
+void AppBackend::importAssetFromFile(const QString &assetId, const QString &filePath)
+{
+    const QString id = assetId.trimmed();
+    const QString path = filePath.trimmed();
+    if (id.isEmpty() || path.isEmpty() || !QFileInfo::exists(path)) {
+        setStatus(studious::i18n::s("要导入的资产或文件不存在。",
+                                    "The asset id or the file to import does not exist."),
+                  true);
+        return;
+    }
+
+    // 同一个资产别并行装两遍：装的过程会重写目标文件。
+    if (m_assetProgress.contains(id)) {
+        return;
+    }
+    m_assetProgress.insert(id, -1);
+    emit assetProgressChanged();
+
+    auto *watcher = new QFutureWatcher<studious::asset::DownloadResult>(this);
+    connect(watcher,
+            &QFutureWatcher<studious::asset::DownloadResult>::finished,
+            this,
+            [this, watcher, id] {
+                const studious::asset::DownloadResult result = watcher->result();
+                watcher->deleteLater();
+
+                m_assetProgress.remove(id);
+                emit assetProgressChanged();
+
+                if (result.ok) {
+                    setStatus(studious::i18n::s("导入完成。", "Import finished."), false);
+                } else {
+                    setStatus(studious::i18n::sf("导入失败：%1", "Import failed: %1", {result.error}),
+                              true);
+                    emit errorRaised(i18n::s().settings.assets, result.error);
+                }
+
+                refreshAssets();
+                refreshMtPairs();
+                refreshLocalState();
+            });
+
+    // 工作线程里造 HttpClient / Registry / Downloader（QNetworkAccessManager 有线程亲和）。
+    // installFromFile 其实不发网络请求，但 Downloader 的构造签名要一个 IHttpClient。
+    watcher->setFuture(QtConcurrent::run([id, path]() {
+        studious::asset::DownloadResult result;
+
+        studious::asset::Manifest manifest;
+        if (!parseBundledManifest(&manifest)) {
+            result.ok = false;
+            result.error = QStringLiteral("找不到或无法解析资产清单");
+            return result;
+        }
+
+        studious::net::QtHttpClient http;
+        studious::asset::AssetRegistry registry(assetInstallRootPath(), manifest);
+        studious::asset::Downloader downloader(http, registry);
+        return downloader.installFromFile(id, path);
+    }));
+}
+
 // -------------------------------------------------------------------- 翻译
 
 bool AppBackend::useLocalEngine() const
@@ -573,7 +1107,7 @@ void AppBackend::translate()
     req.priority = settings.enginePriority;
     req.llm = settings.llm;
     req.cache = m_cache;
-    req.cacheEnabled = settings.cacheEnabled;
+    req.cacheEnabled = m_cacheEnabled;
     // Web 来源：界面只让选一个（后端 AppSettings 也只存一个 id），
     // 但装配接口要的是"顺序表"，所以包成单元素列表；空串 = 走后端默认顺序。
     if (!settings.webProviderId.isEmpty()) {
@@ -582,7 +1116,7 @@ void AppBackend::translate()
 
     m_lastParagraphs = paragraphs;
     m_lastEngineLabel = m_engineId.isEmpty() ? i18n::s().translate.engineAuto : m_engineId;
-    m_lastCacheEnabled = settings.cacheEnabled;
+    m_lastCacheEnabled = m_cacheEnabled;
 
     if (useLocalEngine()) {
         // 本地引擎：先把 llama-server 拉起来（阻塞约 1 秒），再提交翻译。
@@ -621,6 +1155,9 @@ void AppBackend::translate()
     emit runningChanged();
     setWarning(QString());
     setStatus(i18n::s().translate.running, false);
+    // 有请求在跑的时候绝不能被"空闲"回收，所以要重置一次计时；
+    // 翻译结束还会再重置一次（见 onTranslationFinished）。
+    touchLocalIdle();
     m_job->start(req);
 }
 
@@ -705,6 +1242,8 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
 
     refreshCacheStats();
     refreshEngineStatuses();
+    // 一轮翻译跑完，空闲计时从现在开始重新数。
+    touchLocalIdle();
 }
 
 // -------------------------------------------------------------------- 状态
@@ -743,6 +1282,12 @@ void AppBackend::refreshEngineStatuses()
     const QString dst = m_dstLangs.value(0, QStringLiteral("zh"));
     QVariantList list;
 
+    // 本地 MT 的「装好没有」看的是语言对，而不是当前请求能不能路由：
+    // 源语言是「自动检测」时 Router 必然拒绝（本地 MT 不支持自动检测后再选模型），
+    // 但引擎本身是能用的，报「未就绪」会让人以为还得去下载东西。
+    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    const QStringList mtPairs = mt.installedPairs();
+
     for (const auto &row : router.status(m_srcLang, dst)) {
         if (row.first == QLatin1String("mock")) {
             continue;
@@ -768,31 +1313,83 @@ void AppBackend::refreshEngineStatuses()
         }
         item.insert(QStringLiteral("state"), state);
         item.insert(QStringLiteral("missingAssets"), row.second.missingAssets.size());
+
+        // 本地 MT 单独改写三件事：
+        //   state/available —— 按装了几个语言对算，跟这条请求能不能走无关；
+        //   ready           —— 仍然是「这条请求能不能走」（源语言 auto 时为 false，
+        //                      自动模式的优先级高亮要靠它，不能拿 state 顶替）；
+        //   detail          —— 不再把 resolve() 的拒绝理由当故障文案。
+        if (uiId == QLatin1String("local-mt")) {
+            const bool hasPairs = !mtPairs.isEmpty();
+            QString detail;
+            if (!hasPairs) {
+                detail = studious::i18n::s(
+                    "没装任何语言对，去资产页下载或用「下载 / 导入」",
+                    "No language pair installed. Download one on the Assets page.");
+            } else if (row.second.ready) {
+                detail = mt.routeDescription(m_srcLang, dst);
+            } else {
+                detail = studious::i18n::sf(
+                    "已装 %1 个语言对 · 选定源语言后可用",
+                    "%1 language pair(s) installed · pick a source language to use it",
+                    {mtPairs.size()});
+            }
+            item.insert(QStringLiteral("available"), hasPairs);
+            item.insert(QStringLiteral("state"),
+                        hasPairs ? QStringLiteral("ready") : QStringLiteral("missing-assets"));
+            item.insert(QStringLiteral("ready"), hasPairs && row.second.ready);
+            item.insert(QStringLiteral("detail"), detail);
+            item.insert(QStringLiteral("missingAssets"), hasPairs ? 0 : 1);
+            list.append(item);
+            continue;
+        }
+
+        item.insert(QStringLiteral("available"), row.second.ready);
         list.append(item);
     }
 
     // 本地 LLM 不在 Router 里，单独按 LocalEngine 的实况补一条。
     //
-    // 三态定义（与产品约定一致）：
-    //   ready          —— 服务在跑，能用
-    //   missing-assets —— llama 运行时/驱动还没下载
-    //   not-ready      —— 运行时装了，但服务没启动
+    // 三态定义（与产品约定一致，看的是「装好没有」，不是「服务现在跑没跑」）：
+    //   ready          —— 运行时 + 模型都在，翻译时会自动把 llama-server 拉起来
+    //   missing-assets —— 运行时或模型缺一个
+    //   not-ready      —— 理论上不会出现（模型在、运行时就一定在），留着兜底
+    //
+    // 以前是「服务没在跑就报未就绪」，可服务本来就不该常驻：translate() 会
+    // ensureStarted()，所以那种报法等于把「能用」说成「不能用」。
+    const bool localRuntime = llamaRuntimeInstalled();
+    const bool localHasModel = !LocalEngine::availableModels().isEmpty();
+    const bool localAvailable = localRuntime && localHasModel;
+    const bool localRunning = m_localEngine.isRunning();
+
+    QString localDetail;
+    if (localRunning) {
+        localDetail = m_localEngine.baseUrl();
+    } else if (localAvailable) {
+        localDetail = studious::i18n::s("模型就绪 · 翻译时自动启动服务",
+                                        "Model ready · the server starts on demand");
+    } else if (!localRuntime && !localHasModel) {
+        localDetail = studious::i18n::s("缺 llama 运行时和模型文件",
+                                        "Missing both the llama runtime and a model file");
+    } else if (!localRuntime) {
+        localDetail = studious::i18n::s(
+            "缺 llama 运行时，去资产页下载",
+            "No llama runtime installed. Download one on the Assets page.");
+    } else {
+        localDetail = studious::i18n::s(
+            "缺模型文件，去资产页下载",
+            "No model file installed. Download one on the Assets page.");
+    }
+
     QVariantMap local;
     local.insert(QStringLiteral("id"), QStringLiteral("llm-local"));
-    local.insert(QStringLiteral("ready"), m_localEngine.isRunning());
-    local.insert(QStringLiteral("detail"),
-                 m_localEngine.isRunning() ? m_localEngine.baseUrl()
-                                           : i18n::s().common.notReady);
-
-    QString localState = QStringLiteral("not-ready");
-    if (m_localEngine.isRunning()) {
-        localState = QStringLiteral("ready");
-    } else if (!llamaRuntimeInstalled()) {
-        localState = QStringLiteral("missing-assets");
-    }
-    local.insert(QStringLiteral("state"), localState);
+    local.insert(QStringLiteral("ready"), localRunning || localAvailable);
+    local.insert(QStringLiteral("available"), localAvailable);
+    local.insert(QStringLiteral("detail"), localDetail);
+    local.insert(QStringLiteral("state"),
+                 localAvailable ? QStringLiteral("ready") : QStringLiteral("missing-assets"));
     local.insert(QStringLiteral("missingAssets"),
-                 localState == QLatin1String("missing-assets") ? 1 : 0);
+                 (localRuntime ? 0 : 1) + (localHasModel ? 0 : 1));
     list.append(local);
 
     m_engineStatuses = list;
@@ -845,6 +1442,17 @@ void AppBackend::resetCacheStats()
 
 void AppBackend::startLocalServer()
 {
+    // 没装运行时 / 没模型就别去拉进程：那种失败只会给出一条看不懂的日志尾巴。
+    // 界面上「启动」按钮同样会禁用，这里再兜一层（CLI、快捷键、预热都走这个函数）。
+    if (!llamaRuntimeInstalled() || LocalEngine::availableModels().isEmpty()) {
+        setStatus(studious::i18n::s("本地 LLM 还缺资产：需要 runtime.llama.* 运行时和至少一个模型文件。"
+                                    "先去「资产」页下载。",
+                                    "Local LLM is missing assets: it needs a runtime.llama.* runtime "
+                                    "and at least one model file. Download them on the Assets page first."),
+                  true);
+        return;
+    }
+
     AppSettings settings = AppSettings::load();
     LocalEngineConfig cfg;
     cfg.modelPath = localModelPathFrom(settings.localModelFileName);
@@ -862,6 +1470,8 @@ void AppBackend::startLocalServer()
         emit errorRaised(i18n::s().config.localLlmSection, error);
     } else {
         setStatus(i18n::s().common.ready, false);
+        // 手动启动也算"活跃"：空闲回收要从现在开始数，不能从上次翻译算。
+        touchLocalIdle();
     }
     refreshLocalState();
     refreshEngineStatuses();
@@ -869,7 +1479,11 @@ void AppBackend::startLocalServer()
 
 void AppBackend::stopLocalServer()
 {
+    if (m_localIdleTimer) {
+        m_localIdleTimer->stop();
+    }
     m_localEngine.shutdown();
+    refreshLocalState();
     refreshEngineStatuses();
 }
 
@@ -1199,6 +1813,96 @@ void AppBackend::setLocalExtraArgs(const QString &args)
     settings.save();
 
     emit localLaunchChanged();
+}
+
+void AppBackend::setLocalStopOnSwitch(bool on)
+{
+    if (m_localStopOnSwitch == on) {
+        return;
+    }
+    m_localStopOnSwitch = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.localStopOnSwitch = on;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalPreheat(bool on)
+{
+    if (m_localPreheat == on) {
+        return;
+    }
+    m_localPreheat = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.localPreheat = on;
+    settings.save();
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalIdleStop(bool on)
+{
+    if (m_localIdleStop == on) {
+        return;
+    }
+    m_localIdleStop = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.localIdleStop = on;
+    settings.save();
+
+    // 打开就立刻开始数（从"现在"算），关掉就把定时器停掉，别留着半路触发。
+    if (on) {
+        touchLocalIdle();
+    } else if (m_localIdleTimer) {
+        m_localIdleTimer->stop();
+    }
+
+    emit localLaunchChanged();
+}
+
+void AppBackend::setLocalIdleMinutes(int minutes)
+{
+    const int next = std::clamp(minutes, 1, 240);
+    if (m_localIdleMinutes == next) {
+        return;
+    }
+    m_localIdleMinutes = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.localIdleMinutes = next;
+    settings.save();
+
+    // 改了阈值就按新值重新计时，否则用户会以为设置没生效。
+    touchLocalIdle();
+    emit localLaunchChanged();
+}
+
+void AppBackend::touchLocalIdle()
+{
+    if (!m_localIdleTimer || !m_localIdleStop || !m_localEngine.isRunning()) {
+        return;
+    }
+    m_localIdleTimer->start(m_localIdleMinutes * 60 * 1000);
+}
+
+void AppBackend::shutdownLocalEngine(const QString &reason)
+{
+    if (!m_localEngine.isRunning()) {
+        return;
+    }
+    if (m_localIdleTimer) {
+        m_localIdleTimer->stop();
+    }
+    m_localEngine.shutdown();
+    refreshLocalState();
+    refreshEngineStatuses();
+    if (!reason.isEmpty()) {
+        setStatus(reason, false);
+    }
 }
 
 void AppBackend::refreshMtPairs()

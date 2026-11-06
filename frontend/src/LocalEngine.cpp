@@ -1,5 +1,7 @@
 #include "LocalEngine.h"
 
+#include "AppSettings.h"
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -11,6 +13,18 @@
 
 #include <algorithm>
 #include <utility>
+
+#ifdef Q_OS_WIN
+// 只用 Job Object 那几个 API，不需要别的 Win32 声明。
+// 这里放宽是为了让 backend 保持「零平台头依赖」那条硬约束成立：平台粘合留在前端。
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
 
 namespace {
 
@@ -138,7 +152,13 @@ LocalEngine::~LocalEngine()
 
 QString LocalEngine::installRoot()
 {
-    // 与资产页 / AssetRegistry 用的是同一个根：%APPDATA%\studious\assets
+    // 与资产页 / AssetRegistry 用的是同一个根：默认 %APPDATA%\studious\assets，
+    // 用户在设置里迁移过就跟着 settings/asset/root 走 —— 否则搬完目录，
+    // 资产表找新位置、本地引擎还在老位置找模型，两边各说各话。
+    const QString configured = AppSettings::load().assetRoot;
+    if (!configured.isEmpty()) {
+        return QDir::cleanPath(configured);
+    }
     return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
         .filePath(QStringLiteral("assets"));
 }
@@ -309,6 +329,7 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
 
     m_lastStartupMs = timer.elapsed();
     m_server = std::move(server);
+    attachChildToJob();
     m_backend = backend;
     m_modelFile = modelFile;
     m_modelPath = model;
@@ -330,6 +351,8 @@ void LocalEngine::shutdown()
         m_server->stop();
         m_server.reset();
     }
+    // 进程已经停了，作业对象也可以拆了（句柄一关，Job 就没了）。
+    releaseJob();
     m_backend.clear();
     m_modelFile.clear();
     m_modelPath.clear();
@@ -399,4 +422,76 @@ QString LocalEngine::executablePath() const
 QString LocalEngine::modelPath() const
 {
     return isRunning() ? m_modelPath : QString();
+}
+
+// ----------------------------------------------------------------------- 作业对象
+
+#ifdef Q_OS_WIN
+// 把子进程挂进一个 KILL_ON_JOB_CLOSE 的作业对象：本进程的句柄消失时（包括被强杀、
+// 崩溃、任务管理器结束任务），系统会把 Job 里的所有进程一起杀掉。正常退出本来就走
+// shutdown()，这条是给「析构根本来不及执行」的情况兜底。
+//
+// 两个坑：
+//   1. Job 句柄必须**一直开着** —— 句柄一关就等于「Job 结束 = 杀光成员」；
+//   2. 父进程自身可能已在别的 Job 里（某些启动器会这么干）。Win8+ 支持嵌套，
+//      Win7 会返回 ERROR_ACCESS_DENIED，那种情况按「没兜底」处理，不影响功能。
+void LocalEngine::attachChildToJob()
+{
+    releaseJob();
+
+    const qint64 pid = processId();
+    if (pid <= 0) {
+        return;
+    }
+
+    HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+    if (job == nullptr) {
+        qWarning("[local] CreateJobObject failed (%lu), orphan guard disabled", ::GetLastError());
+        return;
+    }
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))
+        == FALSE) {
+        qWarning("[local] SetInformationJobObject failed (%lu)", ::GetLastError());
+        ::CloseHandle(job);
+        return;
+    }
+
+    HANDLE child =
+        ::OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
+    if (child == nullptr) {
+        qWarning("[local] OpenProcess(%lld) failed (%lu)", static_cast<long long>(pid),
+                 ::GetLastError());
+        ::CloseHandle(job);
+        return;
+    }
+
+    if (::AssignProcessToJobObject(job, child) == FALSE) {
+        qWarning("[local] AssignProcessToJobObject failed (%lu), orphan guard disabled",
+                 ::GetLastError());
+        ::CloseHandle(child);
+        ::CloseHandle(job);
+        return;
+    }
+    ::CloseHandle(child);
+
+    // 句柄留着不关：它一关，Job 就结束，成员进程全被杀。
+    m_job = job;
+}
+#else
+// POSIX 侧的对应物是 prctl(PR_SET_PDEATHSIG)；本地引擎目前只在 Windows 上发
+// （manifest 里 llama 运行时只有 win 的 cpu/vulkan 是真条目），所以先不做。
+void LocalEngine::attachChildToJob() {}
+#endif
+
+void LocalEngine::releaseJob()
+{
+#ifdef Q_OS_WIN
+    if (m_job != nullptr) {
+        ::CloseHandle(static_cast<HANDLE>(m_job));
+        m_job = nullptr;
+    }
+#endif
 }

@@ -452,3 +452,94 @@ msedge --headless=new --virtual-time-budget=1500 --window-size=1440,900 --screen
   → `model loaded` → `listening on http://127.0.0.1:18080`，退出后 `Get-Process llama-server` 为 0。
 
 
+
+## 资产清单：删掉 runtime.onnxruntime.win-x64 + 拦截框接线
+
+用户问「runtime.onnxruntime.win-x64 是什么？不是本地 MT 的驱动？我删了怎么还能跑？」——
+那条是设计期占位，从来没被运行期读过：
+
+- onnxruntime 是**编译期静态链接**：backend/CMakeLists.txt 的 ONNXRUNTIME_DIR /
+  ONNXRUNTIME_LIB 进 target_link_libraries，backend/src/mt/MtModel.cpp 直接
+  #include <onnxruntime_cxx_api.h>。运行期只要 exe 同目录有 onnxruntime.dll。
+- backend/src、backend/include、frontend/src 里 SetDllDirectory|AddDllDirectory|
+  onnxruntime.dll|runtime\.onnxruntime **零命中**，没有任何代码从资产目录加载。
+- 条目本身也是假的：sha256 空、URL 编造、version 1.20.1 与仓库 vendored 的 1.31.1 不符。
+- 处置：backend/asset/manifest.json 删掉整条（14 → 13）。**清单顶层是
+  `_comment / schema / keyId / payload / sig`，条目在 payload.assets**，
+  Python `d['assets']` 会 KeyError。
+- 本地 MT 卡补一行说明：「ONNX Runtime 随应用内置，无需下载；上面的语言对目录齐全
+  就能直接跑。」省得下一个人再去资产页找「驱动」。
+- notReadyDialog 之前没人调（改成状态胶囊跳转后成了死代码）。现在点「当前请求解析不了」
+  的胶囊会弹它，并新增「去资产页」按钮（missing-assets 时才出现，按引擎走 mt / llm 分类）。
+- 坑：--ui-shot 的 ScrollView 只渲染视口内内容，看页面底部要么把 ui-size 撑高，
+  要么临时把目标 CollapsibleCard 的 expanded 改 true（截完改回，共 6 处）。
+- 验证：--assets-cli 打印 13 条、6 个 mt.opus 语言对全在；notready_dialog.png 确认三按钮布局
+  （TEMP-SHOT 钩子已删并重建）。
+
+## 本地 llama-server 生命周期：Job Object + 三个开关 + 缺资产禁用
+
+需求：a) Job Object 兜底、切走就停（默认关，放本地 LLM 高级设置）、启动预热开关、
+空闲 N 分钟自动停（默认 10 分、默认关）；b) 没装资产时 llm 相关功能不可用并提示去资产页。
+
+- Job Object 只能放前端：backend/src/runtime/LlamaServer.cpp 明确要求 backend 自身源码里
+  扫不到平台头（当时先把 attach/release 塞进 LlamaServer.h，已撤回）。
+  frontend/src/LocalEngine.cpp 顶部 #ifdef Q_OS_WIN 包 <windows.h>；start() 里 m_server
+  就位后 attachChildToJob()，shutdown() 里 releaseJob()。KILL_ON_JOB_CLOSE，句柄存 m_job；
+  每步失败只 qWarning，不让它变成启动失败的理由。
+  实测：GUI 起着 llama-server 时强杀 studious.exe，4 秒后 llama-server 归 0。
+- 三个开关走 AppSettings（settings/llm/localStopOnSwitch|localPreheat|localIdleStop|
+  localIdleMinutes，后者夹 1~240），bool 用 toBool() 读，注册表写成 "1"/"true" 都认。
+- AppBackend：QTimer 单发。translate() 开始与 onTranslationFinished() 结束各 touch 一次
+  （有请求在跑时不能被「空闲」回收）；startLocalServer() 成功也 touch；超时才真停。
+  setEngineId() 里只有 stopOnSwitch 才 shutdown。停机走私有 shutdownLocalEngine(reason)
+  —— 不能重载成已有的 Q_INVOKABLE stopLocalServer。
+- 预热用 QTimer::singleShot(1500)：别跟首屏抢 CPU，也别让 llama 日志插到窗口还没画出来那段。
+- 缺资产：startLocalServer() 先查 llamaRuntimeInstalled() + availableModels()，缺就只报
+  一句人话、不拉进程；配置页「启动」按 localCanStart 禁用，旁边多一个「去资产页」。
+- 坑：i18n 的两个 s() 不是一个东西。AppBackend.cpp 里 i18n::s() 是 ui 那份（返回结构体），
+  后端双语必须写全 studious::i18n::s(zh,en) / sf(zh,en,{args})，参数是 const char*，
+  传 QStringLiteral 编不过。
+- 坑：Start-Process 起 GUI 会秒退 —— 没继承到 Qt bin 的 PATH，缺 Qt6Core.dll 直接退出，
+  看起来像崩溃。Start-Process 之前先给 $env:PATH 加 Qt bin。
+- 坑：pwsh 每次调用都是新进程，**上一次的变量不会留到下一次**。用 $raw 拼日志时 $raw 是空的，
+  WriteAllText 直接把 _log.md 覆盖成新增那一段。救法：git checkout -- _log.md 回 HEAD，
+  未提交的那段只能重写。以后拼文件一律在同一个调用里读完写。
+- 坑：[System.IO.File]::WriteAllLines 在 Windows 上写 CRLF，反复按行改会让整个
+  ConfigPage.qml 从 LF 变 CRLF。改完用 WriteAllText + Replace("\r\n","\n") 归一化。
+- 验证：selftest ALL CORE TESTS PASSED；--smoke local-mt「你好,世界观!」；
+  --smoke --local 起 vulkan 0.5b、停服务 3088 ms、无残留进程；预热开 → 10 秒内出进程；
+  idle=1 分 → 约 60 秒后自动消失；强杀父进程 → 子进程跟着死。
+  截图 docs/ui-shots-qml/life_switches*.png、cfg10_life.png。
+
+## 设置页「未实现」清零 + 桌面集成 + 数据管理
+
+目标：设置页 20 个 Stub 全部做掉。后端缺的接口先问，用户全选推荐项：
+全局超时走环境变量、桌面四项真做（Windows 原生）、安装根目录支持迁移。
+
+- 后端全局超时：QtHttpClient.cpp 加 effectiveTimeoutMs()，读 STUDIOUS_HTTP_TIMEOUT，
+  只当**下限**用（各调用点 5~69 s 各有道理），回环地址不受影响（llama-server 探测仍 5 s）。
+  顺手把 send() 里三处超时统一成同一变量。
+- platform/Desktop.{h,cpp}：托盘用 Shell_NotifyIcon 手搓（不链 QtWidgets），
+  开机自启写 HKCU\...\Run，单实例用 QLocalServer。
+  踩坑1：Desktop.cpp 不能 include studious/i18n/L10n.h（studious_platform 不链 backend 库），
+  改用 QCoreApplication::translate("Desktop", ...)，并把该文件单独列进 qt_add_lupdate。
+  踩坑2：头文件里在 namespace 内写 `class QLocalServer *m_instanceServer` 会就地声明新类，
+  编译报 incomplete type。必须在 namespace 之前写全局前置声明。
+- 托盘探测的坑：trayAvailable() 只读 m_trayReady，而图标只在 setTrayEnabled(true) 时创建，
+  于是两个开关默认关 → 图标永远没建过 → 界面永远显示"当前会话装载不了托盘图标"。
+  改成 trayAvailable() 真建一次（NIS_HIDDEN 建出来就隐藏）再返回。
+- AppToggle 内部点击会自己 `checked = !checked` 打断绑定，所有开关必须写
+  `onToggled: { backend.x = checked; checked = backend.x }`。
+- 单实例的坑（真 bug）：startSingleInstance() 无条件先 removeServer 再 listen，
+  把正在运行的实例的命名管道注册删掉了 → 第二个实例也能 listen 成功 → 多开防不住。
+  正确顺序：先 pingRunningInstance()（改成返回 bool），连得上就判定重复实例；
+  连不上才 removeServer 清死 socket 再 listen。修完实测第二个实例 204 ms 退出、进程数 1。
+- 翻译文件：lupdate 出来 25 条 unfinished，全填。一开始以为有"巨型合并 source"，
+  其实是自己的宽正则跨 <message> 块匹配造成的假象；可靠做法是按 <message>…</message>
+  切块再抓 <source>。另外按 context 分开修了「关闭」的误译（ConfigPage 是 Off，
+  Main / SettingsPage 的按钮是 Close）。
+- 截图设施：--ui-shot 加 --ui-section N，直接切设置页分区，不用再临时改 QML。
+- 验证：英文界面七张截图全英文无残留；--smoke local-mt 命中缓存 13 ms；
+  selftest ALL CORE TESTS PASSED；单实例实测通过。
+- 仍留 Stub：AppearancePage 6 个（字体三处、主窗口卡级、布局密度、状态栏信息密度、语言显示名），
+  HotkeysPage 1 个（平台层没有全局热键能力）。

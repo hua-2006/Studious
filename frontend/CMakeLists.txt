@@ -16,11 +16,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../backend ${CMAKE_BINARY_DIR}/back
 
 # 平台抽象层（截图 / OCR / 浮层 / 热键的接缝，实现仍是空桩）。
 add_library(studious_platform STATIC
+    src/platform/Desktop.cpp
+    src/platform/Desktop.h
     src/platform/NullPlatform.cpp
     src/platform/PlatformFactory.cpp
 )
 target_include_directories(studious_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui)
+# Network：Desktop 的单实例走 QLocalServer/QLocalSocket（托盘与自启是纯 Win32，不需要额外依赖）。
+target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
 
 # Windows 可执行文件图标（资源管理器 / 任务栏 / Alt-Tab 用）。
 # 走 .rc 而不是 WIN32_EXECUTABLE：本项目保留控制台子系统，
@@ -159,7 +162,9 @@ set(STUDIOUS_TS_FILES
 
 qt_add_lupdate(studious TS_FILES ${STUDIOUS_TS_FILES}
                 # 后端也有面向用户的文案（语言名），跟界面一起抽，别让前端各存一份映射表。
-                SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../backend/src/contract/LanguageRegistry.cpp)
+                SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../backend/src/contract/LanguageRegistry.cpp
+                        # 平台层文案（托盘菜单 / 开机自启报错）走 QCoreApplication::translate。
+                        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Desktop.cpp)
 qt_add_lrelease(studious TS_FILES ${STUDIOUS_TS_FILES}
                 QM_FILES_OUTPUT_VARIABLE STUDIOUS_QM_FILES)
 qt_add_resources(studious "translations"

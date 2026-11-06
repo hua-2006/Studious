@@ -29,6 +29,54 @@ struct AppSettings {
     // 关掉后 Router 既不查缓存也不写缓存，翻译耗时回到纯网络往返。
     bool cacheEnabled = true;
 
+    // ---- 桌面集成（Windows 原生实现；其它平台一律退化成"不支持"）----
+
+    // 开机自启（键 settings/desktop/autoStart）：写 HKCU\...\Run 键，值是本进程 exe 路径。
+    bool autoStart = false;
+
+    // 点最小化就收进托盘（键 settings/desktop/minimizeToTray）。
+    // 托盘不可用的平台（没实现 / 会话不支持）上这个开关会被界面置灰。
+    bool minimizeToTray = false;
+
+    // 点关闭按钮时干什么（键 settings/desktop/closeBehavior）：
+    // "exit" = 直接退出；"tray" = 收进托盘继续在后台跑。
+    QString closeBehavior = QStringLiteral("exit");
+
+    // 单实例（键 settings/desktop/singleInstance）：第二次启动只把已有窗口叫出来。
+    // 需要重启才生效 —— 本地 socket 在启动时就绑定了。
+    bool singleInstance = true;
+
+    // ---- 翻译行为（纯展示层开关，不改翻译结果）----
+
+    // 源语言 == 目标语言时给一行「这是原文」的提示（键 settings/translate/sameLangHint）。
+    // 后端本来就直接回填原文、不走引擎；这个开关只管提不提示。
+    bool sameLangHint = true;
+
+    // 源语言可疑时显示黄色警告条（键 settings/translate/suspiciousLangWarn）。
+    bool suspiciousLangWarn = true;
+
+    // 源语言下拉里提供「自动检测」（键 settings/translate/autoDetectSource）。
+    // 关掉只是不再把 auto 作为可选值：本地 MT 那种"必须明确源语言"的引擎因此更好用。
+    bool autoDetectSource = true;
+
+    // ---- 网络 ----
+
+    // 代理地址（键 settings/network/proxy），形如 http://127.0.0.1:7897。
+    // 空 = 不覆盖，跟随后端的环境变量探测（HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）。
+    // 非空时翻译前 qputenv("STUDIOUS_HTTP_PROXY", 值)，下一次新建的 HttpClient 生效。
+    QString proxyUrl;
+
+    // 全局 HTTP 超时下限，毫秒（键 settings/network/timeoutMs，默认 30000，合法 1000~600000）。
+    // 通过 qputenv("STUDIOUS_HTTP_TIMEOUT") 交给后端：只往上抬各调用点自己的超时，
+    // 且回环地址（本地 llama-server / 本地网关）不受影响。
+    int httpTimeoutMs = 30000;
+
+    // ---- 资产根目录 ----
+
+    // 资产安装根目录（键 settings/asset/root）。空 = 默认 %APPDATA%/studious/assets。
+    // 改这个值只影响「以后从哪里读」，真正搬文件走 AppBackend::migrateAssetRoot()。
+    QString assetRoot;
+
     // 本地引擎开关（对应界面上的「本地引擎」勾选框，QSettings 键 settings/llm/useLocalEngine）。
     // true 时翻译走本机 llama.cpp（llama-server.exe + 已下载的 GGUF），
     // 与 llm.baseUrl / apiKey / model 那套云端配置完全解耦：本地模式只借用 llm 组件，
@@ -63,6 +111,23 @@ struct AppSettings {
     // （键 settings/llm/localExtraArgs，默认空串 = 不加）。
     // 存 trim 后的串；合法性由用户自己负责（这是给高级用户留的口子）。
     QString localExtraArgs;
+
+    // ---- 本地 llama-server 的生命周期策略（三个开关，默认全关）----
+    // 默认全关是刻意的：谁能替用户决定"什么时候把几 GB 的模型从内存里卸掉"？
+    // 想省内存的人自己去打开，不想等冷启动的人就让它常驻。
+
+    // 切到别的引擎时顺手停掉本地服务（键 settings/llm/localStopOnSwitch，默认 false）。
+    bool localStopOnSwitch = false;
+
+    // 应用启动后自动把本地服务预热起来（键 settings/llm/localPreheat，默认 false）。
+    // 只在「运行时 + 模型都在」时才真的拉起，否则静默跳过。
+    bool localPreheat = false;
+
+    // 空闲这么久没有本地翻译请求就自动停（键 settings/llm/localIdleStop，默认 false）。
+    bool localIdleStop = false;
+
+    // 空闲判定阈值，分钟（键 settings/llm/localIdleMinutes，默认 10，合法 1~240）。
+    int localIdleMinutes = 10;
 
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），

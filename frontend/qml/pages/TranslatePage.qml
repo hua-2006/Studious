@@ -109,6 +109,35 @@ Item {
     readonly property string detectedLang: backend.srcLang === "auto"
                                            ? backend.detectLanguage(backend.sourceText) : ""
 
+    // 源语言下拉的条目：设置里关掉「自动检测源语言」时，把「自动」整项摘掉。
+    // 摘掉之后当前值一定不能还是 auto（后端的 setAutoDetectSource 会顺手改成具体语言）。
+    readonly property var sourceLanguages: {
+        if (backend.autoDetectSource)
+            return page.languages
+        var out = []
+        var list = page.languages
+        for (var i = 0; i < list.length; ++i) {
+            if (entryCode(list[i]) !== "auto")
+                out.push(list[i])
+        }
+        return out
+    }
+
+    // 同语言提示：源=目标时后端原样回填、根本不走引擎，
+    // 不提前说一句用户会以为「翻译坏了」。
+    readonly property string sameLangNotice: {
+        if (!backend.sameLangHint)
+            return ""
+        var src = backend.srcLang
+        if (src === "" || src === "auto")
+            return ""
+        for (var i = 0; i < backend.dstLangs.length; ++i) {
+            if (backend.dstLangs[i] === src)
+                return qsTr("源语言和目标语言相同，会原样返回。")
+        }
+        return ""
+    }
+
     // 目标语言增删；删空时回落到中文(简体)，保证至少一个目标。
     // 目标语言单选：后端接口仍然支持多目标（dstLangs 是数组），
     // 但前端只暴露一个值 —— 多选对实际使用没什么价值，先在前端禁掉，后端不动。
@@ -188,7 +217,7 @@ Item {
                     Layout.preferredWidth: page.wSourceField
                     Layout.preferredHeight: page.hField
 
-                    model: page.languages
+                    model: page.sourceLanguages
                     textRole: "label"
                     valueRole: "code"
 
@@ -204,7 +233,7 @@ Item {
 
                     // 后端改了源语言（切页 / 恢复设置）时同步显示项。
                     function syncIndex() {
-                        var list = page.languages
+                        var list = page.sourceLanguages
                         for (var i = 0; i < list.length; ++i) {
                             if (page.entryCode(list[i]) === backend.srcLang) {
                                 currentIndex = i
@@ -466,10 +495,11 @@ Item {
 
                 Text {
                     Layout.alignment: Qt.AlignRight
-                    text: qsTr("点击开始翻译 · 翻译中可取消")
+                    text: page.sameLangNotice.length > 0
+                          ? page.sameLangNotice : qsTr("点击开始翻译 · 翻译中可取消")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.inkVariant
+                    color: page.sameLangNotice.length > 0 ? Theme.caution : Theme.inkVariant
                 }
             }
         }
@@ -936,7 +966,11 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             label: statusSlot.modelData.id !== undefined ? statusSlot.modelData.id : ""
                             detail: statusSlot.modelData.detail !== undefined ? statusSlot.modelData.detail : ""
-                            state: statusSlot.modelData.ready ? 0 : 3
+                            // 颜色分三层：装好了且这条请求能走 = 绿；装好了但当前源语言/目标
+                            // 语言走不通（比如本地 MT 不支持自动检测源语言）= 黄；缺资产 = 红。
+                            state: statusSlot.modelData.state === "ready"
+                                   ? (statusSlot.modelData.ready ? 0 : 1)
+                                   : (statusSlot.modelData.state === "missing-assets" ? 2 : 1)
                         }
                     }
                 }
@@ -957,6 +991,8 @@ Item {
     Connections {
         target: backend
         function onSrcLangChanged() { srcCombo.syncIndex() }
+        // 「自动检测源语言」关掉后「自动」那一项会从列表里消失，索引得重新落一次。
+        function onPrefsChanged() { srcCombo.syncIndex() }
         function onShowSourceChanged() { sourceToggle.checked = backend.showSource }
         function onEngineIdChanged() { engineSeg.current = backend.engineId }
 

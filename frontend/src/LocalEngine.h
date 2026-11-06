@@ -95,6 +95,13 @@ public:
     static QString backendLabel(const QString &backend);
 
 private:
+    // Windows 兜底：把 llama-server 塞进一个 KILL_ON_JOB_CLOSE 的作业对象。
+    // 正常退出走 shutdown()，但任务管理器强杀 studious.exe 时析构根本不会执行，
+    // 只有 Job 能让系统顺手把子进程一起收掉。非 Windows 是空实现。
+    // 放在前端而不是 backend，是因为 backend 有一条「零平台头依赖」的硬约束。
+    void attachChildToJob();
+    void releaseJob();
+
     std::unique_ptr<studious::runtime::LlamaServer> m_server;
     QString m_backend;       // 当前服务实际用的后端（"vulkan" / "cpu"）
     QString m_modelFile;     // 当前服务加载的模型文件名
@@ -105,4 +112,5 @@ private:
     // shutdown() 会把它清回默认值，保证下次 ensureStarted 必然重新拉起。
     LocalEngineConfig m_runningCfg;
     qint64 m_lastStartupMs = 0;
+    void *m_job = nullptr;   // HANDLE；非 Windows 恒为 nullptr
 };

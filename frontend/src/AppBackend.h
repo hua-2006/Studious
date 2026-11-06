@@ -11,11 +11,13 @@
 #include <memory>
 
 #include "LocalEngine.h"
+#include "platform/Desktop.h"
 
 #include <studious/contract/Types.h>
 
 class TranslateJob;
 struct TranslateJobResult;
+class QTimer;
 
 namespace studious::cache {
 class TranslationCache;
@@ -126,6 +128,16 @@ class AppBackend : public QObject {
     Q_PROPERTY(QString localExtraArgs READ localExtraArgs WRITE setLocalExtraArgs
                    NOTIFY localLaunchChanged)
 
+    // 本地服务生命周期策略：三个开关 + 一个分钟数，全部默认关。
+    Q_PROPERTY(bool localStopOnSwitch READ localStopOnSwitch WRITE setLocalStopOnSwitch
+                   NOTIFY localLaunchChanged)
+    Q_PROPERTY(bool localPreheat READ localPreheat WRITE setLocalPreheat
+                   NOTIFY localLaunchChanged)
+    Q_PROPERTY(bool localIdleStop READ localIdleStop WRITE setLocalIdleStop
+                   NOTIFY localLaunchChanged)
+    Q_PROPERTY(int localIdleMinutes READ localIdleMinutes WRITE setLocalIdleMinutes
+                   NOTIFY localLaunchChanged)
+
     // 本地 MT 已装的语言对：来自后端 installedPairs() + missingFiles()。
     // 每项：pair / path / missing（QStringList）/ usable（bool）
     Q_PROPERTY(QVariantList mtPairs READ mtPairs NOTIFY mtPairsChanged)
@@ -146,6 +158,25 @@ class AppBackend : public QObject {
 
     // ---- 强调色（seed）："#RRGGBB"，空 = 默认紫 #6750A4，落 QSettings ----
     Q_PROPERTY(QString accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
+
+    // ---- 设置页：翻译行为 / 桌面集成 / 网络 ----
+    // 这几个开关全部"只存配置 + 立刻影响本进程行为"，不需要重启（单实例除外，
+    // 它在启动时就把本地 socket 命名绑死了）。统一用 prefsChanged 通知，
+    // 因为它们都在同一张设置页里、也不需要区分粒度。
+    Q_PROPERTY(bool cacheEnabled READ cacheEnabled WRITE setCacheEnabled NOTIFY prefsChanged)
+    Q_PROPERTY(bool sameLangHint READ sameLangHint WRITE setSameLangHint NOTIFY prefsChanged)
+    Q_PROPERTY(bool suspiciousLangWarn READ suspiciousLangWarn WRITE setSuspiciousLangWarn
+                   NOTIFY prefsChanged)
+    Q_PROPERTY(bool autoDetectSource READ autoDetectSource WRITE setAutoDetectSource
+                   NOTIFY prefsChanged)
+    Q_PROPERTY(QString proxyUrl READ proxyUrl WRITE setProxyUrl NOTIFY prefsChanged)
+    Q_PROPERTY(int httpTimeoutMs READ httpTimeoutMs WRITE setHttpTimeoutMs NOTIFY prefsChanged)
+    Q_PROPERTY(bool autoStart READ autoStart WRITE setAutoStart NOTIFY prefsChanged)
+    Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY prefsChanged)
+    Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY prefsChanged)
+    Q_PROPERTY(bool singleInstance READ singleInstance WRITE setSingleInstance NOTIFY prefsChanged)
+    // 托盘是否真的装上了（没 shell 的会话 / 非 Windows 为 false），界面据此置灰。
+    Q_PROPERTY(bool trayAvailable READ trayAvailable NOTIFY prefsChanged)
 
 public:
     explicit AppBackend(studious::cache::TranslationCache *cache, QObject *parent = nullptr);
@@ -168,7 +199,9 @@ public:
     bool running() const { return m_running; }
     QString statusText() const { return m_statusText; }
     bool statusIsError() const { return m_statusIsError; }
-    QString statusWarning() const { return m_statusWarning; }
+    // 「源语言可疑」警告是否显示由设置开关过滤 —— 原始警告照旧攒着，
+    // 用户把开关打开就能立刻看到，不用重翻一遍。
+    QString statusWarning() const { return m_suspiciousLangWarn ? m_statusWarning : QString(); }
 
     QVariantList languages() const;
     QVariantList engines() const;
@@ -243,6 +276,15 @@ public:
     QString localExtraArgs() const { return m_localExtraArgs; }
     void setLocalExtraArgs(const QString &args);
 
+    bool localStopOnSwitch() const { return m_localStopOnSwitch; }
+    void setLocalStopOnSwitch(bool on);
+    bool localPreheat() const { return m_localPreheat; }
+    void setLocalPreheat(bool on);
+    bool localIdleStop() const { return m_localIdleStop; }
+    void setLocalIdleStop(bool on);
+    int localIdleMinutes() const { return m_localIdleMinutes; }
+    void setLocalIdleMinutes(int minutes);
+
     // 本地 MT 已装语言对（含缺文件信息）。
     QVariantList mtPairs() const { return m_mtPairs; }
     void refreshMtPairs();
@@ -252,6 +294,36 @@ public:
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
     QString accentColor() const;
     void setAccentColor(const QString &color);
+
+    // ---- 设置页：翻译行为 ----
+    bool cacheEnabled() const { return m_cacheEnabled; }
+    void setCacheEnabled(bool on);
+    bool sameLangHint() const { return m_sameLangHint; }
+    void setSameLangHint(bool on);
+    bool suspiciousLangWarn() const { return m_suspiciousLangWarn; }
+    void setSuspiciousLangWarn(bool on);
+    bool autoDetectSource() const { return m_autoDetectSource; }
+    void setAutoDetectSource(bool on);
+
+    // ---- 设置页：网络 ----
+    QString proxyUrl() const { return m_proxyUrl; }
+    void setProxyUrl(const QString &url);
+    int httpTimeoutMs() const { return m_httpTimeoutMs; }
+    void setHttpTimeoutMs(int ms);
+
+    // ---- 设置页：桌面集成 ----
+    bool autoStart() const { return m_autoStart; }
+    void setAutoStart(bool on);
+    bool minimizeToTray() const { return m_minimizeToTray; }
+    void setMinimizeToTray(bool on);
+    bool closeToTray() const { return m_closeToTray; }
+    void setCloseToTray(bool on);
+    bool singleInstance() const { return m_singleInstance; }
+    void setSingleInstance(bool on);
+    bool trayAvailable();
+
+    // 第二个实例被拒（已有进程在跑）时为 true，main() 据此直接退出。
+    bool duplicateInstance() const { return m_duplicateInstance; }
 
 public slots:
     // ---- 翻译动作 ----
@@ -284,6 +356,21 @@ public slots:
 
     // 重新读一次本地引擎实况（端口 / pid / 日志尾部都要重新取）。
     Q_INVOKABLE void refreshLocalState();
+
+private:
+    // 重启空闲计时器。本地请求进来时调一次；localIdleStop 关着就什么都不做。
+    void touchLocalIdle();
+    // 停掉本地服务并按需给一句状态（reason 为空 = 安静地停）。
+    // 跟 QML 的 stopLocalServer() 分开：那个是用户点「停止」，这个是我们自己回收。
+    void shutdownLocalEngine(const QString &reason);
+
+    // 把代理 / 超时写进环境变量。后端的 QtHttpClient 只在构造时读这些值，
+    // 所以"改了立刻生效"的实现方式就是：改完环境变量，下一次新建客户端自然吃到。
+    void applyNetworkEnvironment();
+    // 托盘按需装上（最小化到托盘或关闭到托盘任一打开就需要它）。
+    void syncTrayState();
+
+public:
     // 去网关拉模型列表（GET {baseUrl}/models）。
     Q_INVOKABLE void fetchCloudModels();
     // 探测网关的「思考可关闭」能力，结果写进 cloudProbeResult。
@@ -303,6 +390,22 @@ public slots:
     // ---- 本地引擎 ----
     void startLocalServer();
     void stopLocalServer();
+
+    // ---- 设置页：数据 ----
+    // 用系统文件管理器打开一个路径（目录或文件所在目录）。空路径直接忽略。
+    Q_INVOKABLE void openPath(const QString &path);
+    // 删掉日志目录里 N 天前的 *.log，返回删掉的个数。
+    Q_INVOKABLE int clearOldLogs(int days);
+    // 清配置 + 清翻译缓存（保留已装资产），然后重启进程。
+    Q_INVOKABLE void resetApplication();
+    // 把整个安装根目录搬到 newRoot（同盘 rename，跨盘 copy+delete）。
+    // 失败时保持原样并返回 false（原因写进 statusText）。
+    Q_INVOKABLE bool migrateAssetRoot(const QString &newRoot);
+    // 手动导入：让用户挑的文件先按清单 sha256 校验再装到 assets 里。
+    // 在工作线程跑，结果经 errorRaised / statusText 回传。
+    Q_INVOKABLE void importAssetFromFile(const QString &assetId, const QString &filePath);
+    // 退出进程（托盘菜单「退出」与关闭行为都要用）。
+    Q_INVOKABLE void quitApplication();
 
 signals:
     void sourceTextChanged();
@@ -337,6 +440,10 @@ signals:
     void cloudBusyChanged();
     void cloudProbeResultChanged();
     void accentColorChanged();
+    void prefsChanged();
+
+    // 单实例 ping / 托盘菜单要求把窗口叫出来；main() 负责接到 QML 窗口上。
+    void restoreWindowRequested();
 
     // 供 QML 弹提示 / 打开对话框
     void errorRaised(const QString &title, const QString &detail);
@@ -356,6 +463,9 @@ private:
     studious::cache::TranslationCache *m_cache = nullptr;
     TranslateJob *m_job = nullptr;
     LocalEngine m_localEngine;   // 懒启动：第一次用本地引擎时才拉 llama-server
+
+    // 空闲自动停用。只在 localIdleStop 打开时走，其余时候是空对象。
+    QTimer *m_localIdleTimer = nullptr;
 
     QString m_sourceText;
     QString m_translatedText;
@@ -387,12 +497,33 @@ private:
     int m_localThreads = 0;
     int m_localGpuLayers = -1;
     QString m_localExtraArgs;
+    bool m_localStopOnSwitch = false;
+    bool m_localPreheat = false;
+    bool m_localIdleStop = false;
+    int m_localIdleMinutes = 10;
     QVariantList m_mtPairs;
     QVariantList m_cloudModels;
     bool m_cloudBusy = false;
     QString m_cloudProbeResult;
     // 规范化的 "#RRGGBB"（大写）；空 = 用默认紫，由 accentColor() 兜底。
     QString m_accentColor;
+
+    // ---- 设置页开关（对应 AppSettings 里的同名项）----
+    bool m_cacheEnabled = true;
+    bool m_sameLangHint = true;
+    bool m_suspiciousLangWarn = true;
+    bool m_autoDetectSource = true;
+    QString m_proxyUrl;
+    int m_httpTimeoutMs = 30000;
+    bool m_autoStart = false;
+    bool m_minimizeToTray = false;
+    bool m_closeToTray = false;
+    bool m_singleInstance = true;
+    bool m_duplicateInstance = false;
+
+    // 托盘 / 开机自启 / 单实例。放在 AppBackend 里而不是 main()：
+    // 三者的开关都在设置页，改完立刻要生效，需要一个活着的 QObject 承载体。
+    studious::platform::Desktop m_desktop;
 
     QVariantList m_engineStatuses;
     QStringList m_enginePriority;

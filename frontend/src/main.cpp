@@ -1017,6 +1017,13 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     auto *backend = new studious::ui::AppBackend(sharedCache(), &app);
+
+    // 第二个实例：构造函数里已经抢过单实例名并 ping 了在跑的那个进程，
+    // 这里直接退出 —— 别加载 QML、别建窗口、别动资产目录。
+    if (backend->duplicateInstance()) {
+        return 0;
+    }
+
     engine.rootContext()->setContextProperty(QStringLiteral("backend"), backend);
 
     // 字体：必须在 QML 加载前注册好，否则首帧会用系统默认字体渲染再跳变。
@@ -1055,6 +1062,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // 托盘双击 / 菜单「显示主窗口」/ 第二条实例 ping 过来 → 把窗口叫回前台。
+    // 折叠成"先 show 再 raise 再 activate"三步：只 raise 一个隐藏窗口是没用的。
+    if (auto *rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst())) {
+        QObject::connect(backend,
+                         &studious::ui::AppBackend::restoreWindowRequested,
+                         rootWindow,
+                         [rootWindow] {
+                             if (!rootWindow->isVisible()) {
+                                 rootWindow->show();
+                             }
+                             if (rootWindow->windowState() == Qt::WindowMinimized) {
+                                 rootWindow->showNormal();
+                             }
+                             rootWindow->raise();
+                             rootWindow->requestActivate();
+                         });
+    }
+
     // ---- 开发用截图：studious.exe --ui-shot out.png [--ui-page N] [--ui-size WxH] ----
     // 拍完就退出，不进事件循环。给 UI 走查 / 与设计稿比对用。
     if (hasFlag(argc, argv, "--ui-shot")) {
@@ -1083,6 +1108,16 @@ int main(int argc, char *argv[])
 
         window->resize(width, height);
         window->setProperty("currentPage", pageIndex);
+
+        // --ui-section N：设置页的左栏分区（0 通用 … 6 关于）。
+        // 没有它就只能靠临时改 QML 才能拍到某个分区，走查时太费劲。
+        const int sectionIndex = valueAfter("--ui-section").toInt();
+        if (sectionIndex > 0) {
+            if (QObject *settingsPage = window->findChild<QObject *>(QStringLiteral("settingsPage"))) {
+                settingsPage->setProperty("currentSection", sectionIndex);
+            }
+        }
+
         window->show();
 
         // 不能只 processEvents：那样不推进动画驱动，带 `Behavior on color` 的控件

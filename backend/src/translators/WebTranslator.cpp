@@ -32,7 +32,7 @@ core::ResolveResult WebTranslator::resolve(const QString &src, const QString &ds
     Q_UNUSED(dst)
     core::ResolveResult r;
     r.ready = true;
-    r.reason = i18n::s("web 无需资产", "The web engine needs no assets");
+    r.reason = i18n::s("在线接口，无需下载资产", "Online endpoints, nothing to download");
     return r;
 }
 

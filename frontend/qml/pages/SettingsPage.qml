@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+// 资产「从文件导入」与「迁移目录」要选本地文件 / 目录。
+import QtQuick.Dialogs
 // 默认（Windows 原生）样式不允许改 background / contentItem，
 // 显式用 Basic 样式覆盖同名类型，才能把 TextField / SpinBox 做成模板里的 .input。
 import QtQuick.Controls.Basic
@@ -16,8 +18,8 @@ import Studious
 //       ├ 左栏 190px：七个分区项，选中态高亮
 //       └ 右栏 ScrollView：StackLayout 一次只显示当前分区那张卡
 //
-// 后端只暴露缓存统计（cacheEntries / cacheHits / cacheMisses）与两个动作
-// （clearCache / resetCacheStats），其余开关都是纯前端展示，没有持久化。
+// 开关与输入框全部直连 AppBackend 的 Q_PROPERTY（值落 QSettings，写完即生效）；
+// 页面本身不存任何状态，除了「导入哪个资产」这种一次性的交互上下文。
 Item {
     id: page
 
@@ -78,6 +80,9 @@ Item {
     //   llm = qwen 模型 + llama.cpp 运行时；mt = opus-mt 语言对 + onnxruntime 运行时。
     property string assetTab: "all"
 
+    // 「从文件导入」的中间状态：资产已经选好了，文件选择框还没回结果。
+    property string pendingImportId: ""
+
     readonly property var filteredAssets: {
         var out = []
         var list = backend.assets
@@ -120,20 +125,43 @@ Item {
         return (mb / 1024).toFixed(1) + " GB"
     }
 
+    // 文件/目录选择器给的是 url（file:///C:/...），后端要的是本地路径。
+    // 直接传 url 给 QString 形参会得到带 scheme 的字符串，QFileInfo 认不出来。
+    function localPath(url) {
+        var s = "" + url
+        if (s.indexOf("file:///") === 0)
+            return decodeURIComponent(s.substring(8))
+        if (s.indexOf("file://") === 0)
+            return "//" + decodeURIComponent(s.substring(7))
+        return s
+    }
+
+    // 外部跳转入口：配置页「本地 MT → 下载 / 导入」直接落到资产分区的 mt 分类。
+    // kind 取 "mt" / "llm" / "all"；空串按 "all" 处理。
+    function openAssets(kind) {
+        page.currentSection = 4
+        page.assetTab = (kind === "mt" || kind === "llm") ? kind : "all"
+        // 资产卡不折叠，切过去就在最上面；把右栏滚回顶部，免得停在上一分区
+        // 留下的滚动位置上、看到一片空白。
+        // ScrollBar.position 是只读的，得改内容项的 contentY / 或 contentItem 的 origin。
+        if (contentScroll.contentItem)
+            contentScroll.contentItem.contentY = 0
+    }
+
     // ---- 安装根目录树（等宽块里逐行排版，├─ / └─ 是纯文本）----
     // 分支名后面补空格对齐到同一列说明；中文是全角，视觉上会差半个字宽，不用较真。
     readonly property string dirTree: [
-        "assets\\",
-        // 反斜杠放在 qsTr 外面：lupdate 写 .ts 时会把 `\\` 吃掉，包进去就永远匹配不上。
-        "├─ models\\                         " + qsTr("MT 语言对 + LLM 模型（.gguf）"),
-        "│  ├─ mt.opus.en-zh\\",
-        "│  ├─ mt.opus.zh-en\\",
-        "│  └─ model.qwen2.5-3b-instruct.q4km\\",
-        "├─ runtime\\                        " + qsTr("运行时"),
-        "│  └─ runtime.llama.cpu.win-x64\\",
-        "├─ downloads\\                      " + qsTr(".part 临时文件（可续传）"),
-        "├─ dist\\                           " + qsTr("打包产物"),
-        "└─ logs\\                           " + qsTr("运行日志")
+        // 根目录用后端给的真实路径，迁移过的用户也能看到自己那份。
+        backend.assetInstallRoot + "/",
+        "├─ models/                         " + qsTr("MT 语言对 + LLM 模型（.gguf）"),
+        "│  ├─ mt.opus.en-zh/",
+        "│  ├─ mt.opus.zh-en/",
+        "│  └─ model.qwen2.5-3b-instruct.q4km/",
+        "├─ runtime/                        " + qsTr("运行时"),
+        "│  └─ runtime.llama.cpu.win-x64/",
+        "├─ downloads/                      " + qsTr(".part 临时文件（可续传）"),
+        "├─ dist/                           " + qsTr("打包产物"),
+        "└─ logs/                           " + qsTr("运行日志")
     ].join("\n")
 
     // 后端不会主动推缓存统计，进页面时拉一次，数字才有内容。
@@ -281,7 +309,6 @@ Item {
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("通用")
                                 hint: qsTr("应用行为，与翻译链路无关。")
-                                Stub { }
 
                                 // 界面语言：Qt 没有运行时换语言机制，改完要重启。
                                 FieldRow {
@@ -307,75 +334,133 @@ Item {
                                     Item { Layout.fillWidth: true }
                                 }
 
-                                // 开机自启：当前平台层没接入。
-                                FieldRow {
-                                    label: qsTr("开机自启")
-                                    Stub { }
+                                // 开机自启：写 HKCU\...\Run，失败时后端自己回滚并弹状态。
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s1
 
-                                    AppToggle {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        checked: false
-                                        toggleEnabled: false
+                                    FieldRow {
+                                        label: qsTr("开机自启")
+
+                                        AppToggle {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            checked: backend.autoStart
+                                            onToggled: {
+                                                backend.autoStart = checked
+                                                checked = backend.autoStart // 写注册表失败时后端会回滚，界面跟着拉回
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
                                     }
 
                                     Text {
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        Layout.alignment: Qt.AlignVCenter
-                                        text: qsTr("当前平台尚未接入")
-                                        elide: Text.ElideRight
+                                        text: backend.autoStart
+                                              ? qsTr("已写入当前用户的启动项（HKCU\\...\\Run）。")
+                                              : qsTr("程序不会随系统启动。")
+                                        wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
                                     }
                                 }
 
-                                // 最小化到托盘：同上，平台层未接入。
-                                FieldRow {
-                                    label: qsTr("最小化到托盘")
-                                    Stub { }
+                                // 最小化到托盘：托盘图标本身装不上时置灰。
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s1
 
-                                    AppToggle {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        checked: false
-                                        toggleEnabled: false
+                                    FieldRow {
+                                        label: qsTr("最小化到托盘")
+
+                                        AppToggle {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            checked: backend.minimizeToTray
+                                            toggleEnabled: backend.trayAvailable
+                                            onToggled: {
+                                                backend.minimizeToTray = checked
+                                                checked = backend.minimizeToTray
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
                                     }
 
                                     Text {
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        Layout.alignment: Qt.AlignVCenter
-                                        text: qsTr("当前平台尚未接入")
-                                        elide: Text.ElideRight
+                                        text: backend.trayAvailable
+                                              ? qsTr("点最小化时收进系统托盘，而不是留在任务栏。")
+                                              : qsTr("当前会话装载不了托盘图标。")
+                                        wrapMode: Text.WordWrap
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: backend.trayAvailable ? Theme.inkVariant : Theme.caution
+                                    }
+                                }
+
+                                // 关闭主窗口时：退出 / 收进托盘（进程留着）。
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s1
+
+                                    FieldRow {
+                                        label: qsTr("关闭时")
+
+                                        Segmented {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            items: page.closeItems
+                                            current: backend.closeToTray ? "tray" : "exit"
+                                            onSelected: function (code) {
+                                                backend.closeToTray = code === "tray"
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+                                    }
+
+                                    Text {
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
+                                        Layout.fillWidth: true
+                                        text: qsTr("选「最小化到托盘」后主窗口只是隐藏，进程还在跑；从托盘菜单可以退出。")
+                                        wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
                                     }
-                                }
-
-                                // 关闭主窗口时：退出 / 最小化到托盘。
-                                FieldRow {
-                                    label: qsTr("关闭时")
-                                    Stub { }
-
-                                    Segmented {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        items: page.closeItems
-                                        current: "exit"
-                                    }
-
-                                    Item { Layout.fillWidth: true }
                                 }
 
                                 // 单实例：QLocalServer 防多开，第二个实例把请求转给已运行进程。
-                                FieldRow {
-                                    label: qsTr("单实例运行")
-                                    Stub { }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s1
 
-                                    AppToggle {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        checked: true
+                                    FieldRow {
+                                        label: qsTr("单实例运行")
+
+                                        AppToggle {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            checked: backend.singleInstance
+                                            onToggled: {
+                                                backend.singleInstance = checked
+                                                checked = backend.singleInstance
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
                                     }
 
-                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
+                                        Layout.fillWidth: true
+                                        text: qsTr("重复启动时只把已有窗口叫到前面，不再开第二个进程。改完需要重启软件生效。")
+                                        wrapMode: Text.WordWrap
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.inkVariant
+                                    }
                                 }
                             }
                         }
@@ -390,7 +475,6 @@ Item {
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("翻译行为")
                                 hint: qsTr("决定结果怎么表达。")
-                                Stub { }
 
                                 // 同语言直返：源 == 目标时不调引擎，只有灰字提示。
                                 ColumnLayout {
@@ -399,11 +483,14 @@ Item {
 
                                     FieldRow {
                                         label: qsTr("同语言直返提示")
-                                        Stub { }
 
                                         AppToggle {
                                             Layout.alignment: Qt.AlignVCenter
-                                            checked: true
+                                            checked: backend.sameLangHint
+                                            onToggled: {
+                                                backend.sameLangHint = checked
+                                                checked = backend.sameLangHint
+                                            }
                                         }
 
                                         Item { Layout.fillWidth: true }
@@ -427,11 +514,14 @@ Item {
 
                                     FieldRow {
                                         label: qsTr("源语言可疑警告")
-                                        Stub { }
 
                                         AppToggle {
                                             Layout.alignment: Qt.AlignVCenter
-                                            checked: true
+                                            checked: backend.suspiciousLangWarn
+                                            onToggled: {
+                                                backend.suspiciousLangWarn = checked
+                                                checked = backend.suspiciousLangWarn
+                                            }
                                         }
 
                                         Item { Layout.fillWidth: true }
@@ -455,11 +545,14 @@ Item {
 
                                     FieldRow {
                                         label: qsTr("自动检测源语言")
-                                        Stub { }
 
                                         AppToggle {
                                             Layout.alignment: Qt.AlignVCenter
-                                            checked: true
+                                            checked: backend.autoDetectSource
+                                            onToggled: {
+                                                backend.autoDetectSource = checked
+                                                checked = backend.autoDetectSource
+                                            }
                                         }
 
                                         Item { Layout.fillWidth: true }
@@ -468,7 +561,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: qsTr("自动检测源语言。")
+                                        text: qsTr("关掉后源语言必须手选；本地 MT 这类要求明确源语言的引擎会更好用。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -504,11 +597,14 @@ Item {
 
                                 FieldRow {
                                     label: qsTr("启用翻译缓存")
-                                    Stub { }
 
                                     AppToggle {
                                         Layout.alignment: Qt.AlignVCenter
-                                        checked: true
+                                        checked: backend.cacheEnabled
+                                        onToggled: {
+                                            backend.cacheEnabled = checked
+                                            checked = backend.cacheEnabled
+                                        }
                                     }
 
                                     Item { Layout.fillWidth: true }
@@ -592,12 +688,10 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("网络")
-                                hint: qsTr("代理只读环境变量，程序内没有 setProxy。")
-                                Stub { }
+                                hint: qsTr("代理与超时对本程序的外网请求生效。")
 
                                 FieldRow {
                                     label: qsTr("代理")
-                                    Stub { }
 
                                     AppTextField {
                                         id: proxyField
@@ -624,23 +718,28 @@ Item {
 
                                             Behavior on color { ColorAnimation { duration: Theme.durFast } }
                                         }
+
+                                        // 只在进页面时灌一次值：写成 `text: backend.proxyUrl`
+                                        // 会在用户敲第一个字时把绑定断掉，虽然不崩，
+                                        // 但后端改值（比如另存配置）之后界面就再也不同步了。
+                                        Component.onCompleted: text = backend.proxyUrl
+                                        onEditingFinished: backend.proxyUrl = text
                                     }
                                 }
 
-                                // 代理改动只落配置，进程启动时才读环境变量。
+                                // 空串 = 不覆盖环境变量，后端按 HTTPS_PROXY 等回落。
                                 Text {
                                     Layout.leftMargin: page.labelWidth + Theme.s3
                                     Layout.fillWidth: true
-                                    text: qsTr("修改后需重启程序才生效")
+                                    text: qsTr("留空 = 跟随系统环境变量（HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）。改完下一次网络请求生效。")
                                     wrapMode: Text.WordWrap
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.caution
+                                    color: Theme.inkVariant
                                 }
 
                                 FieldRow {
                                     label: qsTr("超时")
-                                    Stub { }
 
                                     SpinBox {
                                         id: timeoutSpin
@@ -651,7 +750,8 @@ Item {
                                         from: 1000
                                         to: 600000
                                         stepSize: 1000
-                                        value: 30000
+                                        value: backend.httpTimeoutMs
+                                        onValueModified: backend.httpTimeoutMs = value
                                         editable: true
                                         // C locale：不要千分位，「30000」而不是「30,000」。
                                         locale: Qt.locale("C")
@@ -728,6 +828,16 @@ Item {
 
                                     Item { Layout.fillWidth: true }
                                 }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("毫秒。只作用于外网请求，本地 llama-server 探测不受影响。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
                             }
                         }
 
@@ -740,7 +850,7 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("资产")
-                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对与 onnxruntime。")
+                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对（ONNX Runtime 随应用内置，不在下载清单里）。")
 
                                 // 分类标签：全部 / LLM / 本地 MT
                                 Segmented {
@@ -776,12 +886,22 @@ Item {
 
                                     Item { Layout.fillWidth: true }
 
-                                    Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: qsTr("从文件导入")
                                         variant: "tonal"
+                                        onClicked: importPicker.open()
                                     }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("导入的文件会先按资产清单校验 sha256，不匹配直接拒绝。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
                                 }
 
                                 // 表头
@@ -970,7 +1090,6 @@ Item {
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("数据")
                                 hint: qsTr("安装根目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。")
-                                Stub { }
 
                                 // ---- 安装根目录 ----
                                 ColumnLayout {
@@ -992,17 +1111,17 @@ Item {
 
                                         Item { Layout.fillWidth: true }
 
-                                        Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
                                             text: qsTr("打开目录")
                                             variant: "outline"
+                                            onClicked: backend.openPath(backend.assetInstallRoot)
                                         }
                                     }
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "%APPDATA%\\studious\\assets"
+                                        text: backend.assetInstallRoot
                                         elide: Text.ElideMiddle
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1059,24 +1178,24 @@ Item {
 
                                         Item { Layout.fillWidth: true }
 
-                                        Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
                                             text: qsTr("打开")
                                             variant: "outline"
+                                            onClicked: backend.openPath(backend.assetInstallRoot + "/logs")
                                         }
 
-                                        Stub { }
                                         AppButton {
                                             Layout.alignment: Qt.AlignVCenter
                                             text: qsTr("清理 30 天前")
                                             variant: "text"
+                                            onClicked: backend.clearOldLogs(30)
                                         }
                                     }
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "%APPDATA%\\studious\\assets\\logs"
+                                        text: backend.assetInstallRoot + "/logs"
                                         elide: Text.ElideMiddle
                                         font.family: Theme.fontMono
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1099,25 +1218,25 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: qsTr("重置会清掉配置与缓存（保留已装资产），迁移把整个安装根目录搬到新位置。")
+                                        text: qsTr("重置会清掉配置与缓存（保留已装资产）；迁移把整个安装根目录搬到新位置，新目录必须是空目录或不存在，搬完会自动重新扫描资产。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
                                     }
 
-                                    Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: qsTr("迁移目录")
                                         variant: "outline"
+                                        onClicked: migrateDialog.open()
                                     }
 
-                                    Stub { }
                                     AppButton {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: qsTr("重置应用")
                                         variant: "danger"
+                                        onClicked: resetConfirm.open()
                                     }
                                 }
                             }
@@ -1378,6 +1497,214 @@ Item {
                 }
             }
         }
+    }
+
+    // ---- 从文件导入：先选资产，再挑本地文件 ----
+    Popup {
+        id: importPicker
+        modal: true
+        anchors.centerIn: parent
+        width: 520
+        height: 460
+        padding: Theme.s5
+
+        background: Rectangle {
+            radius: Theme.rLg
+            color: Theme.surfaceHigh
+            border.width: 1
+            border.color: Theme.outlineVariant
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.s3
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.s2
+
+                Text {
+                    text: qsTr("从文件导入")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSection
+                    font.weight: Font.DemiBold
+                    color: Theme.ink
+                }
+
+                Item { Layout.fillWidth: true }
+
+                AppButton {
+                    text: qsTr("关闭")
+                    variant: "text"
+                    onClicked: importPicker.close()
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("先选资产，再挑本地文件。已安装的也可以覆盖重装。")
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.inkVariant
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.outlineVariant
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                contentWidth: availableWidth
+                clip: true
+
+                ColumnLayout {
+                    width: importPicker.availableWidth
+                    spacing: 2
+
+                    Text {
+                        Layout.fillWidth: true
+                        visible: page.filteredAssets.length === 0
+                        text: qsTr("当前分类下没有可选资产。")
+                        wrapMode: Text.WordWrap
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.inkVariant
+                    }
+
+                    Repeater {
+                        model: page.filteredAssets
+
+                        delegate: Rectangle {
+                            id: importRow
+                            required property var modelData
+
+                            Layout.fillWidth: true
+                            implicitHeight: 36
+                            radius: Theme.rSm
+                            color: importHover.hovered ? Theme.surfaceHighest : "transparent"
+
+                            Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.s2
+                                anchors.rightMargin: Theme.s2
+                                spacing: Theme.s2
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    Layout.alignment: Qt.AlignVCenter
+                                    text: importRow.modelData.id
+                                    elide: Text.ElideRight
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.fontSizeBody
+                                    color: Theme.ink
+                                }
+
+                                Text {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    visible: importRow.modelData.installed
+                                    text: qsTr("已安装")
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeTiny
+                                    color: Theme.inkVariant
+                                }
+                            }
+
+                            HoverHandler { id: importHover }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    page.pendingImportId = importRow.modelData.id
+                                    importPicker.close()
+                                    importFileDialog.open()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 原生文件选择框：选完把 url 换成本地路径再交给后端。
+    FileDialog {
+        id: importFileDialog
+        title: qsTr("选择资产文件")
+        fileMode: FileDialog.OpenFile
+        onAccepted: backend.importAssetFromFile(page.pendingImportId,
+                                                page.localPath(importFileDialog.selectedFile))
+    }
+
+    // ---- 重置确认：清配置 + 清缓存，不可撤销 ----
+    Popup {
+        id: resetConfirm
+        modal: true
+        anchors.centerIn: parent
+        width: 460
+        padding: Theme.s5
+
+        background: Rectangle {
+            radius: Theme.rLg
+            color: Theme.surfaceHigh
+            border.width: 1
+            border.color: Theme.outlineVariant
+        }
+
+        ColumnLayout {
+            spacing: Theme.s3
+
+            Text {
+                text: qsTr("重置应用")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSection
+                font.weight: Font.DemiBold
+                color: Theme.ink
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("会清掉全部设置与翻译缓存，已下载的资产保留，随后程序自动重启。")
+                wrapMode: Text.Wrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeBody
+                color: Theme.inkVariant
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.s2
+
+                Item { Layout.fillWidth: true }
+
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: resetConfirm.close()
+                }
+
+                AppButton {
+                    text: qsTr("确认重置")
+                    variant: "danger"
+                    onClicked: {
+                        resetConfirm.close()
+                        backend.resetApplication()
+                    }
+                }
+            }
+        }
+    }
+
+    // 原生目录选择框：迁移安装根目录。
+    FolderDialog {
+        id: migrateDialog
+        title: qsTr("选择新的安装根目录")
+        onAccepted: backend.migrateAssetRoot(page.localPath(migrateDialog.selectedFolder))
     }
 
     // ---- 许可证正文（与仓库根 LICENSE 一致，MIT）----

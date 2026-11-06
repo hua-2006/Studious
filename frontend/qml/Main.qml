@@ -32,6 +32,18 @@ Window {
     readonly property bool maximized: visibility === Window.Maximized
     readonly property int cornerRadius: 12
 
+    // 关闭行为：设置里选了「收进托盘」就不真退，只隐藏窗口。
+    // 托盘装不上时照样真退出 —— 否则窗口一藏，用户就再也点不到它了。
+    onClosing: function (close) {
+        if (backend.closeToTray && backend.trayAvailable && !root.forceQuit) {
+            close.accepted = false
+            root.hide()
+        }
+    }
+    // 托盘菜单「退出」/ 设置页「重置应用」最终都走 C++ 的 quit，这里只做个显式开关，
+    // 万一以后有人想走 window.close() 退出时不被上面那条拦下来。
+    property bool forceQuit: false
+
     readonly property var navItems: [
         { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: qsTr("翻译") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/keyboard.svg",  label: qsTr("快捷键") },
@@ -341,7 +353,13 @@ Window {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         if (winBtn.index === 0) {
-                                            root.showMinimized()
+                                            // 「最小化到托盘」开着就只隐藏窗口，进程留着。
+                                            // 托盘装不上时退回普通最小化，别把窗口变成够不着的幽灵。
+                                            if (backend.minimizeToTray && backend.trayAvailable) {
+                                                root.hide()
+                                            } else {
+                                                root.showMinimized()
+                                            }
                                         } else if (winBtn.index === 1) {
                                             root.maximized ? root.showNormal() : root.showMaximized()
                                         } else {
@@ -363,8 +381,18 @@ Window {
                         onNavigateRequested: function (index) { root.currentPage = index }
                     }
                     HotkeysPage { }
-                    ConfigPage { }
-                    SettingsPage { }
+                    ConfigPage {
+                        // 本地 MT 卡的「下载 / 导入」：切到设置页的资产分区并预选 mt 分类。
+                        onOpenAssetsRequested: function (kind) {
+                            root.currentPage = 3
+                            settingsPage.openAssets(kind)
+                        }
+                    }
+                    // objectName 给 --ui-section 用：截图工具靠它找到设置页并切分区。
+                    SettingsPage {
+                        id: settingsPage
+                        objectName: "settingsPage"
+                    }
                     AppearancePage { }
                 }
             }

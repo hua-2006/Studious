@@ -21,6 +21,35 @@ int statusOf(const QNetworkReply *reply)
     return statusVar.isValid() ? statusVar.toInt() : 0;
 }
 
+// 全局请求超时**下限**（环境变量 STUDIOUS_HTTP_TIMEOUT，毫秒）。
+//
+// 为什么是"下限"而不是"一把覆盖"：各调用点自己最清楚该等多久（LLM 网关 69 s、
+// Web 适配器 5 s、本地 llama-server 探测 5 s），全局覆盖会把它们的判断全抹平。
+// 用户的抱怨几乎总是"网慢，5 s 太早掐断"，所以这里只往上抬、不往下压。
+//
+// 回环地址不受影响：本地 llama-server / 本地网关慢是进程问题不是网络问题，
+// 抬高超时只会让"启动失败"晚好几秒才报出来。
+int effectiveTimeoutMs(const HttpRequest &req)
+{
+    if (req.timeoutMs <= 0) {
+        return req.timeoutMs;   // 0 = 调用方明确要求不限时
+    }
+
+    bool ok = false;
+    const int floorMs = qEnvironmentVariableIntValue("STUDIOUS_HTTP_TIMEOUT", &ok);
+    if (!ok || floorMs <= 0) {
+        return req.timeoutMs;
+    }
+
+    const QString host = req.url.host().toLower();
+    if (host == QStringLiteral("127.0.0.1") || host == QStringLiteral("localhost")
+        || host == QStringLiteral("::1")) {
+        return req.timeoutMs;
+    }
+
+    return qMax(req.timeoutMs, floorMs);
+}
+
 } // namespace
 
 // 从环境变量读代理配置。
@@ -119,9 +148,11 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
 
     QNetworkRequest nr = buildRequest(req);
 
+    const int timeoutMs = effectiveTimeoutMs(req);
+
     // 双保险：Qt 自带的传输超时 + 下面的 QTimer（部分平台 abort 更可靠）。
-    if (req.timeoutMs > 0) {
-        nr.setTransferTimeout(req.timeoutMs);
+    if (timeoutMs > 0) {
+        nr.setTransferTimeout(timeoutMs);
     }
 
     QNetworkReply *reply = startReply(nr, req);
@@ -142,8 +173,8 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
     });
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
 
-    if (req.timeoutMs > 0) {
-        timer.start(req.timeoutMs);
+    if (timeoutMs > 0) {
+        timer.start(timeoutMs);
     }
 
     loop.exec();
@@ -162,7 +193,7 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
         res.ok = false;
         res.error = i18n::sf("请求超时（%1 ms）：%2",
                              "Request timed out after %1 ms: %2",
-                             {req.timeoutMs, req.url.toString()});
+                             {timeoutMs, req.url.toString()});
     } else if (netError != QNetworkReply::NoError) {
         res.ok = false;
         res.error = i18n::sf("网络错误(%1)：%2",

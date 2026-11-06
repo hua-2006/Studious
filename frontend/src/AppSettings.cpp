@@ -53,8 +53,22 @@ AppSettings AppSettings::defaults()
     s.localThreads = 0;             // 0 = 自动（不传 -t）
     s.localGpuLayers = -1;          // -1 = 自动（跟随 localUseGpu）
     s.localExtraArgs.clear();       // 空 = 不加额外参数
+    s.localStopOnSwitch = false;    // 切走不停：省一次冷启动，代价是占内存
+    s.localPreheat = false;         // 启动即预热：默认关，别让开机莫名其妙占几 GB
+    s.localIdleStop = false;        // 空闲不停：默认关
+    s.localIdleMinutes = 10;        // 打开「空闲自动停」时的默认阈值
     s.uiLanguage.clear();   // 空 = 跟随系统语言
     s.accentSeed.clear();   // 空 = 默认紫 #6750A4
+    s.autoStart = false;            // 别替用户改系统启动项
+    s.minimizeToTray = false;       // 默认老老实实待在任务栏
+    s.closeBehavior = QStringLiteral("exit");
+    s.singleInstance = true;        // 防多开是绝大多数人的预期
+    s.sameLangHint = true;
+    s.suspiciousLangWarn = true;
+    s.autoDetectSource = true;
+    s.proxyUrl.clear();             // 空 = 不覆盖环境变量
+    s.httpTimeoutMs = 30000;        // 后端各调用点自己的超时多数是 5~15 s，这里只做上限抬升
+    s.assetRoot.clear();            // 空 = %APPDATA%/studious/assets
     return s;
 }
 
@@ -140,6 +154,14 @@ AppSettings AppSettings::load()
     // 额外参数是自由文本：空串合法（= 不加），所以不走 textOr，只 trim。
     s.localExtraArgs = store.value(key("llm/localExtraArgs")).toString().trimmed();
 
+    // 生命周期三开关。bool 用 toBool()：注册表里被写成字符串 "true"/"1" 也能认。
+    s.localStopOnSwitch = store.value(key("llm/localStopOnSwitch"), def.localStopOnSwitch).toBool();
+    s.localPreheat = store.value(key("llm/localPreheat"), def.localPreheat).toBool();
+    s.localIdleStop = store.value(key("llm/localIdleStop"), def.localIdleStop).toBool();
+    // 空闲阈值：1 分钟起（0 会让定时器立刻触发，等于"翻译完就停"，不是用户想要的）。
+    s.localIdleMinutes = clampedInt(
+        store.value(key("llm/localIdleMinutes"), def.localIdleMinutes).toInt(), 1, 240);
+
     // 界面语言：空串是有意义的值（= 跟随系统），所以不做 textOr 回落。
     // 注册表可能被手改成乱七八糟的值，不在白名单里就当"跟随系统"。
     const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
@@ -158,6 +180,34 @@ AppSettings AppSettings::load()
 
     // 字号缩放：夹在 80~150，缺失或越界都回落到 100。
     s.fontScale = clampedInt(store.value(key("ui/fontScale"), def.fontScale).toInt(), 80, 150);
+
+    // 桌面集成：bool 一律 toBool()，注册表被写成 "true"/"1" 也能认。
+    s.autoStart = store.value(key("desktop/autoStart"), def.autoStart).toBool();
+    s.minimizeToTray = store.value(key("desktop/minimizeToTray"), def.minimizeToTray).toBool();
+    s.singleInstance = store.value(key("desktop/singleInstance"), def.singleInstance).toBool();
+
+    // 关闭行为只认两个白名单值，其它一律当"退出"。
+    const QString closeBehavior =
+        store.value(key("desktop/closeBehavior"), def.closeBehavior).toString().trimmed().toLower();
+    s.closeBehavior = (closeBehavior == QLatin1String("tray")) ? closeBehavior
+                                                              : QStringLiteral("exit");
+
+    // 翻译行为三个展示开关。
+    s.sameLangHint = store.value(key("translate/sameLangHint"), def.sameLangHint).toBool();
+    s.suspiciousLangWarn =
+        store.value(key("translate/suspiciousLangWarn"), def.suspiciousLangWarn).toBool();
+    s.autoDetectSource =
+        store.value(key("translate/autoDetectSource"), def.autoDetectSource).toBool();
+
+    // 代理：空串是合法值（= 不覆盖），所以只 trim。
+    s.proxyUrl = store.value(key("network/proxy")).toString().trimmed();
+
+    // 全局超时下限：夹在 1 s ~ 10 min，越界夹回边界而不是丢掉。
+    s.httpTimeoutMs =
+        clampedInt(store.value(key("network/timeoutMs"), def.httpTimeoutMs).toInt(), 1000, 600000);
+
+    // 资产根目录：空串是合法值（= 默认位置），只 trim。
+    s.assetRoot = store.value(key("asset/root")).toString().trimmed();
 
     return s;
 }
@@ -193,10 +243,24 @@ void AppSettings::save() const
     store.setValue(key("llm/localThreads"), localThreads);           // 0 = 自动
     store.setValue(key("llm/localGpuLayers"), localGpuLayers);       // -1 = 自动
     store.setValue(key("llm/localExtraArgs"), localExtraArgs.trimmed());   // 空 = 不加参数
+    store.setValue(key("llm/localStopOnSwitch"), localStopOnSwitch);       // 切引擎就停
+    store.setValue(key("llm/localPreheat"), localPreheat);                 // 启动即预热
+    store.setValue(key("llm/localIdleStop"), localIdleStop);               // 空闲自动停
+    store.setValue(key("llm/localIdleMinutes"), localIdleMinutes);         // 1~240
     store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
     store.setValue(key("ui/theme"), themeMode);       // system / light / dark
     store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小
     store.setValue(key("ui/accent"), accentSeed);     // 空 = 默认紫 #6750A4
+    store.setValue(key("desktop/autoStart"), autoStart);
+    store.setValue(key("desktop/minimizeToTray"), minimizeToTray);
+    store.setValue(key("desktop/closeBehavior"), closeBehavior);   // exit / tray
+    store.setValue(key("desktop/singleInstance"), singleInstance);
+    store.setValue(key("translate/sameLangHint"), sameLangHint);
+    store.setValue(key("translate/suspiciousLangWarn"), suspiciousLangWarn);
+    store.setValue(key("translate/autoDetectSource"), autoDetectSource);
+    store.setValue(key("network/proxy"), proxyUrl);               // 空 = 跟环境变量
+    store.setValue(key("network/timeoutMs"), httpTimeoutMs);      // 1000~600000
+    store.setValue(key("asset/root"), assetRoot);                 // 空 = 默认位置
 
     store.sync();
 }

@@ -19,9 +19,13 @@ import Studious
 //   本地 LLM        llama-server 的模型文件 / GPU / 启停
 //
 // 为什么引擎状态不再单独占一张卡：状态与引擎是一一对应的，拆成两处用户得来回对照；
-// 直接做成行内副标签，点行就能跳到下面那张卡的对应配置。
+// 直接做成行内副标签 + 行尾状态胶囊，点胶囊才跳到下面那张卡的对应配置。
 Item {
     id: page
+
+    // 本地 MT 卡「下载 / 导入」→ 交给 Main.qml 切到设置页的资产分区（分类 mt）。
+    // 本页自己不做路由，只发信号。
+    signal openAssetsRequested(string kind)
 
     // ------------------------------------------------------------ 本地数据模型
 
@@ -55,7 +59,7 @@ Item {
     // 改一个键也要先拷一份完整 map 再提交。
     property var llmDraft: ({})
 
-    // 点行跳转后要打开的那张卡的主下拉（空 = 只展开不开下拉）。
+    // 点胶囊跳转后要打开的那张卡的主下拉（空 = 只展开不开下拉）。
     property string pendingFocusKey: ""
 
     // Web 来源：后端 listWebProviders() 是唯一真相，这里只补一条「自动」。
@@ -142,6 +146,23 @@ Item {
         return (row && row.state) ? row.state : "not-ready"
     }
 
+    // 状态胶囊的文案。state 是资产级（装没装好），跟「当前语言对能不能用」是两回事。
+    function engineStateLabel(key) {
+        var state = page.engineState(key)
+        if (state === "ready")
+            return qsTr("就绪")
+        if (state === "missing-assets")
+            return qsTr("缺资产")
+        return qsTr("未就绪")
+    }
+
+    // 当前源语言 / 目标语言下能不能真的解析出翻译路径 —— 后端新给的 ready 字段。
+    // 不能拿 engineState() === "ready" 代替：本地 MT 装好了但源语言是「自动检测」时，
+    // state 仍是 ready，ready 却是 false；自动模式拿 state 会被它错高亮成「实际会用的引擎」。
+    function engineResolvable(key) {
+        var row = page.engineStatus(key)
+        return !!(row && row.ready)
+    }
 
     // 行图标：跟左侧导航用同一批 SVG，按主题重新上色。
     function engineIcon(key) {
@@ -156,29 +177,21 @@ Item {
         return ""
     }
 
-    // 副标签：主文案用后端给的 detail（英文，原样显示、不翻译），
-    // 前面按状态补一个中文前缀，让人一眼看出是「没填参数」还是「缺资产」。
+    // 副标签：只显示后端给的 detail（中文，原样显示、不翻译）。
+    // 状态已经独立成行尾的胶囊，这里不再拼「未就绪 · 」之类的前缀。
     function engineSubtitle(key) {
         var row = page.engineStatus(key)
-        var detail = (row && row.detail !== undefined && row.detail !== null)
-                     ? String(row.detail) : ""
-        var state = page.engineState(key)
-        if (state === "ready")
-            return detail.length > 0 ? detail : qsTr("就绪")
-        var prefix = state === "missing-assets" ? qsTr("缺资产") : qsTr("未就绪")
-        // 后端给 llm-local 的 detail 本身就是「未就绪」；拼起来会变成「未就绪 · 未就绪」。
-        if (detail.length === 0 || detail === prefix)
-            return prefix
-        return prefix + " · " + detail
+        return (row && row.detail !== undefined && row.detail !== null)
+                ? String(row.detail) : ""
     }
 
-    // 自动模式下当前真正会被用到的那个：autoOrder 里第一个就绪的。
+    // 自动模式下当前真正会被用到的那个：autoOrder 里第一个「能解析出路径」的。
     // 一个都没有就返回空 —— 不高亮任何行，别装作有引擎能用。
     readonly property string highlightEngineKey: {
         if (page.forceMode)
             return ""
         for (var i = 0; i < page.autoOrder.length; ++i) {
-            if (page.engineState(page.autoOrder[i]) === "ready")
+            if (page.engineResolvable(page.autoOrder[i]))
                 return page.autoOrder[i]
         }
         return ""
@@ -199,8 +212,16 @@ Item {
             backend.engineId = page.engineCode("auto")
     }
 
-    // 本地服务是否在跑：取 engineStatuses 里的 llm-local 一条。
-    readonly property bool localLlmReady: page.engineState("llm-local") === "ready"
+    // 本地服务「此刻是否在跑」。注意不能再用 engineState("llm-local")：那条现在报的是
+    // 资产级可用性（运行时 + 模型在不在），服务没跑时也是 ready。跑没跑只看 PID。
+    readonly property bool localLlmReady: backend.localPid > 0
+
+    // 本地 LLM 能不能真的启动：运行时（llama-server.exe）+ 至少一个模型文件。
+    // 缺任何一样，「启动」按钮就禁用 —— 让用户去资产页补齐，而不是让他点一下再看日志。
+    readonly property bool localAssetsReady: backend.localGpuAvailable
+                                             || backend.localCpuAvailable
+    readonly property bool localHasModel: backend.localModels.length > 0
+    readonly property bool localCanStart: page.localAssetsReady && page.localHasModel
 
     // 手动引擎的选中判断。backend.engineId 可能是自动，这时四项都不选中。
     function engineSelected(key) {
@@ -382,13 +403,16 @@ Item {
         scrollAnim.start()
     }
 
-    // guard = true 表示「点行」：没配好的引擎先拦住，别把人丢进一张填了一半的表。
-    // guard = false 表示「点状态徽标」或「去配置」：拦过一次了，直接跳。
+    // guard = true 表示「带拦截的跳转」：当前语言对下真用不了的引擎先弹框拦一下，
+    // 别把人丢进一张填了一半的表。guard = false 表示「点状态胶囊」或框里的「去配置」：
+    // 已经拦过一次或有明确意图了，直接跳。
+    // 现状：点解析不了的行胶囊走 notReadyDialog.openFor()（不经过本函数）；
+    // 本函数只留 guard 参数给「框里点去配置」与「解析得了的行胶囊」用。
     function openEngineConfig(key, guard) {
         var card = page.cardForEngine(key)
         if (!card)
             return
-        if (guard && page.engineState(key) !== "ready") {
+        if (guard && !page.engineResolvable(key)) {
             notReadyDialog.openFor(key)
             return
         }
@@ -747,6 +771,63 @@ Item {
         }
     }
 
+    // 卡内二级折叠（「高级设置」）：比外层卡更轻 —— 没有边框、没有底色块，
+    // 只有一行可点的标题 + 内容区。云端 LLM / 本地 LLM 各用一个实例，状态互不影响。
+    component SubSection: ColumnLayout {
+        id: section
+
+        property bool expanded: false
+        default property alias content: body.data
+
+        Layout.fillWidth: true
+        spacing: Theme.s2
+
+        Item {
+            Layout.fillWidth: true
+            implicitHeight: sectionHead.implicitHeight + Theme.s2
+
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: section.expanded = !section.expanded
+            }
+
+            RowLayout {
+                id: sectionHead
+                anchors.fill: parent
+                anchors.leftMargin: Theme.s1
+                anchors.rightMargin: Theme.s1
+                spacing: Theme.s2
+
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: qsTr("高级设置")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.DemiBold
+                    color: Theme.inkVariant
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Text {
+                    Layout.alignment: Qt.AlignVCenter
+                    text: section.expanded ? "\u25B4" : "\u25BE"
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeBody
+                    color: Theme.inkVariant
+                }
+            }
+        }
+
+        ColumnLayout {
+            id: body
+            Layout.fillWidth: true
+            visible: section.expanded
+            spacing: Theme.s3
+        }
+    }
+
     // ---------------------------------------------------------------- 页面
     ScrollView {
         id: scroll
@@ -791,9 +872,10 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                expanded: false
+                // 引擎卡是整页的主入口，默认展开；其余五张保持收起。
+                expanded: true
                 title: qsTr("引擎")
-                hint: qsTr("自动按优先级降级，强制只用一个；点行跳到下面的对应配置。")
+                hint: qsTr("自动按优先级降级，强制只用一个；点行尾的状态胶囊跳到下面的对应配置。")
 
                 // 模式 + 右上角说明。说明跟着模式走，别让人猜现在是哪一种。
                 RowLayout {
@@ -884,11 +966,11 @@ Item {
                                 // 手柄那一段让给 DragHandler，不然一按手柄就跳走。
                                 anchors.leftMargin: engineRow.autoMode ? 46 : 0
                                 cursorShape: Qt.PointingHandCursor
+                                // 点行不再跳转：强制模式点行 = 选中该引擎；自动模式没有选中的概念。
+                                // 要跳去配置，点行尾那颗状态胶囊。
                                 onClicked: {
-                                    // 强制模式点行先选中；自动模式没有选中的概念。
                                     if (!engineRow.autoMode)
                                         backend.engineId = page.engineCode(engineRow.modelData)
-                                    page.openEngineConfig(engineRow.modelData, true)
                                 }
                             }
 
@@ -1011,6 +1093,55 @@ Item {
                                         opacity: 0.85
                                     }
                                 }
+
+                                // 状态胶囊：行尾独立一颗可点的胶囊，点它才跳去这张卡的配置。
+                                // 点行只负责「强制模式下选中」，两件事分开，误触能少一半。
+                                //
+                                // 配色跟翻译页底部的状态点同一套语义，**不跟主题强调色走**：
+                                // 绿 = 就绪，黄 = 未就绪，红 = 缺资产。强调色是用户自己的品牌色，
+                                // 拿它表达「能用 / 不能用」会读错。
+                                Rectangle {
+                                    id: statePill
+
+                                    // 名字别叫 state：Item 自带 state 属性，同名重声明 QML 直接报错。
+                                    readonly property string pillState: page.engineState(engineRow.modelData)
+                                    readonly property color pillAccent: statePill.pillState === "ready" ? Theme.good
+                                                                      : statePill.pillState === "missing-assets" ? Theme.danger
+                                                                                                                 : Theme.caution
+                                    readonly property color pillFill: statePill.pillState === "ready" ? Theme.goodContainer
+                                                                    : statePill.pillState === "missing-assets" ? Theme.dangerContainer
+                                                                                                               : Theme.cautionContainer
+
+                                    Layout.alignment: Qt.AlignVCenter
+                                    implicitWidth: pillText.implicitWidth + Theme.s3 * 2
+                                    implicitHeight: 22
+                                    radius: Theme.rFull
+                                    color: statePill.pillFill
+                                    border.width: 1
+                                    border.color: statePill.pillAccent
+
+                                    Behavior on color { ColorAnimation { duration: Theme.durFast } }
+
+                                    Text {
+                                        id: pillText
+                                        anchors.centerIn: parent
+                                        text: page.engineStateLabel(engineRow.modelData)
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeTiny
+                                        font.weight: Font.DemiBold
+                                        color: statePill.pillAccent
+                                    }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        // 能解析 = 直接跳到它的配置卡；解析不了 = 先弹框说清原因，
+                                        // 因为「跳过去看表格」治不了缺资产 / 源语言没选这两种病。
+                                        onClicked: page.engineResolvable(engineRow.modelData)
+                                                   ? page.openEngineConfig(engineRow.modelData, false)
+                                                   : notReadyDialog.openFor(engineRow.modelData)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1125,7 +1256,6 @@ Item {
 
                             FieldRow {
                                 label: "Key"
-                                Stub { }
                                 ThemedField {
                                     font.family: Theme.fontMono
                                     placeholderText: qsTr("填入 Key")
@@ -1135,7 +1265,6 @@ Item {
 
                             FieldRow {
                                 label: "Region"
-                                Stub { }
                                 ThemedField {
                                     font.family: Theme.fontMono
                                     placeholderText: qsTr("例如 eastasia")
@@ -1207,106 +1336,199 @@ Item {
                     color: Theme.inkVariant
                 }
 
-                FieldRow {
-                    label: "temperature"
-                    ThemedSpin {
-                        from: 0
-                        to: 150
-                        stepSize: 5
-                        value: Math.round(page.llmNumber("temperature", 0.2) * 100)
-                        onValueModified: page.patchLlm("temperature", value / 100)
-
-                        textFromValue: function (v) { return (v / 100).toFixed(2) }
-                        valueFromText: function (t) {
-                            var n = parseFloat(t)
-                            return isNaN(n) ? 0 : Math.round(n * 100)
+                // 上面三项（Base URL / API Key / 模型）是日常要动的；剩下八项进「高级设置」，
+                // 默认收起，省得一张卡把整页撑得没边。
+                SubSection {
+                    FieldRow {
+                        label: "timeoutMs"
+                        // 上限跟 AppSettings 的钳位一致，否则存下去会被悄悄截断。
+                        ThemedSpin {
+                            from: 1000
+                            to: 180000
+                            stepSize: 1000
+                            value: page.llmNumber("timeoutMs", 60000)
+                            onValueModified: page.patchLlm("timeoutMs", value)
                         }
                     }
-                }
 
-                FieldRow {
-                    label: "maxTokens"
-                    ThemedSpin {
-                        from: 1
-                        to: 32768
-                        stepSize: 1
-                        value: page.llmNumber("maxTokens", 2048)
-                        onValueModified: page.patchLlm("maxTokens", value)
+                    FieldRow {
+                        label: "maxTokens"
+                        ThemedSpin {
+                            from: 1
+                            to: 32768
+                            stepSize: 1
+                            value: page.llmNumber("maxTokens", 2048)
+                            onValueModified: page.patchLlm("maxTokens", value)
+                        }
                     }
-                }
 
-                FieldRow {
-                    label: "timeoutMs"
-                    // 上限跟 AppSettings 的钳位一致，否则存下去会被悄悄截断。
-                    ThemedSpin {
-                        from: 1000
-                        to: 180000
-                        stepSize: 1000
-                        value: page.llmNumber("timeoutMs", 60000)
-                        onValueModified: page.patchLlm("timeoutMs", value)
+                    FieldRow {
+                        label: "temperature"
+                        ThemedSpin {
+                            from: 0
+                            to: 150
+                            stepSize: 5
+                            value: Math.round(page.llmNumber("temperature", 0.2) * 100)
+                            onValueModified: page.patchLlm("temperature", value / 100)
+
+                            textFromValue: function (v) { return (v / 100).toFixed(2) }
+                            valueFromText: function (t) {
+                                var n = parseFloat(t)
+                                return isNaN(n) ? 0 : Math.round(n * 100)
+                            }
+                        }
                     }
-                }
 
-                FieldRow {
-                    label: "systemPrompt"
-                    TextArea {
+                    FieldRow {
+                        label: "systemPrompt"
+                        TextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 72
+                            placeholderText: qsTr("留空使用内置提示词")
+                            wrapMode: TextArea.Wrap
+                            selectByMouse: true
+                            color: Theme.ink
+                            placeholderTextColor: Theme.inkVariant
+                            selectionColor: Theme.primaryContainer
+                            selectedTextColor: Theme.primaryContainerText
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeBody
+                            leftPadding: Theme.s3
+                            rightPadding: Theme.s3
+                            topPadding: Theme.s2
+                            bottomPadding: Theme.s2
+                            text: page.llmString("systemPrompt")
+
+                            // TextArea 没有 editingFinished，失焦时才提交（同样是为了别逐字落盘）。
+                            onActiveFocusChanged: {
+                                if (!activeFocus)
+                                    page.patchLlm("systemPrompt", text)
+                            }
+
+                            background: Rectangle {
+                                radius: Theme.rMd
+                                color: Theme.surfaceHighest
+                                border.width: parent.activeFocus ? 1 : 0
+                                border.color: Theme.primary
+                            }
+                        }
+                    }
+
+                    Text {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 72
-                        placeholderText: qsTr("留空使用内置提示词")
-                        wrapMode: TextArea.Wrap
-                        selectByMouse: true
-                        color: Theme.ink
-                        placeholderTextColor: Theme.inkVariant
-                        selectionColor: Theme.primaryContainer
-                        selectedTextColor: Theme.primaryContainerText
+                        Layout.leftMargin: 132 + Theme.s3
+                        text: qsTr("留空使用内置提示词。")
                         font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeBody
-                        leftPadding: Theme.s3
-                        rightPadding: Theme.s3
-                        topPadding: Theme.s2
-                        bottomPadding: Theme.s2
-                        text: page.llmString("systemPrompt")
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
 
-                        // TextArea 没有 editingFinished，失焦时才提交（同样是为了别逐字落盘）。
-                        onActiveFocusChanged: {
-                            if (!activeFocus)
-                                page.patchLlm("systemPrompt", text)
+                    FieldRow {
+                        label: qsTr("重试预算")
+                        ThemedSpin {
+                            from: 1000
+                            to: 600000
+                            stepSize: 1000
+                            value: page.llmNumber("retryBudgetMs", 30000)
+                            onValueModified: page.patchLlm("retryBudgetMs", value)
                         }
+                    }
 
-                        background: Rectangle {
-                            radius: Theme.rMd
-                            color: Theme.surfaceHighest
-                            border.width: parent.activeFocus ? 1 : 0
-                            border.color: Theme.primary
+                    FieldRow {
+                        label: qsTr("思考等级")
+                        ThemedCombo {
+                            id: effortCombo
+                            model: [qsTr("关闭"), qsTr("极低"), qsTr("低"), qsTr("中"), qsTr("高"),
+                                    qsTr("跟随默认")]
+                            currentIndex: page.effortIndex(page.llmString("reasoningEffort"))
+                            onActivated: function (index) {
+                                if (index >= 0 && index < page.effortCodes.length)
+                                    page.patchLlm("reasoningEffort", page.effortCodes[index])
+                            }
+                        }
+                        AppButton {
+                            text: qsTr("探测")
+                            buttonEnabled: !backend.cloudBusy
+                            onClicked: backend.probeCloudReasoning()
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 132 + Theme.s3
+                        visible: text.length > 0
+                        text: page.probeHint
+                        wrapMode: Text.WordWrap
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
+
+                    FieldRow {
+                        label: qsTr("批量合并段数")
+                        ThemedSpin {
+                            from: 1
+                            to: 64
+                            stepSize: 1
+                            value: page.llmNumber("batchSize", 8)
+                            onValueModified: page.patchLlm("batchSize", value)
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("清理模型注记")
+                        AppToggle {
+                            Layout.alignment: Qt.AlignVCenter
+                            checked: page.llmBool("stripModelNotes")
+                            onToggled: page.patchLlm("stripModelNotes", checked)
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("清掉小模型加的「【中文】」注记，只删整行括注，正文不动。")
+                            wrapMode: Text.WordWrap
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
                         }
                     }
                 }
+            }
 
-                Text {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 132 + Theme.s3
-                    text: qsTr("留空使用内置提示词。")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.inkVariant
-                }
+            // -------------------------------------- 本地 LLM（llama-server · 整行 · 默认收起）
+            CollapsibleCard {
+                id: localCard
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.s6
+                Layout.rightMargin: Theme.s6
+                expanded: false
+                title: qsTr("本地 LLM（llama-server）")
+                hint: qsTr("由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。")
+
+                // 模型或 llama 运行时缺了也是同一个去处：设置页资产分区的 llm 分类。
+                headerActions: [
+                    AppButton {
+                        text: qsTr("下载 / 导入")
+                        onClicked: page.openAssetsRequested("llm")
+                    }
+                ]
 
                 FieldRow {
-                    label: qsTr("思考等级")
+                    label: qsTr("模型文件")
                     ThemedCombo {
-                        id: effortCombo
-                        model: [qsTr("关闭"), qsTr("极低"), qsTr("低"), qsTr("中"), qsTr("高"),
-                                qsTr("跟随默认")]
-                        currentIndex: page.effortIndex(page.llmString("reasoningEffort"))
+                        id: localModelCombo
+                        model: page.localModelOptions
+                        currentIndex: Math.max(0, page.localModelOptions.indexOf(backend.localModel))
                         onActivated: function (index) {
-                            if (index >= 0 && index < page.effortCodes.length)
-                                page.patchLlm("reasoningEffort", page.effortCodes[index])
+                            // 第一项是「自动」= 空串，后端拿第一个可用模型。
+                            backend.localModel = index <= 0 ? "" : page.localModelOptions[index]
                         }
                     }
                     AppButton {
-                        text: qsTr("探测")
-                        buttonEnabled: !backend.cloudBusy
-                        onClicked: backend.probeCloudReasoning()
+                        text: qsTr("浏览…")
+                        // 后端 installFromFile 是按 manifest 里的资产 id 校验 sha256 的，
+                        // 随便挑一个 .gguf 过不了校验，所以这里仍然只保留接口。
+                        onClicked: page.importHint = qsTr("从文件导入要按资产清单校验 sha256，等后端给出「按路径导入」接口再开。")
                     }
                 }
 
@@ -1314,50 +1536,427 @@ Item {
                     Layout.fillWidth: true
                     Layout.leftMargin: 132 + Theme.s3
                     visible: text.length > 0
-                    text: page.probeHint
+                    text: page.importHint
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.inkVariant
                 }
 
+                // 运行时可用性：后端问了 llama-server 的 exe 在不在，界面如实显示。
                 FieldRow {
-                    label: qsTr("批量合并段数")
-                    ThemedSpin {
-                        from: 1
-                        to: 64
-                        stepSize: 1
-                        value: page.llmNumber("batchSize", 8)
-                        onValueModified: page.patchLlm("batchSize", value)
+                    label: qsTr("可用运行时")
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.s2
+
+                        Badge {
+                            text: "Vulkan"
+                            filled: backend.localGpuAvailable
+                        }
+                        Badge {
+                            text: "CPU"
+                            filled: backend.localCpuAvailable
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: backend.localGpuAvailable || backend.localCpuAvailable
+                                  ? qsTr("实心 = 已装（资产里已安装的 llama-server 运行时）")
+                                  : qsTr("一个运行时都没装，先去资产页下载")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
                     }
                 }
 
                 FieldRow {
-                    label: qsTr("重试预算")
-                    ThemedSpin {
-                        from: 1000
-                        to: 600000
-                        stepSize: 1000
-                        value: page.llmNumber("retryBudgetMs", 30000)
-                        onValueModified: page.patchLlm("retryBudgetMs", value)
-                    }
-                }
-
-                FieldRow {
-                    label: qsTr("清理模型注记")
+                    label: qsTr("优先 GPU")
                     AppToggle {
                         Layout.alignment: Qt.AlignVCenter
-                        checked: page.llmBool("stripModelNotes")
-                        onToggled: page.patchLlm("stripModelNotes", checked)
+                        checked: backend.localUseGpu
+                        onToggled: backend.localUseGpu = checked
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("清掉小模型加的「【中文】」注记，只删整行括注，正文不动。")
+                        text: qsTr("装了 Vulkan 运行时就走 GPU；关掉只用 CPU。")
                         wrapMode: Text.WordWrap
                         verticalAlignment: Text.AlignVCenter
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
                         color: Theme.inkVariant
+                    }
+                }
+
+                // 这四项直接进 LlamaServerOptions（contextSize / threads / gpuLayers / extraArgs），
+                // 属于调参项，收进「高级设置」；默认值就能跑。
+                // 改完不会立刻重启服务：下次真正要用本地引擎时 ensureStarted() 拿新配置
+                // 和正在跑的那份比，不一致才重启。
+                SubSection {
+                    FieldRow {
+                        label: qsTr("上下文")
+                        ThemedSpin {
+                            from: 512
+                            to: 32768
+                            stepSize: 512
+                            value: backend.localContextSize
+                            onValueModified: backend.localContextSize = value
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("token 数，对应 llama-server 的 -c。太小装不下长句，太大白吃内存。")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("线程")
+                        ThemedSpin {
+                            from: 0
+                            to: 64
+                            stepSize: 1
+                            value: backend.localThreads
+                            onValueModified: backend.localThreads = value
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("0 = 自动（按后端决定），对应 -t。")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("GPU 层数")
+                        ThemedSpin {
+                            id: gpuSpin
+                            from: -1
+                            to: 999
+                            stepSize: 1
+                            value: backend.localGpuLayers
+                            onValueModified: backend.localGpuLayers = value
+
+                            ToolTip.visible: gpuHover.hovered
+                            ToolTip.text: qsTr("-1 = 自动（Vulkan 99 / CPU 0）；0 = 不卸载任何层，纯 CPU 算")
+
+                            HoverHandler { id: gpuHover }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("-1 = 自动，对应 -ngl。显存不够时手动降档。")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("附加参数")
+                        ThemedField {
+                            id: extraArgsField
+                            font.family: Theme.fontMono
+                            placeholderText: qsTr("留空则不追加（例如 --no-warmup --flash-attn）")
+                            // 回填只做一次：QML 的 TextField 一旦被用户输入就会打断绑定，
+                            // 所以不复用 text: backend.localExtraArgs，而是提交时写回。
+                            Component.onCompleted: text = backend.localExtraArgs
+                            onEditingFinished: backend.localExtraArgs = text
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("原样拼到 llama-server 命令行尾部，空格分隔。")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    // ---- 服务生命周期（三个开关默认全关：默认行为 = 拉起来就一直留着） ----
+                    FieldRow {
+                        label: qsTr("切走就停")
+                        AppToggle {
+                            Layout.alignment: Qt.AlignVCenter
+                            checked: backend.localStopOnSwitch
+                            onToggled: backend.localStopOnSwitch = checked
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("换到别的翻译引擎时把 llama-server 停掉。关着则保留热服务，切回来不用冷启动。")
+                            wrapMode: Text.WordWrap
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("启动时预热")
+                        AppToggle {
+                            Layout.alignment: Qt.AlignVCenter
+                            checked: backend.localPreheat
+                            onToggled: backend.localPreheat = checked
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("打开软件就把本地服务跑起来，第一次翻译不用等冷启动；代价是常驻占内存。")
+                            wrapMode: Text.WordWrap
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("空闲自动停")
+                        AppToggle {
+                            Layout.alignment: Qt.AlignVCenter
+                            checked: backend.localIdleStop
+                            onToggled: backend.localIdleStop = checked
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("连续一段时间没有本地翻译就自动停掉服务，省内存。")
+                            wrapMode: Text.WordWrap
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+
+                    FieldRow {
+                        label: qsTr("空闲阈值")
+                        ThemedSpin {
+                            from: 1
+                            to: 240
+                            stepSize: 1
+                            value: backend.localIdleMinutes
+                            enabled: backend.localIdleStop
+                            opacity: enabled ? 1.0 : 0.45
+                            onValueModified: backend.localIdleMinutes = value
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("分钟。只在「空闲自动停」打开时生效。")
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+                    }
+                }
+
+                // 采样参数的归属说明：本地引擎沿用云端卡那份 temperature / maxTokens /
+                // 系统提示词，只覆盖 batchSize / reasoningEffort / stripModelNotes 三项。
+                Text {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 132 + Theme.s3
+                    text: qsTr("采样参数（temperature / maxTokens / 系统提示词）沿用上方「云端 LLM」里的设置；本地只额外固定「逐段请求」并清理小模型的括注噪声。")
+                    wrapMode: Text.WordWrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeTiny
+                    color: Theme.inkVariant
+                }
+
+                // 状态行：后端 / 端口 / PID / 启动耗时 + 启动 / 停止
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s3
+
+                    StatusDot {
+                        Layout.alignment: Qt.AlignVCenter
+                        label: page.localLlmReady ? qsTr("运行中") : qsTr("已停止")
+                        state: page.localLlmReady ? 0 : 3
+                    }
+
+                    Rectangle {
+                        Layout.alignment: Qt.AlignVCenter
+                        Layout.preferredWidth: 1
+                        Layout.preferredHeight: 16
+                        color: Theme.outlineVariant
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: qsTr("后端")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: backend.localBackend.length > 0 ? backend.localBackend : "—"
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.ink
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: qsTr("端口")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: backend.localPort > 0 ? backend.localPort : "—"
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.ink
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: "PID"
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: backend.localPid > 0 ? backend.localPid : "—"
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.ink
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: qsTr("启动耗时")
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: backend.localStartupMs > 0
+                              ? qsTr("%1 ms").arg(backend.localStartupMs) : "—"
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.ink
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    // 缺资产时不给点「启动」：点了也只会拿到一条看不懂的失败。
+                    AppButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        visible: !page.localCanStart
+                        text: qsTr("去资产页")
+                        onClicked: page.openAssetsRequested("llm")
+                    }
+
+                    AppButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: qsTr("启动")
+                        variant: "primary"
+                        buttonEnabled: page.localCanStart && !page.localLlmReady
+                        onClicked: backend.startLocalServer()
+                    }
+
+                    AppButton {
+                        Layout.alignment: Qt.AlignVCenter
+                        text: qsTr("停止")
+                        buttonEnabled: page.localLlmReady
+                        onClicked: backend.stopLocalServer()
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 132 + Theme.s3
+                    visible: !page.localCanStart
+                    text: {
+                        if (!page.localAssetsReady && !page.localHasModel)
+                            return qsTr("还差 llama 运行时和模型文件：去资产页把任意一个 runtime.llama.* 和至少要用的模型下载下来。")
+                        if (!page.localAssetsReady)
+                            return qsTr("还差 llama 运行时：去资产页下载 runtime.llama.vulkan.win-x64 或 runtime.llama.cpu.win-x64。")
+                        return qsTr("还差模型文件：去资产页下载任意一个 qwen2.5 GGUF 模型。")
+                    }
+                    wrapMode: Text.WordWrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeTiny
+                    color: Theme.danger
+                }
+
+                // 日志：路径 + 尾部。后端 logTail() 读的就是这个文件，
+                // 启动失败时这里通常是唯一能看到原因的地方。
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s1
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.s2
+
+                        Text {
+                            text: qsTr("日志")
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: backend.localLogPath.length > 0 ? backend.localLogPath
+                                                                  : qsTr("（还没有日志文件）")
+                            elide: Text.ElideMiddle
+                            font.family: Theme.fontMono
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.inkVariant
+                        }
+
+                        AppButton {
+                            text: qsTr("刷新")
+                            onClicked: backend.refreshLocalState()
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        radius: Theme.rMd
+                        color: Theme.surfaceHighest
+                        border.width: 1
+                        border.color: Theme.outlineVariant
+                        clip: true
+
+                        TextEdit {
+                            anchors.fill: parent
+                            anchors.margins: Theme.s2
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.NoWrap
+                            text: backend.localLogTail.length > 0
+                                  ? backend.localLogTail
+                                  : qsTr("启动本地 llama-server 后，这里显示它最近的输出。")
+                            font.family: Theme.fontMono
+                            font.pixelSize: Theme.fontSizeTiny
+                            color: Theme.ink
+                            selectionColor: Theme.primaryContainer
+                            selectedTextColor: Theme.primaryContainerText
+                        }
                     }
                 }
             }
@@ -1371,6 +1970,14 @@ Item {
                 expanded: false
                 title: qsTr("本地 MT")
                 hint: qsTr("按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。")
+
+                // 一个语言对都没装时的正路：交给 Main.qml 切到设置页的资产分区（mt）。
+                headerActions: [
+                    AppButton {
+                        text: qsTr("下载 / 导入")
+                        onClicked: page.openAssetsRequested("mt")
+                    }
+                ]
 
                 // 表头
                 RowLayout {
@@ -1497,357 +2104,17 @@ Item {
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.inkVariant
                 }
-            }
 
-            // -------------------------------------- 本地 LLM（llama-server · 整行 · 默认收起）
-            CollapsibleCard {
-                id: localCard
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.s6
-                Layout.rightMargin: Theme.s6
-                expanded: false
-                title: qsTr("本地 LLM（llama-server）")
-                hint: qsTr("由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。")
-
-                FieldRow {
-                    label: qsTr("模型文件")
-                    ThemedCombo {
-                        id: localModelCombo
-                        model: page.localModelOptions
-                        currentIndex: Math.max(0, page.localModelOptions.indexOf(backend.localModel))
-                        onActivated: function (index) {
-                            // 第一项是「自动」= 空串，后端拿第一个可用模型。
-                            backend.localModel = index <= 0 ? "" : page.localModelOptions[index]
-                        }
-                    }
-                    AppButton {
-                        text: qsTr("浏览…")
-                        // 后端 installFromFile 是按 manifest 里的资产 id 校验 sha256 的，
-                        // 随便挑一个 .gguf 过不了校验，所以这里仍然只保留接口。
-                        onClicked: page.importHint = qsTr("从文件导入要按资产清单校验 sha256，等后端给出「按路径导入」接口再开。")
-                    }
-                }
-
+                // ONNX Runtime 是编译期链接、随安装包分发的（exe 同目录的 onnxruntime.dll），
+                // 不走资产下载。写这句是为了让人别再来资产页找本地 MT 的「驱动」。
                 Text {
                     Layout.fillWidth: true
-                    Layout.leftMargin: 132 + Theme.s3
-                    visible: text.length > 0
-                    text: page.importHint
-                    wrapMode: Text.WordWrap
+                    text: qsTr("ONNX Runtime 随应用内置，无需下载；上面的语言对目录齐全就能直接跑。")
+                    wrapMode: Text.Wrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: Theme.inkVariant
-                }
-
-                // 运行时可用性：后端问了 llama-server 的 exe 在不在，界面如实显示。
-                FieldRow {
-                    label: qsTr("可用运行时")
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.s2
-
-                        Badge {
-                            text: "Vulkan"
-                            filled: backend.localGpuAvailable
-                        }
-                        Badge {
-                            text: "CPU"
-                            filled: backend.localCpuAvailable
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: backend.localGpuAvailable || backend.localCpuAvailable
-                                  ? qsTr("实心 = 已装（资产里已安装的 llama-server 运行时）")
-                                  : qsTr("一个运行时都没装，先去资产页下载")
-                            elide: Text.ElideRight
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-                }
-
-                // 下面四项直接进 LlamaServerOptions（contextSize / threads / gpuLayers / extraArgs）。
-                // 改完不会立刻重启服务：下次真正要用本地引擎时 ensureStarted() 拿新配置
-                // 和正在跑的那份比，不一致才重启。
-                FieldRow {
-                    label: qsTr("上下文")
-                    ThemedSpin {
-                        from: 512
-                        to: 32768
-                        stepSize: 512
-                        value: backend.localContextSize
-                        onValueModified: backend.localContextSize = value
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("token 数，对应 llama-server 的 -c。太小装不下长句，太大白吃内存。")
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                FieldRow {
-                    label: qsTr("线程")
-                    ThemedSpin {
-                        from: 0
-                        to: 64
-                        stepSize: 1
-                        value: backend.localThreads
-                        onValueModified: backend.localThreads = value
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("0 = 自动（按后端决定），对应 -t。")
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                FieldRow {
-                    label: qsTr("GPU 层数")
-                    ThemedSpin {
-                        id: gpuSpin
-                        from: -1
-                        to: 999
-                        stepSize: 1
-                        value: backend.localGpuLayers
-                        onValueModified: backend.localGpuLayers = value
-
-                        ToolTip.visible: gpuHover.hovered
-                        ToolTip.text: qsTr("-1 = 自动（Vulkan 99 / CPU 0）；0 = 不卸载任何层，纯 CPU 算")
-
-                        HoverHandler { id: gpuHover }
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("-1 = 自动，对应 -ngl。显存不够时手动降档。")
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                FieldRow {
-                    label: qsTr("优先 GPU")
-                    AppToggle {
-                        Layout.alignment: Qt.AlignVCenter
-                        checked: backend.localUseGpu
-                        onToggled: backend.localUseGpu = checked
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("装了 Vulkan 运行时就走 GPU；关掉只用 CPU。")
-                        wrapMode: Text.WordWrap
-                        verticalAlignment: Text.AlignVCenter
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                FieldRow {
-                    label: qsTr("附加参数")
-                    ThemedField {
-                        id: extraArgsField
-                        font.family: Theme.fontMono
-                        placeholderText: "--no-warmup --flash-attn"
-                        // 回填只做一次：QML 的 TextField 一旦被用户输入就会打断绑定，
-                        // 所以不复用 text: backend.localExtraArgs，而是提交时写回。
-                        Component.onCompleted: text = backend.localExtraArgs
-                        onEditingFinished: backend.localExtraArgs = text
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: qsTr("原样拼到 llama-server 命令行尾部，空格分隔。")
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                // 采样参数的归属说明：本地引擎沿用云端卡那份 temperature / maxTokens /
-                // 系统提示词，只覆盖 batchSize / reasoningEffort / stripModelNotes 三项。
-                Text {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 132 + Theme.s3
-                    text: qsTr("采样参数（temperature / maxTokens / 系统提示词）沿用上方「云端 LLM」里的设置；本地只额外固定「逐段请求」并清理小模型的括注噪声。")
-                    wrapMode: Text.WordWrap
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.inkVariant
-                }
-
-                // 状态行：后端 / 端口 / PID / 启动耗时 + 启动 / 停止
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.s3
-
-                    StatusDot {
-                        Layout.alignment: Qt.AlignVCenter
-                        label: page.localLlmReady ? qsTr("运行中") : qsTr("已停止")
-                        state: page.localLlmReady ? 0 : 3
-                    }
-
-                    Rectangle {
-                        Layout.alignment: Qt.AlignVCenter
-                        Layout.preferredWidth: 1
-                        Layout.preferredHeight: 16
-                        color: Theme.outlineVariant
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: qsTr("后端")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: backend.localBackend.length > 0 ? backend.localBackend : "—"
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.ink
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: qsTr("端口")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: backend.localPort > 0 ? backend.localPort : "—"
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.ink
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: "PID"
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: backend.localPid > 0 ? backend.localPid : "—"
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.ink
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: qsTr("启动耗时")
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    Text {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: backend.localStartupMs > 0
-                              ? qsTr("%1 ms").arg(backend.localStartupMs) : "—"
-                        font.family: Theme.fontMono
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.ink
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    AppButton {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: qsTr("启动")
-                        variant: "primary"
-                        onClicked: backend.startLocalServer()
-                    }
-
-                    AppButton {
-                        Layout.alignment: Qt.AlignVCenter
-                        text: qsTr("停止")
-                        buttonEnabled: page.localLlmReady
-                        onClicked: backend.stopLocalServer()
-                    }
-                }
-
-                // 日志：路径 + 尾部。后端 logTail() 读的就是这个文件，
-                // 启动失败时这里通常是唯一能看到原因的地方。
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Theme.s1
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.s2
-
-                        Text {
-                            text: qsTr("日志")
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: backend.localLogPath.length > 0 ? backend.localLogPath
-                                                                  : qsTr("（还没有日志文件）")
-                            elide: Text.ElideMiddle
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-
-                        AppButton {
-                            text: qsTr("刷新")
-                            onClicked: backend.refreshLocalState()
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 120
-                        radius: Theme.rMd
-                        color: Theme.surfaceHighest
-                        border.width: 1
-                        border.color: Theme.outlineVariant
-                        clip: true
-
-                        TextEdit {
-                            anchors.fill: parent
-                            anchors.margins: Theme.s2
-                            readOnly: true
-                            selectByMouse: true
-                            wrapMode: TextEdit.NoWrap
-                            text: backend.localLogTail.length > 0
-                                  ? backend.localLogTail
-                                  : qsTr("启动本地 llama-server 后，这里显示它最近的输出。")
-                            font.family: Theme.fontMono
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.ink
-                            selectionColor: Theme.primaryContainer
-                            selectedTextColor: Theme.primaryContainerText
-                        }
-                    }
+                    opacity: 0.85
                 }
             }
 
@@ -1855,7 +2122,8 @@ Item {
         }
     }
 
-    // 「这个引擎还没配好」拦截框。点行才有；点徽标 / 点「去配置」都不再拦第二次。
+    // 「这个引擎当前还用不了」拦截框。点解析不了的状态胶囊会调它；
+    // 点行 / 框里的「去配置」都走 guard = false，不再拦第二次。
     Popup {
         id: notReadyDialog
 
@@ -1896,7 +2164,16 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("需要先填好连接参数才能使用。")
+                // 拦截原因以后端给的 detail 为准（缺资产 / 选定源语言后才可用 / 参数没填齐，
+                // 三种说法都在 detail 里），取不到才退回到一句通用说明。
+                text: {
+                    var detail = page.engineSubtitle(notReadyDialog.engineKey)
+                    if (detail.length > 0)
+                        return detail
+                    return page.engineState(notReadyDialog.engineKey) === "missing-assets"
+                            ? qsTr("缺必需的资产文件，先去资产页下载。")
+                            : qsTr("当前语言对下还用不了它，先检查一下配置。")
+                }
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -1913,6 +2190,16 @@ Item {
                 AppButton {
                     text: qsTr("取消")
                     onClicked: notReadyDialog.close()
+                }
+
+                AppButton {
+                    text: qsTr("去资产页")
+                    visible: page.engineState(notReadyDialog.engineKey) === "missing-assets"
+                    onClicked: {
+                        var key = notReadyDialog.engineKey
+                        notReadyDialog.close()
+                        page.openAssetsRequested(key === "local-mt" ? "mt" : "llm")
+                    }
                 }
 
                 AppButton {

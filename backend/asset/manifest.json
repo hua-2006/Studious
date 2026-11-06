@@ -78,25 +78,6 @@
         "note": "llama.cpp 官方 CPU 构建 b12102（约 23.6 MB），本机测试用真实资产；含按 CPU 特性分发的 ggml-cpu-*.dll"
       },
       {
-        "id": "runtime.onnxruntime.win-x64",
-        "type": "runtime",
-        "op": "windows",
-        "arch": "x64",
-        "backend": "cpu",
-        "version": "1.20.1",
-        "size": 57671680,
-        "sha256": "",
-        "archive": "zip",
-        "urls": [
-          "https://cdn.studious.app/runtime/onnxruntime-win-x64-1.20.1.zip"
-        ],
-        "files": [
-          "lib/onnxruntime.dll"
-        ],
-        "requiresRamGB": 2,
-        "note": "待发布时填入真实 sha256；本地 MT（OPUS-MT）引擎的运行时"
-      },
-      {
         "id": "runtime.llama.vulkan.linux-x64",
         "type": "runtime",
         "op": "linux",
