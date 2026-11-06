@@ -77,6 +77,12 @@ class AppBackend : public QObject {
     // ---- 主题："system" / "light" / "dark"，落 QSettings ----
     Q_PROPERTY(QString themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged)
 
+    // ---- 界面语言 ----
+    // 取值："system" | "zh" | "en"。
+    // 只落盘、不热生效 —— 语言在 main() 里加载 QML 之前就要定下来，
+    // 所以改完必须重启（UI 里会因此弹一个「重启」按钮）。
+    Q_PROPERTY(QString uiLanguage READ uiLanguage WRITE setUiLanguage NOTIFY uiLanguageChanged)
+
     // ---- 字号缩放百分比（80~150）----
     Q_PROPERTY(int fontScale READ fontScale WRITE setFontScale NOTIFY fontScaleChanged)
 
@@ -134,6 +140,9 @@ public:
     int fontScale() const { return m_fontScale; }
     void setFontScale(int percent);
 
+    QString uiLanguage() const { return m_uiLanguage; }
+    void setUiLanguage(const QString &code);
+
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
     QString accentColor() const;
     void setAccentColor(const QString &color);
@@ -163,6 +172,9 @@ public slots:
 
     // 复制任意文本到剪贴板（许可证正文、资产路径等）。
     Q_INVOKABLE void copyText(const QString &text);
+
+    // 重启本程序（界面语言这类要重启才生效的设置，改完直接调它）。
+    Q_INVOKABLE void restartApplication();
 
     // 把 QPalette 同步成当前主题。
     // QML 侧是配色唯一来源，这里只负责把它转交给 Qt ——
@@ -197,6 +209,7 @@ signals:
     void activeDstChanged();
     void themeModeChanged();
     void fontScaleChanged();
+    void uiLanguageChanged();
     void accentColorChanged();
 
     // 供 QML 弹提示 / 打开对话框
@@ -235,6 +248,7 @@ private:
     QString m_activeDst;
     QString m_themeMode = QStringLiteral("system");
     int m_fontScale = 100;
+    QString m_uiLanguage = QStringLiteral("system");
     // 规范化的 "#RRGGBB"（大写）；空 = 用默认紫，由 accentColor() 兜底。
     QString m_accentColor;
 

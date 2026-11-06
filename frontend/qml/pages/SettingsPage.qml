@@ -21,6 +21,11 @@ import Studious
 Item {
     id: page
 
+    // 启动时实际生效的界面语言。与 backend.uiLanguage 不一致 = 改过但没重启，
+    // 语言那一行会因此冒出「重启软件」按钮。
+    // （赋值在下面的 Component.onCompleted 里，QML 不允许写两个 onCompleted。）
+    property string appliedLanguage: "system"
+
     // FieldRow 的默认标签列宽；行内提示文字靠它对齐到控件列。
     readonly property int labelWidth: 132
     // 输入框 / 按钮统一行高，同排不齐高会显得歪。
@@ -124,7 +129,10 @@ Item {
     ].join("\n")
 
     // 后端不会主动推缓存统计，进页面时拉一次，数字才有内容。
-    Component.onCompleted: backend.refreshCacheStats()
+    Component.onCompleted: {
+        appliedLanguage = backend.uiLanguage
+        backend.refreshCacheStats()
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -270,12 +278,21 @@ Item {
                                 // 界面语言：Qt 没有运行时换语言机制，改完要重启。
                                 FieldRow {
                                     label: "界面语言"
-                                    Stub { }
 
                                     Segmented {
                                         Layout.alignment: Qt.AlignVCenter
                                         items: page.langItems
-                                        current: "system"
+                                        current: backend.uiLanguage
+                                        onSelected: function (code) { backend.uiLanguage = code }
+                                    }
+
+                                    // 只在「改过了、还没重启」时出现。
+                                    AppButton {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: "重启软件"
+                                        variant: "tonal"
+                                        visible: backend.uiLanguage !== page.appliedLanguage
+                                        onClicked: backend.restartApplication()
                                     }
 
                                     Item { Layout.fillWidth: true }

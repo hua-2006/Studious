@@ -15,6 +15,7 @@
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QPalette>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QVariantMap>
 #include <QtConcurrent>
@@ -145,6 +146,9 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_activeDst = m_dstLangs.value(0, QStringLiteral("zh"));
     m_themeMode = settings.themeMode;
     m_fontScale = settings.fontScale;
+    // 设置里空串 = 跟随系统，界面用 "system" 表达。
+    m_uiLanguage = settings.uiLanguage.isEmpty() ? QStringLiteral("system")
+                                                 : settings.uiLanguage;
     // load() 已经过滤过非法值，这里拿到的要么是 "#RRGGBB"，要么是空（= 默认紫）。
     m_accentColor = settings.accentSeed;
 
@@ -826,9 +830,40 @@ void AppBackend::uninstallAsset(const QString &id)
     refreshAssets();
 }
 
-void AppBackend::copyText(const QString &text)
+void AppBackend::setUiLanguage(const QString &code)
 {
-    if (text.isEmpty()) {
+    const QString next = (code == QLatin1String("zh") || code == QLatin1String("en"))
+                             ? code
+                             : QStringLiteral("system");
+    if (m_uiLanguage == next) {
+        return;
+    }
+
+    m_uiLanguage = next;
+
+    // 落盘：空串交给 AppSettings 表示「跟随系统」。
+    AppSettings settings = AppSettings::load();
+    settings.uiLanguage = (next == QLatin1String("system")) ? QString() : next;
+    settings.save();
+
+    // 这里**故意不热切换**语言。界面文案在 QML 里是写死的，
+    // 而且 i18n 必须在加载 QML 之前定下来，热切只会切一半。
+    // 由界面上弹出的「重启」按钮完成。
+    emit uiLanguageChanged();
+}
+
+void AppBackend::restartApplication()
+{
+    // 用 detached 拉起自己再退出，这样父进程的退出不会带走新进程。
+    // 不传参：避免把 --ui-shot 一类的调试开关带进新实例。
+    const QString exe = QCoreApplication::applicationFilePath();
+    if (QProcess::startDetached(exe, QStringList())) {
+        QCoreApplication::quit();
+    }
+}
+
+void AppBackend::copyText(const QString &text)
+{    if (text.isEmpty()) {
         return;
     }
     QGuiApplication::clipboard()->setText(text);
