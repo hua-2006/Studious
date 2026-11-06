@@ -1480,7 +1480,12 @@ Item {
                         AppToggle {
                             Layout.alignment: Qt.AlignVCenter
                             checked: page.llmBool("stripModelNotes")
-                            onToggled: page.patchLlm("stripModelNotes", checked)
+                            onToggled: {
+                                page.patchLlm("stripModelNotes", checked)
+                                // 回灌：开关组件点击时先自己改了 checked，外部绑定被打破；
+                                // 以 llmDraft 为准把值拉回来，后端拒收/回落时界面才对得上。
+                                checked = page.llmBool("stripModelNotes")
+                            }
                         }
                         Text {
                             Layout.fillWidth: true
@@ -1578,7 +1583,12 @@ Item {
                     AppToggle {
                         Layout.alignment: Qt.AlignVCenter
                         checked: backend.localUseGpu
-                        onToggled: backend.localUseGpu = checked
+                        onToggled: {
+                            backend.localUseGpu = checked
+                            // 回灌：开关组件内部先改了自己的 checked，绑定已被打断，
+                            // 这里按后端实际值拉回来（后端可能因不同平台拒绝）。
+                            checked = backend.localUseGpu
+                        }
                     }
                     Text {
                         Layout.fillWidth: true
@@ -1690,7 +1700,10 @@ Item {
                         AppToggle {
                             Layout.alignment: Qt.AlignVCenter
                             checked: backend.localStopOnSwitch
-                            onToggled: backend.localStopOnSwitch = checked
+                            onToggled: {
+                                backend.localStopOnSwitch = checked
+                                checked = backend.localStopOnSwitch
+                            }
                         }
                         Text {
                             Layout.fillWidth: true
@@ -1708,7 +1721,10 @@ Item {
                         AppToggle {
                             Layout.alignment: Qt.AlignVCenter
                             checked: backend.localPreheat
-                            onToggled: backend.localPreheat = checked
+                            onToggled: {
+                                backend.localPreheat = checked
+                                checked = backend.localPreheat
+                            }
                         }
                         Text {
                             Layout.fillWidth: true
@@ -1726,7 +1742,10 @@ Item {
                         AppToggle {
                             Layout.alignment: Qt.AlignVCenter
                             checked: backend.localIdleStop
-                            onToggled: backend.localIdleStop = checked
+                            onToggled: {
+                                backend.localIdleStop = checked
+                                checked = backend.localIdleStop
+                            }
                         }
                         Text {
                             Layout.fillWidth: true

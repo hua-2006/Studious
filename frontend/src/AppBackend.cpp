@@ -17,6 +17,7 @@
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QPalette>
+#include <QPointer>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
@@ -87,20 +88,82 @@ QStringList knownEngineIds()
             QStringLiteral("llm-local"), QStringLiteral("local-mt")};
 }
 
-// 把任意顺序整理成「只含已知 id、无重复、不缺项」。
+// 默认降级顺序：**本地优先**。本地引擎便宜、离线、不烧额度，能用就用；
+// 云端次之（质量最好但要钱），在线免费接口垫底（质量最差且限流）。
+QStringList defaultEnginePriority()
+{
+    return {QStringLiteral("llm-local"), QStringLiteral("local-mt"),
+            QStringLiteral("llm-cloud"), QStringLiteral("web")};
+}
+
+// 把任意一种拼法折成界面 id。空串 / 未知一律返回空。
+// 认的别名：router 的 "llm"（老设置里云端与本地共用这一个 id，靠 useLocalEngine 分流，
+// 那个歧义只能在构造函数里解开，这里按云端算）、以及大小写与空格。
+QString toUiEngineId(const QString &raw)
+{
+    const QString id = raw.trimmed().toLower();
+    if (id == QLatin1String("web")) {
+        return QStringLiteral("web");
+    }
+    if (id == QLatin1String("llm-cloud") || id == QLatin1String("llm")) {
+        return QStringLiteral("llm-cloud");
+    }
+    if (id == QLatin1String("llm-local")) {
+        return QStringLiteral("llm-local");
+    }
+    if (id == QLatin1String("local-mt") || id == QLatin1String("localmt")) {
+        return QStringLiteral("local-mt");
+    }
+    if (id == QLatin1String("auto")) {
+        return QStringLiteral("auto");
+    }
+    return QString();
+}
+
+// 界面 id → Router 引擎 id。llm-local 不走 Router（它由 LocalEngine 单独承担），返回空。
+QString toRouterEngineId(const QString &uiId)
+{
+    if (uiId == QLatin1String("llm-cloud")) {
+        return QStringLiteral("llm");
+    }
+    if (uiId == QLatin1String("llm-local")) {
+        return QString();
+    }
+    return toUiEngineId(uiId) == uiId ? uiId : QString();
+}
+
+// 把任意顺序整理成「只含已知 id、无重复、不缺项」，缺的项按默认顺序补在后面。
 QStringList sanitizedPriority(const QStringList &input)
 {
     const QStringList known = knownEngineIds();
     QStringList out;
-    for (const QString &id : input) {
-        if (known.contains(id) && !out.contains(id)) {
-            out.append(id);
+    for (const QString &raw : input) {
+        const QString uiId = toUiEngineId(raw);
+        if (uiId == QLatin1String("auto")) {
+            continue;   // "auto" 不是成员，是模式
+        }
+        if (known.contains(uiId) && !out.contains(uiId)) {
+            out.append(uiId);
         }
     }
-    for (const QString &id : known) {
+    for (const QString &id : defaultEnginePriority()) {
         if (!out.contains(id)) {
             out.append(id);
         }
+    }
+    return out;
+}
+
+// 界面优先级 → Router 优先级。这是**唯一**一处 id 换算，谁也别再就地写 if 链。
+QStringList toRouterPriority(const QStringList &uiOrder)
+{
+    QStringList out;
+    for (const QString &uiId : uiOrder) {
+        const QString routerId = toRouterEngineId(uiId);
+        if (routerId.isEmpty() || out.contains(routerId)) {
+            continue;
+        }
+        out.append(routerId);
     }
     return out;
 }
@@ -172,18 +235,32 @@ QString assetCategory(const QString &id, const QString &family)
     return QStringLiteral("llm");
 }
 
-// 清单路径：三个候选按顺序找（见 refreshAssets 里的说明）。
+// 清单路径。
+// **生产只认编译进二进制的这一份**（qrc: :/assets/manifest.json）。原因：
+// 以前从 exe 旁边的磁盘文件读，而那个目录是可写的 —— 能改 manifest.json 的人
+// 就能把 URL 换掉、把 sha256 换成自己那份的哈希，然后让客户端下载并执行任意
+// llama-server.exe。现在清单跟着 exe 走，改它等于改 exe 本身。
+// 开发期要反复调清单时设 STUDIOUS_DEV_MANIFEST=1，才允许退回磁盘上的示例清单。
 QString findManifestPath()
 {
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {
-        QDir(appDir).filePath(QStringLiteral("manifest.json")),
-        QDir(appDir).filePath(QStringLiteral("../backend/asset/manifest.json")),
-        QDir(appDir).filePath(QStringLiteral("../../backend/asset/manifest.json")),
-    };
-    for (const QString &candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
+    const QString bundled = QStringLiteral(":/assets/manifest.json");
+    if (QFileInfo::exists(bundled)) {
+        return bundled;
+    }
+
+    if (qEnvironmentVariableIsSet("STUDIOUS_DEV_MANIFEST")) {
+        const QString appDir = QCoreApplication::applicationDirPath();
+        const QStringList candidates = {
+            QDir(appDir).filePath(QStringLiteral("manifest.json")),
+            QDir(appDir).filePath(QStringLiteral("../backend/asset/manifest.json")),
+            QDir(appDir).filePath(QStringLiteral("../../backend/asset/manifest.json")),
+        };
+        for (const QString &candidate : candidates) {
+            if (QFileInfo::exists(candidate)) {
+                qWarning("[assets] using writable manifest from disk (dev mode): %s",
+                         qUtf8Printable(candidate));
+                return candidate;
+            }
         }
     }
     return QString();
@@ -231,7 +308,10 @@ bool copyDirRecursive(const QString &from, const QString &to)
     return true;
 }
 
-// 解析仓库里这份示例清单（未签名、sha256 占位，所以放宽两项校验）。
+// 解析随二进制发布的资产清单（已编译进 qrc，运行期不可篡改）。
+// 仓库里这份清单是"待发布"状态：`sig` 与部分 `sha256` 还是空串，所以这里仍放宽
+// 两项校验 —— 但**下载时**会逐条拒绝"有下载地址却没有 sha256"的条目
+// （见 downloadAsset / importAssetFromFile），不会出现"没校验就装"。
 bool parseBundledManifest(studious::asset::Manifest *out)
 {
     const QString path = findManifestPath();
@@ -333,19 +413,18 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     // 网络设置在第一次请求之前就得落成环境变量 —— 后端的 HttpClient 只在构造时读。
     applyNetworkEnvironment();
 
-    // 设置里存的是 Router 引擎 id，QML 用带语义的 id，这里做一次映射。
-    // 老值只有 web / local-mt / llm + llm/useLocalEngine 一个开关；新值可能已经是
-    // llm-cloud / llm-local（手改注册表、或以后界面自己写），两种都认。
-    if (settings.engineId == QLatin1String("web")) {
-        m_engineId = QStringLiteral("web");
-    } else if (settings.engineId == QLatin1String("local-mt")) {
-        m_engineId = QStringLiteral("local-mt");
-    } else if (settings.engineId == QLatin1String("llm-cloud")
-               || settings.engineId == QLatin1String("llm-local")) {
-        m_engineId = settings.engineId;
-    } else if (settings.engineId == QLatin1String("llm")) {
+    // 设置里存的就是界面 id（web / llm-cloud / llm-local / local-mt，空 = 自动）。
+    // 老版本只存过 Router id "llm"，那个值是云地和本地共用的，只能靠
+    // useLocalEngine 解开歧义 —— 这条兼容分支留着，其余全走 toUiEngineId。
+    const QString rawEngineId = settings.engineId.trimmed().toLower();
+    if (rawEngineId == QLatin1String("llm")) {
         m_engineId = settings.useLocalEngine ? QStringLiteral("llm-local")
                                              : QStringLiteral("llm-cloud");
+    } else {
+        const QString uiId = toUiEngineId(settings.engineId);
+        if (!uiId.isEmpty() && uiId != QLatin1String("auto")) {
+            m_engineId = uiId;
+        }
     }
 
     m_statusText = i18n::s().common.ready;
@@ -476,14 +555,19 @@ void AppBackend::setDstLangs(const QStringList &codes)
 
 void AppBackend::setEngineId(const QString &id)
 {
-    if (m_engineId == id) {
+    // 只收界面 id；"auto"/空 = 自动。老拼法（llm 等）在这里折平，免得又长出第二套 id。
+    const QString normalized = toUiEngineId(id);
+    const QString next = (normalized == QLatin1String("auto"))
+                             ? QString()
+                             : (normalized.isEmpty() ? QString() : normalized);
+    if (m_engineId == next) {
         return;
     }
-    m_engineId = id;
+    m_engineId = next;
     saveSettings();
     emit engineIdChanged();
     // 「切走就停」：用户选的，默认关 —— 关着就保留 llama-server 热着，下次切回来直接翻。
-    if (m_localStopOnSwitch && id != QLatin1String("llm-local") && m_localEngine.isRunning()) {
+    if (m_localStopOnSwitch && next != QLatin1String("llm-local") && m_localEngine.isRunning()) {
         shutdownLocalEngine(QString());
     }
     refreshEngineStatuses();
@@ -1073,16 +1157,7 @@ bool AppBackend::useLocalEngine() const
 
 QString AppBackend::routerEngineId() const
 {
-    if (m_engineId == QLatin1String("web")) {
-        return QStringLiteral("web");
-    }
-    if (m_engineId == QLatin1String("local-mt")) {
-        return QStringLiteral("local-mt");
-    }
-    if (m_engineId == QLatin1String("llm-cloud") || m_engineId == QLatin1String("llm-local")) {
-        return QStringLiteral("llm");
-    }
-    return QString();   // 自动
+    return toRouterEngineId(m_engineId);   // 空 = 自动，交给 priority 挑
 }
 
 void AppBackend::translate()
@@ -1104,7 +1179,9 @@ void AppBackend::translate()
     req.srcLang = m_srcLang;
     req.dstLangs = m_dstLangs;
     req.engineId = routerEngineId();
-    req.priority = settings.enginePriority;
+    // 自动模式的降级顺序。这里必须是 Router id 空间且**不含 llm-local**
+    // （它由 LocalEngine 分支单独承担，Router 不认识它）。换算只有 toRouterPriority 一处。
+    req.priority = toRouterPriority(m_enginePriority);
     req.llm = settings.llm;
     req.cache = m_cache;
     req.cacheEnabled = m_cacheEnabled;
@@ -1258,24 +1335,10 @@ void AppBackend::refreshEngineStatuses()
                                      ? QStringList{}
                                      : QStringList{settings.webProviderId};
     auto translators = studious::factory::makeDefaultTranslators(http, settings.llm, webOrder);
-    // Router 用的是另一套 id（"llm" 代表云端），而设置与界面统一用
-    // "llm-cloud"。这里做一次映射，界面上就只存在一套 id。
-    // llm-local 走 LocalEngine 分支、不参与降级链，跳过。
-    const QStringList stored = settings.enginePriority.isEmpty()
-                                   ? knownEngineIds()
-                                   : settings.enginePriority;
-    QStringList priority;
-    for (const QString &uiId : stored) {
-        if (uiId == QLatin1String("llm-local")) {
-            continue;
-        }
-        const QString routerId = (uiId == QLatin1String("llm-cloud"))
-                                     ? QStringLiteral("llm")
-                                     : uiId;
-        if (!priority.contains(routerId)) {
-            priority.append(routerId);
-        }
-    }
+    // 用内存里的优先级（界面刚拖完还没落盘时也得一致），只做一次 id 换算。
+    // llm-local 走 LocalEngine 分支、不参与 Router 降级链，toRouterPriority 会丢掉它。
+    const QStringList priority = toRouterPriority(
+        m_enginePriority.isEmpty() ? defaultEnginePriority() : m_enginePriority);
 
     const studious::router::TranslatorRouter router(std::move(translators), priority);
 
@@ -1491,6 +1554,15 @@ void AppBackend::stopLocalServer()
 
 void AppBackend::setStatus(const QString &text, bool isError)
 {
+    // 全局通知条只订阅 errorRaised，所以每一条"用户必须看见"的失败都在这里统一冒泡。
+    // 以前错误只写在翻译页底部那行状态里，用户在别的页面根本看不到（甚至被忽略）。
+    if (isError && !text.isEmpty() && text != m_lastNotifiedError) {
+        m_lastNotifiedError = text;
+        emit errorRaised(studious::i18n::s("出错了", "Something went wrong"), text);
+    } else if (!isError) {
+        m_lastNotifiedError.clear();
+    }
+
     if (m_statusText == text && m_statusIsError == isError) {
         return;
     }
@@ -1513,7 +1585,10 @@ void AppBackend::saveSettings()
     AppSettings settings = AppSettings::load();
     settings.srcLang = m_srcLang;
     settings.dstLang = joinLangs(m_dstLangs);
-    settings.engineId = routerEngineId();
+    // 存界面 id（web / llm-cloud / llm-local / local-mt，空 = 自动），不再折成
+    // Router 的 "llm" —— 那个折法会让 llm-local 丢成空串、重启后变回自动。
+    // useLocalEngine 只是给老版本留的兼容字段，跟着一起写。
+    settings.engineId = m_engineId;
     settings.useLocalEngine = useLocalEngine();
     settings.save();
 }
@@ -1618,7 +1693,10 @@ void AppBackend::downloadAsset(const QString &id)
 
     // 工作线程内构造 QtHttpClient / Registry / Downloader：
     // QNetworkAccessManager 是线程亲和的，绝不能跨线程共享。
-    watcher->setFuture(QtConcurrent::run([this, id, cancelFlag]() {
+    // 捕获 QPointer 而不是裸 this：下载可能跑几十分钟，这期间窗口可能已经关了，
+    // 裸指针会在 emit 那一刻 UAF。
+    const QString installRoot = assetInstallRootPath();
+    watcher->setFuture(QtConcurrent::run([self = QPointer<AppBackend>(this), installRoot, id, cancelFlag]() {
         studious::asset::DownloadResult result;
 
         studious::asset::Manifest manifest;
@@ -1629,14 +1707,17 @@ void AppBackend::downloadAsset(const QString &id)
         }
 
         studious::net::QtHttpClient http;
-        studious::asset::AssetRegistry registry(assetInstallRootPath(), manifest);
+        studious::asset::AssetRegistry registry(installRoot, manifest);
         studious::asset::Downloader downloader(http, registry);
 
-        const auto onProgress = [this, id](const studious::asset::DownloadProgress &pr) {
+        const auto onProgress = [self, id](const studious::asset::DownloadProgress &pr) {
+            if (!self) {
+                return;   // 窗口已经关了，没人要这个进度了
+            }
             const int percent = pr.total > 0
                                     ? static_cast<int>(pr.received * 100 / pr.total)
                                     : -1;
-            emit assetProgressTick(id, percent);
+            emit self->assetProgressTick(id, percent);
         };
 
         return downloader.download(id, onProgress, cancelFlag.get());
@@ -1967,6 +2048,9 @@ void AppBackend::setUiLanguage(const QString &code)
 
 void AppBackend::restartApplication()
 {
+    // 先松掉单实例的命名管道再拉起新进程：否则新进程 ping 到的还是这个正活着的
+    // 旧实例，会被判成「重复启动」然后静默退出，看起来像重启失败。
+    m_desktop.shutdown();
     // 用 detached 拉起自己再退出，这样父进程的退出不会带走新进程。
     // 不传参：避免把 --ui-shot 一类的调试开关带进新实例。
     const QString exe = QCoreApplication::applicationFilePath();

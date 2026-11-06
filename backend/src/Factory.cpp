@@ -48,18 +48,22 @@ std::unique_ptr<core::ITranslator> makeLocalMtTranslator()
     return std::make_unique<LocalMtTranslator>();
 }
 
-router::TranslatorList makeDefaultTranslators(net::IHttpClient &http)
+router::TranslatorList makeDefaultTranslators(net::IHttpClient &http, bool includeMock)
 {
-    return makeDefaultTranslators(http, config::LlmConfig{}, {});
+    return makeDefaultTranslators(http, config::LlmConfig{}, {}, includeMock);
 }
 
 router::TranslatorList makeDefaultTranslators(net::IHttpClient &http,
                                               const config::LlmConfig &llmCfg,
-                                              const QStringList &webProviders)
+                                              const QStringList &webProviders,
+                                              bool includeMock)
 {
     router::TranslatorList list;
     list.reserve(4);
-    list.push_back(makeMockTranslator());
+    // mock 只服务于自测：默认不装配，否则 CLI --smoke 不指定引擎时会拿回假译文。
+    if (includeMock) {
+        list.push_back(makeMockTranslator());
+    }
     list.push_back(makeWebTranslator(http, webProviders));
     list.push_back(makeLlmTranslator(llmCfg, http));
     list.push_back(makeLocalMtTranslator());

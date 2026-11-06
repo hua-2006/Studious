@@ -1734,7 +1734,8 @@ void runCacheMode()
     };
 
     const auto buildRouter = [&](cache::TranslationCache *cachePtr, bool enabled) {
-        auto translators = factory::makeDefaultTranslators(http, cfg, {});
+        // 自测用完整装配（含 mock）：生产装配默认不注册 mock，只有这里显式要。
+        auto translators = factory::makeDefaultTranslators(http, cfg, {}, /*includeMock=*/true);
         auto r = std::make_unique<router::TranslatorRouter>(
             std::move(translators), QStringList{QStringLiteral("llm")});
         if (cachePtr != nullptr) {

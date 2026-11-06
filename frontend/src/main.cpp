@@ -37,6 +37,7 @@
 #include <studious/i18n/L10n.h>
 #include <studious/llm/LlmCatalog.h>
 #include <studious/net/QtHttpClient.h>
+#include <studious/translators/LocalMtTranslator.h>
 
 #include <cstdio>
 #include <cstring>
@@ -197,21 +198,166 @@ void applyUiLanguageFromSettings()
     applyUiLanguage(AppSettings::load().uiLanguage);
 }
 
+// ---------------------------------------------------------------- 引擎 id 归一
+
+// 引擎 id 有两套体系，这里做一次桥接：
+//   后端（Factory / Router）只认 mock / web / llm / local-mt；
+//   界面与注册表（engine\id、engine\priority）用 web / llm-cloud / llm-local / local-mt。
+// 以前 CLI 只认后端那套：--engine llm-cloud 直接报"不存在"；不带 --engine 又落到
+// 硬编码的 mock 上，输出【zh】原文还 exit 0（假成功）。
+struct EngineChoice {
+    QString backendId;        // 空 = 解析失败，看 error
+    QString uiId;             // 命中的界面 id（auto 时用来在 header 里说清"为什么是它"）
+    bool forceLocal = false;  // llm-local：等价于 --local（拉起本机 llama-server）
+    bool autoPicked = false;  // true = 由 auto / 未给 --engine 按设置的优先级推导
+    QString error;            // 非空 = [FAIL] 的正文
+};
+
+// 单个界面 id -> 后端 id 的纯映射，不判断可用性。认不出返回 false。
+bool mapUiEngineId(const QString &uiId, EngineChoice *out)
+{
+    const QString id = uiId.trimmed().toLower();
+    if (id == QLatin1String("web")) {
+        out->backendId = QStringLiteral("web");
+    } else if (id == QLatin1String("llm") || id == QLatin1String("llm-cloud")) {
+        out->backendId = QStringLiteral("llm");
+    } else if (id == QLatin1String("llm-local")) {
+        out->backendId = QStringLiteral("llm");
+        out->forceLocal = true;
+    } else if (id == QLatin1String("local-mt")) {
+        out->backendId = QStringLiteral("local-mt");
+    } else if (id == QLatin1String("mock")) {
+        out->backendId = QStringLiteral("mock");
+    } else {
+        return false;
+    }
+    out->uiId = id;
+    return true;
+}
+
+// 「当前可解析」= 这台机器上真的能用，不是"理论上支持"：
+//   web       永远可用（联不联网由请求本身报错）
+//   llm-cloud 地址 + 模型齐了就算（key 对不对只有真请求知道）
+//   llm-local 运行时 + 至少一个模型装好了
+//   local-mt  至少装了一个语言对；给了明确源语言时还要求这个语言对真能走
+bool engineAvailable(const QString &uiId, const AppSettings &settings,
+                     const QString &srcLang, const QString &dstLang)
+{
+    if (uiId == QLatin1String("web")) {
+        return true;
+    }
+    if (uiId == QLatin1String("llm") || uiId == QLatin1String("llm-cloud")) {
+        return settings.llm.isValid();
+    }
+    if (uiId == QLatin1String("llm-local")) {
+        return !LocalEngine::availableModels().isEmpty()
+               && (LocalEngine::isGpuAvailable() || LocalEngine::isCpuAvailable());
+    }
+    if (uiId == QLatin1String("local-mt")) {
+        const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+        if (mt.installedPairs().isEmpty()) {
+            return false;
+        }
+        const QString src = studious::core::LanguageRegistry::normalize(srcLang);
+        const QString dst = studious::core::LanguageRegistry::normalize(dstLang);
+        // 源语言是"自动检测"时 Router 必然拒绝（本地 MT 没法先探测再选模型），
+        // 但引擎本身是装好的 —— 和界面一样按"装好没有"算可用。
+        if (src.isEmpty() || src == QLatin1String("auto")) {
+            return true;
+        }
+        return mt.resolve(src, dst).ready;
+    }
+    return false;
+}
+
+// raw = --engine 的原样值；auto / 空串 = 按 settings.enginePriority 挑第一个可用的界面 id。
+EngineChoice resolveEngineId(const QString &raw, const AppSettings &settings,
+                             const QString &srcLang, const QString &dstLang)
+{
+    const QString value = raw.trimmed().toLower();
+
+    if (value.isEmpty() || value == QLatin1String("auto")) {
+        // 设置里没存优先级时，用与 TranslateJob 兜底一致的本地优先顺序（注意没有 mock）。
+        const QStringList order = settings.enginePriority.isEmpty()
+                                      ? QStringList{QStringLiteral("local-mt"),
+                                                    QStringLiteral("llm-cloud"),
+                                                    QStringLiteral("web")}
+                                      : settings.enginePriority;
+
+        QStringList unusable;
+        for (const QString &rawId : order) {
+            const QString uiId = rawId.trimmed().toLower();
+            if (uiId.isEmpty() || uiId == QLatin1String("mock")) {
+                continue;   // mock 只能显式要，自动链里永不出现
+            }
+            EngineChoice mapped;
+            if (!mapUiEngineId(uiId, &mapped)) {
+                continue;   // 注册表里手改出来的野 id：忽略，别让整条链失效
+            }
+            if (!engineAvailable(mapped.uiId, settings, srcLang, dstLang)) {
+                unusable << uiId;
+                continue;
+            }
+            mapped.autoPicked = true;
+            return mapped;
+        }
+
+        EngineChoice failed;
+        failed.error =
+            QStringLiteral("自动选择引擎失败：优先级（%1）里没有当前可用的引擎%2；"
+                           "用 --engine 指定（web / llm-cloud / llm-local / local-mt / mock）")
+                .arg(order.join(QStringLiteral("、")),
+                     unusable.isEmpty()
+                         ? QString()
+                         : QStringLiteral("（已跳过：%1）").arg(unusable.join(QStringLiteral("、"))));
+        return failed;
+    }
+
+    EngineChoice mapped;
+    if (!mapUiEngineId(value, &mapped)) {
+        mapped.error =
+            QStringLiteral("未知引擎 \"%1\"；可用：web、llm-cloud、llm-local、local-mt、mock")
+                .arg(raw.trimmed());
+    }
+    return mapped;
+}
+
+// 取 `--xxx` 后面的那个值。
+// 两种"缺值"都算失败：后面什么都没有，或者紧跟的是另一个 `--xxx`。
+// 以前写成 `arg == "--to" && hasNext` 的话，末尾悬空会被静默跳过、回落到默认值，
+// 用户看到的现象就是"参数没生效"。
+bool takeFlagValue(const QStringList &args, int *index, QString *value)
+{
+    const int next = *index + 1;
+    if (next >= static_cast<int>(args.size())) {
+        return false;
+    }
+    const QString candidate = args.at(next);
+    if (candidate.startsWith(QLatin1String("--"))) {
+        return false;
+    }
+    *index = next;
+    *value = candidate;
+    return true;
+}
+
 void printUsage()
 {
     say(QStringLiteral("用法:"));
     say(QStringLiteral("  studious.exe                                       # 启动 GUI"));
     say(QStringLiteral("  studious.exe --smoke \"文本\" --to zh --engine web    # 无界面冒烟"));
-    say(QStringLiteral("  可选: --to <lang> (默认 zh) / --engine <mock|web|llm|local-mt> (默认自动)"));
+    say(QStringLiteral("  可选: --to <lang> (默认取设置里的目标语言)"));
+    say(QStringLiteral("        --engine <auto|web|llm-cloud|llm-local|local-mt|mock> (默认 auto)"));
+    say(QStringLiteral("                 # auto = 按设置里的引擎优先级挑第一个可用的；mock 是假翻译，退出码 2"));
     say(QStringLiteral("        --local            # 用本机 llama.cpp（资产页下载的 runtime + GGUF）翻译"));
     say(QStringLiteral("        --local-model <文件名>  # 本地用哪个模型（不给 = 设置里的 / 第一个可用）"));
-    say(QStringLiteral("        --local-gpu <on|off>   # 本地后端是否用 GPU（默认 on；没装 vulkan 运行时自动回落 CPU）"));
+    say(QStringLiteral("        --local-gpu <on|off>   # 本地后端是否用 GPU（默认跟随设置的「GPU (Vulkan)」；没装 vulkan 运行时自动回落 CPU）"));
     say(QStringLiteral("        --switch-demo      # 同一进程内逐个换模型各翻一遍（验证热切换，建议配 --cache off）"));
     say(QStringLiteral("        --repeat <n>       # 同一请求连跑 n 次（验证本地引擎复用，配合 --cache off）"));
-    say(QStringLiteral("        --cache <on|off> (默认 on，走进程级 SQLite 翻译缓存)"));
+    say(QStringLiteral("        --cache <on|off> (默认取设置里的「启用缓存」，走进程级 SQLite 翻译缓存)"));
     say(QStringLiteral("        --provider <google|azure|mymemory|auto> (默认 auto，空列表=后端默认顺序)"));
     say(QStringLiteral("        --llm-base <url> --llm-key <key> --llm-model <model>"));
-    say(QStringLiteral("        （三项都不给时用 AppSettings::defaults() 的本机网关配置）"));
+    say(QStringLiteral("        （三项都不给时用设置里的网关配置，缺项回落内置默认值）"));
     say(QStringLiteral("  studious.exe --list-models [--llm-base <url> --llm-key <key>]"));
     say(QStringLiteral("                                     # 打印网关模型目录 + 思考等级，不开 GUI"));
     say(QStringLiteral("  studious.exe --assets-cli <manifest.json>"));
@@ -224,10 +370,16 @@ void printUsage()
 // （TranslateJob -> 工作线程 -> QtHttpClient + factory + TranslatorRouter）。
 int runSmoke(const QStringList &args)
 {
+    // 先读用户真实设置：缓存开关 / 目标语言 / LLM 连接参数 / 引擎优先级都从这里来。
+    // 以前这里用 AppSettings::defaults()，于是注册表里 cache\enabled=false、llm\timeoutMs=69000、
+    // engine\id=local-mt 全被无视，--smoke 打出来的是 cache=on / timeout=60000 / mock。
+    // 显式 flag 仍然优先：下面解析到的值会覆盖这里（见 --cache / --to / --llm-* / --local）。
+    const AppSettings settings = AppSettings::load();
+
     QString text;
-    QString to = QStringLiteral("zh");
-    QString from;   // 空 = auto；显式给出源语言能让小模型更可靠（避免照抄原文）
-    QString engine;
+    QString to = settings.dstLang.isEmpty() ? QStringLiteral("zh") : settings.dstLang;
+    QString from;   // 空 = 用 settings.srcLang（默认 auto）；显式给出源语言能让小模型更可靠
+    QString engine;   // --engine 的原样值（可能是界面 id / auto / 空）
     QString provider = QStringLiteral("auto");
     QString llmBase;
     QString llmKey;
@@ -235,13 +387,13 @@ int runSmoke(const QStringList &args)
     // 本地引擎：只改"从哪拿译文"，其余流程与云端完全一致（同一个 TranslateJob / Router）。
     bool useLocalEngine = false;
     // 本地模型与后端：命令行显式给了就覆盖设置。
-    // --local-gpu 默认 on（与界面的「GPU (Vulkan)」默认勾选一致）；没装 vulkan 运行时会自动回落 CPU。
+    // --local-gpu 没给时跟随设置里的「GPU (Vulkan)」；没装 vulkan 运行时仍会自动回落 CPU。
     QString localModelFile;   // 空 = 设置里的 / 第一个可用模型
-    bool localGpu = true;
+    bool localGpu = settings.localUseGpu;
     bool switchDemo = false;   // 同一进程内挨个换模型翻译：验证热切换
     int repeat = 1;
-    // 缓存开关默认与 GUI 一致（AppSettings::defaults() 里是 true）。
-    bool cacheEnabled = AppSettings::defaults().cacheEnabled;
+    // 缓存开关默认取设置（--cache on|off 给了就覆盖）。
+    bool cacheEnabled = settings.cacheEnabled;
 
     for (int i = 0; i < args.size(); ++i) {
         const QString &arg = args.at(i);
@@ -251,18 +403,42 @@ int runSmoke(const QStringList &args)
             if (hasNext && !args.at(i + 1).startsWith(QLatin1String("--"))) {
                 text = args.at(++i);
             }
-        } else if (arg == QLatin1String("--to") && hasNext) {
-            to = args.at(++i);
-        } else if (arg == QLatin1String("--from") && hasNext) {
-            from = args.at(++i);
-        } else if (arg == QLatin1String("--engine") && hasNext) {
-            engine = args.at(++i);
+        } else if (arg == QLatin1String("--to") || arg == QLatin1String("--from")
+                   || arg == QLatin1String("--engine")
+                   || arg == QLatin1String("--local-model")) {
+            // 这四个以前是 `&& hasNext`：末尾悬空会被静默跳过、回落默认值，看着像"设置没生效"。
+            // 现在缺值直接报错退出，并说清缺的是什么。
+            QString value;
+            const QString what = (arg == QLatin1String("--engine"))
+                                     ? QStringLiteral("引擎名")
+                                     : (arg == QLatin1String("--local-model"))
+                                           ? QStringLiteral("模型文件名")
+                                           : QStringLiteral("语言值");
+            if (!takeFlagValue(args, &i, &value)
+                || (what == QStringLiteral("语言值") && value.trimmed().isEmpty())) {
+                say(QStringLiteral("[FAIL] %1 缺少%2").arg(arg, what));
+                printUsage();
+                return 1;
+            }
+            if (arg == QLatin1String("--to")) {
+                to = value.trimmed();
+            } else if (arg == QLatin1String("--from")) {
+                from = value.trimmed();
+            } else if (arg == QLatin1String("--engine")) {
+                engine = value.trimmed();
+            } else {
+                localModelFile = value.trimmed();
+            }
         } else if (arg == QLatin1String("--local")) {
             useLocalEngine = true;
-        } else if (arg == QLatin1String("--local-model") && hasNext) {
-            localModelFile = args.at(++i).trimmed();
-        } else if (arg == QLatin1String("--local-gpu") && hasNext) {
-            const QString mode = args.at(++i).trimmed().toLower();
+        } else if (arg == QLatin1String("--local-gpu")) {
+            QString mode;
+            if (!takeFlagValue(args, &i, &mode)) {
+                say(QStringLiteral("[FAIL] --local-gpu 缺少值（on / off）"));
+                printUsage();
+                return 1;
+            }
+            mode = mode.trimmed().toLower();
             if (mode == QLatin1String("on") || mode == QLatin1String("1")
                 || mode == QLatin1String("true")) {
                 localGpu = true;
@@ -275,18 +451,34 @@ int runSmoke(const QStringList &args)
             }
         } else if (arg == QLatin1String("--switch-demo")) {
             switchDemo = true;
-        } else if (arg == QLatin1String("--repeat") && hasNext) {
+        } else if (arg == QLatin1String("--repeat")) {
+            QString value;
+            if (!takeFlagValue(args, &i, &value)) {
+                say(QStringLiteral("[FAIL] --repeat 缺少次数值（正整数）"));
+                printUsage();
+                return 1;
+            }
             bool ok = false;
-            const int parsed = args.at(++i).trimmed().toInt(&ok);
+            const int parsed = value.trimmed().toInt(&ok);
             if (!ok || parsed <= 0) {
-                say(QStringLiteral("[FAIL] --repeat 需要正整数，收到：") + args.at(i));
+                say(QStringLiteral("[FAIL] --repeat 需要正整数，收到：") + value);
                 return 1;
             }
             repeat = qBound(1, parsed, 20);   // 上限 20：冒烟是用来验行为的，不是压测
-        } else if (arg == QLatin1String("--provider") && hasNext) {
-            provider = args.at(++i);
-        } else if (arg == QLatin1String("--cache") && hasNext) {
-            const QString mode = args.at(++i).trimmed().toLower();
+        } else if (arg == QLatin1String("--provider")) {
+            if (!takeFlagValue(args, &i, &provider)) {
+                say(QStringLiteral("[FAIL] --provider 缺少值（google|azure|mymemory|auto）"));
+                printUsage();
+                return 1;
+            }
+        } else if (arg == QLatin1String("--cache")) {
+            QString mode;
+            if (!takeFlagValue(args, &i, &mode)) {
+                say(QStringLiteral("[FAIL] --cache 缺少值（on / off）"));
+                printUsage();
+                return 1;
+            }
+            mode = mode.trimmed().toLower();
             if (mode == QLatin1String("on") || mode == QLatin1String("1")
                 || mode == QLatin1String("true")) {
                 cacheEnabled = true;
@@ -297,12 +489,24 @@ int runSmoke(const QStringList &args)
                 say(QStringLiteral("[FAIL] --cache 只接受 on / off，收到：") + mode);
                 return 1;
             }
-        } else if (arg == QLatin1String("--llm-base") && hasNext) {
-            llmBase = args.at(++i);
-        } else if (arg == QLatin1String("--llm-key") && hasNext) {
-            llmKey = args.at(++i);
-        } else if (arg == QLatin1String("--llm-model") && hasNext) {
-            llmModel = args.at(++i);
+        } else if (arg == QLatin1String("--llm-base")) {
+            if (!takeFlagValue(args, &i, &llmBase)) {
+                say(QStringLiteral("[FAIL] --llm-base 缺少 URL"));
+                printUsage();
+                return 1;
+            }
+        } else if (arg == QLatin1String("--llm-key")) {
+            if (!takeFlagValue(args, &i, &llmKey)) {
+                say(QStringLiteral("[FAIL] --llm-key 缺少 Key"));
+                printUsage();
+                return 1;
+            }
+        } else if (arg == QLatin1String("--llm-model")) {
+            if (!takeFlagValue(args, &i, &llmModel)) {
+                say(QStringLiteral("[FAIL] --llm-model 缺少模型名"));
+                printUsage();
+                return 1;
+            }
         } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
             printUsage();
             return 0;
@@ -312,6 +516,13 @@ int runSmoke(const QStringList &args)
     // --switch-demo 演示的就是"本地引擎换模型"，没写 --local 也按本地理。
     if (switchDemo) {
         useLocalEngine = true;
+    }
+    // --local / --switch-demo 只可能配 llm 组件（本机 llama-server），auto 在这里没有意义：
+    // 直接定成 llm，省得 auto 先挑出 web 再被下面的本地覆盖块改掉（header 会前后矛盾）。
+    if (useLocalEngine
+        && (engine.trimmed().isEmpty()
+            || engine.trimmed().compare(QLatin1String("auto"), Qt::CaseInsensitive) == 0)) {
+        engine = QStringLiteral("llm");
     }
 
     if (text.trimmed().isEmpty()) {
@@ -326,17 +537,68 @@ int runSmoke(const QStringList &args)
         say(QStringLiteral("[FAIL] 切分后没有任何段落"));
         return 1;
     }
-    req.srcLang = from.isEmpty() ? QStringLiteral("auto") : from;
+    // 源语言：没给 --from 就用设置里的（默认 auto）。
+    const QString srcLang = from.isEmpty()
+                                ? (settings.srcLang.isEmpty() ? QStringLiteral("auto")
+                                                              : settings.srcLang)
+                                : from;
+
+    // 引擎 id 归一：界面 id（llm-cloud / llm-local）和 auto 都在这里落到后端 id 上。
+    // 解析失败（未知 id、auto 一个都挑不出来）直接 [FAIL] —— 以前这种情况会被 Router 的
+    // 兜底链悄悄换成 mock，输出【zh】原文、还 exit 0。
+    const EngineChoice engineChoice = resolveEngineId(engine, settings, srcLang, to);
+    if (engineChoice.backendId.isEmpty()) {
+        say(QStringLiteral("[FAIL] ") + engineChoice.error);
+        printUsage();
+        return 1;
+    }
+    // llm-local 等价于 --local：拉起本机 llama-server，再把 baseUrl 塞进 req.llm。
+    if (engineChoice.forceLocal) {
+        useLocalEngine = true;
+    }
+    // mock 是否真的在跑，等 --local 覆盖之后再判定（见下面的 [WARN]）：--local --engine mock
+    // 会被强制改成 llm 真跑本地 llama-server，那时不该再打 mock 的警告。
+
+    req.srcLang = srcLang;
     req.dstLangs = QStringList{to};
-    req.engineId = engine;
+    // auto 模式**不**写死 preferredEngine：让 Router 顺着优先级链自己挑、并且运行时
+    // 失败还能换下一个（写死等于关掉降级）。显式 --engine 才钉死单个引擎。
+    // 注意 --local / llm-local 仍然要钉 llm：那是用户对"用本机 llama-server"的明确要求。
+    if (!engineChoice.autoPicked || engineChoice.forceLocal) {
+        req.engineId = engineChoice.backendId;
+        engine = engineChoice.backendId;
+    } else {
+        // auto 还要把「设置里的界面优先级」翻成 Router 认的 id，否则 TranslateJob
+        // 会用它自己的兜底链，跟界面上拖出来的顺序不一致。
+        QStringList uiOrder = settings.enginePriority;
+        if (uiOrder.isEmpty()) {
+            uiOrder = QStringList{QStringLiteral("llm-local"), QStringLiteral("local-mt"),
+                                  QStringLiteral("llm-cloud"), QStringLiteral("web")};
+        }
+        QStringList chain;
+        for (const QString &uiId : uiOrder) {
+            EngineChoice mapped;
+            if (!mapUiEngineId(uiId, &mapped)) {
+                continue;
+            }
+            // mock 不在生产链里；llm-local 与 llm-cloud 都落到后端的 "llm"，
+            // 去重后只留一个（本地优先时先命中它，靠 --local 覆盖才真正走本地）。
+            if (mapped.backendId == QLatin1String("mock")
+                || chain.contains(mapped.backendId)) {
+                continue;
+            }
+            chain << mapped.backendId;
+        }
+        req.priority = chain;
+    }
 
     // --provider auto（或空）= 空列表 = 后端默认顺序 google -> mymemory。
     req.webProviders = (provider.isEmpty() || provider == QLatin1String("auto"))
                            ? QStringList{}
                            : QStringList{provider};
 
-    // LLM 三项未给出时回落到内置默认网关（保证 --engine llm 开箱可用）。
-    req.llm = AppSettings::defaults().llm;
+    // LLM 连接参数取自用户设置（地址 / key / 模型 / 超时 / 批量），--llm-* 显式给了就覆盖。
+    req.llm = settings.llm;
     if (!llmBase.isEmpty()) {
         req.llm.baseUrl = llmBase;
     }
@@ -359,7 +621,7 @@ int runSmoke(const QStringList &args)
         demoRotation = LocalEngine::availableModels();
         // 起点：--local-model > 设置 > 目录顺序第一个。
         const QString preferred =
-            localModelFile.isEmpty() ? AppSettings::load().localModelFileName : localModelFile;
+            localModelFile.isEmpty() ? settings.localModelFileName : localModelFile;
         if (!preferred.isEmpty() && demoRotation.contains(preferred)) {
             demoRotation.removeAll(preferred);
             demoRotation.prepend(preferred);
@@ -367,7 +629,7 @@ int runSmoke(const QStringList &args)
         if (demoRotation.size() < 2) {
             say(QStringLiteral("[FAIL] --switch-demo 需要至少 2 个已安装模型（当前 %1 个）")
                     .arg(demoRotation.size()));
-            say(QStringLiteral("[OK] exit 1"));
+            say(QStringLiteral("[DONE] exit 1"));
             return 1;
         }
         demoRotation = demoRotation.mid(0, 3);   // 最多 3 个：演示不是压测
@@ -376,7 +638,7 @@ int runSmoke(const QStringList &args)
     // 普通模式用哪个模型：--local-model > 设置 > 空（空 = LocalEngine 自己取第一个可用）。
     // switchDemo 模式下由 demoRotation 逐轮决定，这里不用管。
     const QString localModelChoice = localModelFile.isEmpty() && !switchDemo
-                                         ? AppSettings::load().localModelFileName
+                                         ? settings.localModelFileName
                                          : localModelFile;
 
     if (useLocalEngine) {
@@ -406,27 +668,43 @@ int runSmoke(const QStringList &args)
     req.cache = sharedCache();
     req.cacheEnabled = cacheEnabled;
 
+    // mock 只在显式要的时候才会留到这里（候选链与 auto 都已剔除它），但必须让人一眼看出
+    // 输出是假的。它在 --local 覆盖之后判定：--local --engine mock 会被强制改成 llm 真跑
+    // 本地 llama-server，那就不该再报 mock。
+    const bool mockActive = req.engineId == QLatin1String("mock");
+    if (mockActive) {
+        say(QStringLiteral("[WARN] 当前为 mock 引擎，输出是【语言码】原文的假翻译"));
+    }
+
     say(QStringLiteral("=== Studious 前端冒烟 ==="));
+    // auto 时把"按设置挑中的界面 id"一并打出来，否则只看到 engine=local-mt 会以为设置没读。
+    const QString engineShown =
+        engineChoice.autoPicked
+            ? QStringLiteral("%1 (auto: %2)").arg(engine, engineChoice.uiId)
+            : (engine.isEmpty() ? QStringLiteral("auto") : engine);
     say(QStringLiteral("engine=%1  to=%2  src=%3  provider=%4  paragraphs=%5")
-            .arg(engine.isEmpty() ? QStringLiteral("auto") : engine,
+            .arg(engineShown,
                  to,
                  req.srcLang,
                  req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
                                             : req.webProviders.join(QLatin1Char(',')))
             .arg(req.paragraphs.size()));
-    // 本地模式下 baseUrl 要等 ensureStarted 才知道（端口是启动时挑的），别在这里写死"未配置"。
-    const QString llmBaseShown =
-        req.llm.baseUrl.isEmpty()
-            ? (useLocalEngine ? QStringLiteral("<本地 llama-server，启动后分配端口>")
-                              : QStringLiteral("<未配置>"))
-            : req.llm.baseUrl;
-    say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4  think=%5")
-            .arg(req.llm.model.isEmpty() ? QStringLiteral("<未配置>") : req.llm.model,
-                 llmBaseShown,
-                 QString::number(req.llm.timeoutMs),
-                 QString::number(req.llm.temperature),
-                 req.llm.reasoningEffort.isEmpty() ? QStringLiteral("<默认>")
-                                                   : req.llm.reasoningEffort));
+    if (useLocalEngine) {
+        // 本地模式的真实 baseUrl 要等 ensureStarted 才知道（端口是启动时挑的）。
+        // 以前这里打的是 req.llm.baseUrl —— 那时还是网关 3065（覆盖发生在启动之后），
+        // 于是 header 显示 3065、真正请求打 18080，看着像"本地引擎没生效"。
+        // 现在 header 只说"本地 llama-server"，真实地址交给启动后的 [local] baseUrl=... 那行。
+        say(QStringLiteral("llm=local (llama-server)  timeout=%1 ms  temperature=%2")
+                .arg(QString::number(req.llm.timeoutMs), QString::number(req.llm.temperature)));
+    } else {
+        say(QStringLiteral("llm=%1 @ %2  timeout=%3 ms  temperature=%4  think=%5")
+                .arg(req.llm.model.isEmpty() ? QStringLiteral("<未配置>") : req.llm.model,
+                     req.llm.baseUrl.isEmpty() ? QStringLiteral("<未配置>") : req.llm.baseUrl,
+                     QString::number(req.llm.timeoutMs),
+                     QString::number(req.llm.temperature),
+                     req.llm.reasoningEffort.isEmpty() ? QStringLiteral("<默认>")
+                                                       : req.llm.reasoningEffort));
+    }
     if (useLocalEngine) {
         say(QStringLiteral("local=%1  gpu=%2")
                 .arg(localModelChoice.isEmpty() ? QStringLiteral("<第一个可用模型>")
@@ -477,7 +755,7 @@ int runSmoke(const QStringList &args)
                     + (startError.isEmpty() ? QStringLiteral("本地引擎启动失败（未给出原因）")
                                             : startError));
                 localEngine.shutdown();   // 双保险：失败路径也绝不留残留进程
-                say(QStringLiteral("[OK] exit 1"));
+                say(QStringLiteral("[DONE] exit 1"));
                 return 1;
             }
 
@@ -497,6 +775,11 @@ int runSmoke(const QStringList &args)
 
             // 每一轮都重新取快照：热切换后端口可能变，旧快照会指向已死的服务。
             req.llm.baseUrl = localEngine.baseUrl();
+            // model 段进缓存键的模型指纹 —— 写成固定的 "local" 会让 0.5B 与 1.5B
+            // 共用一条缓存，换模型后直接返回上一个模型的译文。这里用真的 gguf 文件名。
+            if (!localEngine.currentModel().isEmpty()) {
+                req.llm.model = localEngine.currentModel();
+            }
         }
 
         TranslateJob job;
@@ -563,7 +846,12 @@ say(QStringLiteral("译文:"));
                 .arg(stopTimer.elapsed()));
     }
 
-    say(exitCode == 0 ? QStringLiteral("[OK] exit 0") : QStringLiteral("[OK] exit 1"));
+    // mock 输出的是【语言码】原文的假译文：流程再顺畅也不算成功。
+    // 退出码 2 = "跑完了但是假的"，跟 1（真失败）区分开，脚本里能一眼分辨。
+    if (exitCode == 0 && mockActive) {
+        exitCode = 2;
+    }
+    say(QStringLiteral("[DONE] exit %1").arg(exitCode));
     return exitCode;
 }
 
@@ -590,8 +878,9 @@ int runListModels(const QStringList &args)
         }
     }
 
-    // 与 --smoke 同一约定：三项没给就用 AppSettings::defaults() 的本机网关配置。
-    studious::config::LlmConfig cfg = AppSettings::defaults().llm;
+    // 与 --smoke 同一约定：三项没给就用设置里的网关配置（--llm-* 显式给了才覆盖）。
+    // 以前这里是 defaults()，于是用户把网关改到别的端口后，--list-models 还在问 3065。
+    studious::config::LlmConfig cfg = AppSettings::load().llm;
     if (!llmBase.isEmpty()) {
         cfg.baseUrl = llmBase;
     }
@@ -649,7 +938,7 @@ int runListModels(const QStringList &args)
         }
     }
 
-    say(QStringLiteral("[OK] exit 0"));
+    say(QStringLiteral("[DONE] exit 0"));
     return 0;
 }
 
@@ -1018,9 +1307,14 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     auto *backend = new studious::ui::AppBackend(sharedCache(), &app);
 
+    // --ui-shot 是自动化工具：允许和已开着的界面并存，也不应该去 ping 已有实例抢焦点。
+    // 所以它必须绕过下面的单实例判定 —— 以前它写判定之后，只要已经有一个 studious 在跑，
+    // 截图命令就会静默 exit 0 却什么都不产出。
+    const bool uiShotMode = hasFlag(argc, argv, "--ui-shot");
+
     // 第二个实例：构造函数里已经抢过单实例名并 ping 了在跑的那个进程，
     // 这里直接退出 —— 别加载 QML、别建窗口、别动资产目录。
-    if (backend->duplicateInstance()) {
+    if (!uiShotMode && backend->duplicateInstance()) {
         return 0;
     }
 
@@ -1082,7 +1376,7 @@ int main(int argc, char *argv[])
 
     // ---- 开发用截图：studious.exe --ui-shot out.png [--ui-page N] [--ui-size WxH] ----
     // 拍完就退出，不进事件循环。给 UI 走查 / 与设计稿比对用。
-    if (hasFlag(argc, argv, "--ui-shot")) {
+    if (uiShotMode) {
         const QStringList all = QCoreApplication::arguments();
         const auto valueAfter = [&all](const char *flag) {
             const int index = all.indexOf(QString::fromLatin1(flag));
@@ -1126,13 +1420,38 @@ int main(int argc, char *argv[])
         QTimer::singleShot(700, &loop, &QEventLoop::quit);
         loop.exec();
 
+        // STUDIOUS_UI_CALL=<Q_INVOKABLE>：走查"点下去之后"的样子用（通知条、弹窗、
+        // 列表展开态）。只在这个截图分支里生效，正式启动路径完全不看这个变量。
+        const QByteArray uiCall = qgetenv("STUDIOUS_UI_CALL");
+        if (!uiCall.isEmpty()) {
+            const QString uiArg = QString::fromUtf8(qgetenv("STUDIOUS_UI_ARG"));
+            QEventLoop callLoop;
+            QMetaObject::invokeMethod(backend,
+                                      uiCall.constData(),
+                                      Qt::DirectConnection,
+                                      Q_ARG(QString, uiArg));
+            QTimer::singleShot(1200, &callLoop, &QEventLoop::quit);
+            callLoop.exec();
+        }
+
         const QImage shot = window->grabWindow();
         const bool saved = !shot.isNull() && shot.save(outPath);
-        std::printf("[ui-shot] %s -> %s (%dx%d)\n",
+        // 两个尺寸都要打：--ui-size 给的是逻辑像素，grabWindow() 出的是物理像素。
+        // 高 DPI 下二者不等（DPR 1.5 时 --ui-size 1280x800 存出来的是 1920x1200），
+        // 以前只打后者，看起来就像 --ui-size 被忽略了。
+        const qreal dpr = window->devicePixelRatio();
+        const int pixelWidth =
+            shot.isNull() ? static_cast<int>(width * dpr + 0.5) : shot.width();
+        const int pixelHeight =
+            shot.isNull() ? static_cast<int>(height * dpr + 0.5) : shot.height();
+        std::printf("[ui-shot] %s -> %s (%dx%d @%.1fx, logical %dx%d)\n",
                     saved ? "saved" : "FAILED",
                     outPath.toUtf8().constData(),
-                    shot.width(),
-                    shot.height());
+                    pixelWidth,
+                    pixelHeight,
+                    static_cast<double>(dpr),
+                    width,
+                    height);
         return saved ? 0 : 1;
     }
 

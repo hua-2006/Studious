@@ -43,16 +43,21 @@ std::unique_ptr<core::ITranslator> makeLlmTranslator(const config::LlmConfig &cf
 std::unique_ptr<core::ITranslator> makeLocalMtTranslator();
 
 // 装配默认组件集合，顺序即 Router 的默认优先级：
-//   mock -> web -> llm -> local-mt
+//   local-mt -> llm -> web
+//
+// mock（假译文引擎）默认不注册：它只用于自测，任何生产路径都不该出现在装配里。
+// 需要它时必须显式传 includeMock = true（目前只有 selftest 这么做）。
 //
 // 注意：http 的生命周期必须长于返回的组件集合，
 // 且必须与使用它们的线程一致（QNetworkAccessManager 是线程亲和的）。
-router::TranslatorList makeDefaultTranslators(net::IHttpClient &http);
+router::TranslatorList makeDefaultTranslators(net::IHttpClient &http, bool includeMock = false);
 
 // 带配置版本：llmCfg 为空配置时等同于上一个重载（llm 组件仍会注册，但处于未就绪状态）。
 // webProviders 为空时 web 组件走默认来源顺序。
+// includeMock 语义同上：默认不注册 mock。
 router::TranslatorList makeDefaultTranslators(net::IHttpClient &http,
                                               const config::LlmConfig &llmCfg,
-                                              const QStringList &webProviders = {});
+                                              const QStringList &webProviders = {},
+                                              bool includeMock = false);
 
 } // namespace studious::factory

@@ -543,3 +543,59 @@ msedge --headless=new --virtual-time-budget=1500 --window-size=1440,900 --screen
   selftest ALL CORE TESTS PASSED；单实例实测通过。
 - 仍留 Stub：AppearancePage 6 个（字体三处、主窗口卡级、布局密度、状态栏信息密度、语言显示名），
   HotkeysPage 1 个（平台层没有全局热键能力）。
+
+## 测试发现的问题与六项修复（2026-11-07）
+
+四个只读子代理（运行时矩阵 / AppBackend 状态机 / QML 走查 / 后端库审查）出了一份问题清单，
+用户对六处方向性问题全选推荐项，本轮按此落地。
+
+### 决策
+1. mock 彻底退出生产装配：只有 `--engine mock` 与 `backend_selftest` 才注册。
+2. 引擎 id 收敛成唯一换算：`toUiEngineId()` / `toRouterEngineId()` / `toRouterPriority()`。
+3. 缓存键加语义白名单 + 模型指纹。
+4. auto 选路与运行时失败都降级，本地优先。
+5. 错误反馈走 Main.qml 顶层的全局通知条（订阅 `errorRaised`）。
+6. 资产清单从"exe 旁边可写的 json"改成**编译进 qrc**。
+
+### 改动要点
+- `frontend/src/AppBackend.cpp`：默认优先级 `{llm-local, local-mt, llm-cloud, web}`；`translate()` /
+  `refreshEngineStatuses()` 一律经 `toRouterPriority()`；`saveSettings()` 改存**界面 id**
+  （原来存 Router 的 "llm"，llm-local 会被折成空串、重启回自动）；`setStatus(text, true)` 里统一
+  `emit errorRaised(...)` 并带去重成员 `m_lastNotifiedError`；下载 worker 捕获 `QPointer` 防 UAF；
+  `restartApplication()` 先 `m_desktop.shutdown()` 再 `startDetached`（否则新进程 ping 到旧实例自杀）。
+- `frontend/src/AppSettings.cpp`：`localGpuLayers` 的 -1 往返修复 —— native 后端把 -1 写成
+  `REG_DWORD 0xFFFFFFFF`，`.toInt()` 溢出成 0，而 0 = "一层都不卸载"，"自动"静默变成纯 CPU。
+  改成 `toLongLong()` 读、按 `quint32` 还原再夹紧。
+- `frontend/CMakeLists.txt`：`qt_add_resources(... "asset_manifest" PREFIX "/assets")`；
+  `findManifestPath()` 先读 `:/assets/manifest.json`，只有 `STUDIOUS_DEV_MANIFEST=1` 才回退磁盘。
+- `frontend/src/TranslateJob.cpp`：`includeMock = (engineId == "mock")`；兜底链 `{local-mt, llm, web}`。
+- `frontend/src/main.cpp`：CLI 走 `AppSettings::load()`；`resolveEngineId()` 认界面 id；
+  **auto 不写死 preferredEngine**（写死等于关掉降级），只把优先级链翻成 Router id 传给 `job.priority`；
+  `--local` 时 `req.llm.model` 用真实 gguf 名（原来写死 "local"，0.5B / 1.5B 共用一条缓存）；
+  `--ui-shot` 跳过重复实例判定；新增 `STUDIOUS_UI_CALL` / `STUDIOUS_UI_ARG`（仅截图分支，
+  用来拍"点下去之后"的界面，如通知条）。
+- 后端：`TranslatorRouter::translate()` 改成按 priority 逐个尝试（可用性失败换下一个、语义失败立刻停，
+  判据是 error 文案关键字）；`Factory` 加 `includeMock=false`；`QtHttpClient` 换
+  `LoopbackAwareProxyFactory`（回环一律 NoProxy）；`LlmTranslator::cacheTag()` 4 段
+  （id | 模型指纹 | 语义摘要 | baseUrl）；`WebTranslator` 自带 cacheTag（来源集合）；批量路径
+  与单段共用 `buildChatRequest()`、输入改 JSON 数组（段内换行免疫）、整次调用一个 deadline。
+- QML：`NoticeBar.qml`（新）+ Main.qml 顶层订阅；5 处 `AppToggle` 补回灌
+  `onToggled: { backend.x = checked; checked = backend.x }`；最小窗口 1120×720；
+  翻译页正文面板最小高度 120、状态条换横向 ScrollView；语言/引擎名不再露裸 id。
+
+### 实测
+- `--smoke`（不带 --engine）不再落到 mock：`engine=web (auto: web)`，耗时 5795 ms，exit 0。
+- `--engine mock` → `[WARN] …假翻译` + `[DONE] exit 2`（以前 exit 0，看起来像成功）。
+- 坏代理 `STUDIOUS_HTTP_PROXY=http://127.0.0.1:1`：`--local` 照常出译文（回环不走代理），
+  `--engine web` 明确失败，不带 --engine 时 web 失败后**自动降级到 local-mt** 出译文。
+- 缓存：0.5B 与 1.5B 同一句都 `命中=0/1`（模型指纹生效），同模型第二次 `命中=1/1`。
+- 单实例：第二个实例 211 ms 内退出，第一个仍活着。
+- `backend_selftest.exe` → `ALL CORE TESTS PASSED`。
+- 截图：`notice_bar.png`（全局通知条）、`min_translate.png` / `min_assets.png`（1120×720 不再塌陷）。
+
+### 坑
+- 只把 mock 从 Router 默认链删掉还不够：`TranslateJob` 装配时不注册 mock，`preferredEngine="mock"`
+  会报"引擎不存在"，所以 `includeMock` 必须跟着 engineId 走。
+- CLI 的 auto 一旦把 `req.engineId` 写成选中的那个，Router 就当成"强制引擎"、失败不降级 ——
+  auto 必须留空 + 只给 priority。
+- `QNetworkProxyFactory::setProxyFactory` 不接管所有权，工厂要以 NAM 为 parent。

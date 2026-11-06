@@ -149,8 +149,15 @@ AppSettings AppSettings::load()
     s.localThreads =
         clampedInt(store.value(key("llm/localThreads"), def.localThreads).toInt(), 0, 64);
     // -1 是合法值（= 自动，跟随 localUseGpu），下界就是 -1。
-    s.localGpuLayers =
-        clampedInt(store.value(key("llm/localGpuLayers"), def.localGpuLayers).toInt(), -1, 999);
+    // -1 在 QSettings 的 native 后端里会写成 REG_DWORD 0xFFFFFFFF，读回来是
+    // unsigned int，直接 toInt() 溢出成 0 —— 而 0 的语义是"一层都不卸载（纯 CPU）"，
+    // 于是「自动」静默变成「不用 GPU」。先按 64 位读、再按 32 位有符号还原。
+    bool layersOk = false;
+    const qint64 rawLayers =
+        store.value(key("llm/localGpuLayers"), def.localGpuLayers).toLongLong(&layersOk);
+    const int restoredLayers =
+        layersOk ? static_cast<int>(static_cast<quint32>(rawLayers)) : def.localGpuLayers;
+    s.localGpuLayers = clampedInt(restoredLayers, -1, 999);
     // 额外参数是自由文本：空串合法（= 不加），所以不走 textOr，只 trim。
     s.localExtraArgs = store.value(key("llm/localExtraArgs")).toString().trimmed();
 

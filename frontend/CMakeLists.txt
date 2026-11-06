@@ -74,6 +74,7 @@ qt_add_qml_module(studious
         qml/components/AppTextField.qml
         qml/components/AppComboBox.qml
         qml/components/Stub.qml
+        qml/components/NoticeBar.qml
         qml/pages/TranslatePage.qml
         qml/pages/HotkeysPage.qml
         qml/pages/ConfigPage.qml
@@ -171,3 +172,14 @@ qt_add_resources(studious "translations"
                  PREFIX "/i18n"
                  BASE "${CMAKE_CURRENT_BINARY_DIR}"
                  FILES ${STUDIOUS_QM_FILES})
+
+# 资产清单编译进二进制（:  /assets/manifest.json）。
+#
+# 为什么不是运行时读 exe 旁边的 manifest.json：那个目录对所有本进程的用户都可写，
+# 能改清单的人就能把下载 URL 与 sha256 一起换掉，让客户端下载并执行任意
+# llama-server.exe —— 这是代码执行级别的口子。编译进 qrc 之后，改清单等于改 exe。
+# 开发期想反复调清单时设 STUDIOUS_DEV_MANIFEST=1 才回退到磁盘那份（见 AppBackend）。
+qt_add_resources(studious "asset_manifest"
+                 PREFIX "/assets"
+                 BASE "${CMAKE_CURRENT_SOURCE_DIR}/../backend/asset"
+                 FILES "${CMAKE_CURRENT_SOURCE_DIR}/../backend/asset/manifest.json")

@@ -23,6 +23,10 @@ public:
     WebTranslator(net::IHttpClient &http, QVector<std::shared_ptr<IWebAdapter>> adapters);
 
     QString id() const override;
+
+    // 缓存维度：id() 对所有来源都是 "web"，不足以区分 google / mymemory。
+    // 这里把实际装配的来源顺序编进去，来源一变 key 就变。
+    QString cacheTag() const override;
     bool isReady() const override;
     core::ResolveResult resolve(const QString &src, const QString &dst) const override;
     QStringList supportedTargetLangs() const override;

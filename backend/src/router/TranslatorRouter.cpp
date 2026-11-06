@@ -9,6 +9,7 @@
 #include <QMutexLocker>
 #include <QSet>
 
+#include <initializer_list>
 #include <utility>
 
 namespace studious::router {
@@ -30,6 +31,78 @@ void warnContradictionOnce(const QString &engineId, const QString &reason)
     qWarning("engine %s: isReady() but resolve() refused: %s",
              qUtf8Printable(engineId),
              qUtf8Printable(reason));
+}
+
+// 文本里是否出现任意一个关键字（不区分大小写）。
+bool containsAny(const QString &text, std::initializer_list<QLatin1String> needles)
+{
+    for (const QLatin1String needle : needles) {
+        if (text.contains(needle, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 引擎这一次失败属于"可用性类"（换下一个引擎还有救）还是"语义类"（换谁都一样）？
+//
+// 为什么只能看文本：core::TranslateOutcome 只有 ok / byLang / error / warning /
+// passthrough 五个字段（见 contract/Types.h），没有 retryable / httpStatus 这类分类字段；
+// 适配器层的 httpStatus 在 WebTranslator / LlmTranslator 里已经被拍平成 error 文案了。
+// 而 i18n::s() 是"取词时就按当前 locale 定型"的，所以关键字表同时收录中英两种措辞。
+//
+// 语义类 = 换个引擎结果还是同样失败：
+//   源语言 == 目标语言、目标语言无效 / 未收到、语言对不支持、请求 URL 非法、
+//   用户主动取消（不是失败，别换一家再来一遍）、内容被引擎拒绝（4xx）。
+// 可用性类 = 可能是暂时的或只是这一家的问题：
+//   网络错误 / 连接失败 / 超时、HTTP 429 与 5xx、本地服务或模型没起来、
+//   引擎内部临时错误（响应解析失败、空译文、重试预算耗尽……）。
+//
+// 认不出来的原因按"可用性"处理：宁可多花一次请求，也别让一次偶发错误拖垮整单。
+bool isAvailabilityFailure(const core::TranslateOutcome &r)
+{
+    const QString text = r.error.trimmed();
+    if (text.isEmpty()) {
+        // 说失败却没给原因：当成可用性问题，换下一个引擎再试。
+        return true;
+    }
+
+    return !containsAny(text,
+                        {
+                            // 源语言与目标语言相同
+                            QLatin1String("源语言与目标语言相同"),
+                            QLatin1String("source and target language"),
+                            QLatin1String("target language is the same"),
+                            // 目标语言非法 / 缺失
+                            QLatin1String("目标语言无效"),
+                            QLatin1String("invalid target language"),
+                            QLatin1String("未收到目标语言"),
+                            QLatin1String("received no target language"),
+                            QLatin1String("未指定目标语言"),
+                            QLatin1String("no target language specified"),
+                            // 语言对不支持（模型词表里没有这种 token）
+                            QLatin1String("不支持"),
+                            QLatin1String("not support"),
+                            QLatin1String("unsupported"),
+                            QLatin1String("无法确定源语言"),
+                            QLatin1String("could not determine the source language"),
+                            QLatin1String("cannot determine the source language"),
+                            QLatin1String("语言对不可用"),
+                            QLatin1String("language pair is unavailable"),
+                            // 请求参数非法
+                            QLatin1String("请求 url 无效"),
+                            QLatin1String("invalid request url"),
+                            // 用户主动取消
+                            QLatin1String("已取消"),
+                            QLatin1String("cancelled"),
+                            QLatin1String("canceled"),
+                            // 内容被引擎拒绝
+                            QLatin1String("内容审核"),
+                            QLatin1String("content policy"),
+                            QLatin1String("content rejected"),
+                            QLatin1String("请求被拒绝"),
+                            QLatin1String("rejected the request"),
+                        });
 }
 
 }   // namespace
@@ -67,6 +140,9 @@ QStringList TranslatorRouter::engineIds() const
 core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest &req)
 {
     core::TranslateOutcome out;
+
+    // 每次调用都重新统计：缓存没开时它就是全零（与旧行为一致，旧代码每条返回路径都会重置）。
+    m_lastCacheReport = CacheReport{};
 
     const QString src = core::LanguageRegistry::normalize(
         req.srcLang.trimmed().isEmpty() ? QStringLiteral("auto") : req.srcLang);
@@ -126,7 +202,6 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         out.warning = i18n::s("源语言与目标语言相同，已原样返回（未翻译）。",
                               "Source and target languages are the same; the text was returned "
                               "unchanged without translation.");
-        m_lastCacheReport = CacheReport{};
         return out;
     }
 
@@ -151,7 +226,9 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
                              .join(QStringLiteral(", "))});
     };
 
-    core::ITranslator *chosen = nullptr;
+    // 候选引擎（按 priority 顺序）。这里不再只挑一个：运行期失败还要能往下一个走。
+    std::vector<core::ITranslator *> candidates;
+    bool forced = false;   // 用户指定了引擎：没有"下一个"，失败原样上报
 
     const QString wanted = req.preferredEngine.trimmed();
     if (!wanted.isEmpty()) {
@@ -184,12 +261,15 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
             return out;
         }
 
-        chosen = t;
+        candidates.push_back(t);
+        forced = true;
     } else {
         QStringList reasons;
         for (const QString &id : m_priority) {
             core::ITranslator *t = findById(id);
             if (t == nullptr) {
+                // priority 里写了但没注册：这条只是"跳过并继续下一个"，绝不让整单失败
+                // （典型场景：前端沿用了旧的 {"mock", ...} 列表，而 mock 已退出生产装配）。
                 reasons << i18n::sf("%1: 该引擎未注册", "%1: this engine is not registered", {id});
                 continue;
             }
@@ -211,11 +291,10 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
                                     {id, bad.join(QStringLiteral(", "))});
                 continue;
             }
-            chosen = t;
-            break;
+            candidates.push_back(t);
         }
 
-        if (chosen == nullptr) {
+        if (candidates.empty()) {
             out.error = i18n::sf("所有翻译引擎均不可用 — %1",
                                  "No translation engine is available — %1",
                                  {reasons.isEmpty()
@@ -225,32 +304,72 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         }
     }
 
-    const QString engineId = chosen->id();
+    // 逐个尝试候选引擎：
+    //   成功        -> 立刻返回（引擎自带的 warning 会被源语言提示覆盖，与旧行为一致）
+    //   可用性失败  -> 记一行原因，继续下一个
+    //   语义失败    -> 立刻返回（换引擎也没意义）
+    QStringList failures;           // 只收集"可用性类"失败，格式 "id：原因"
+    core::TranslateOutcome last;    // 最后一次失败结果，用来保留已拿到的部分译文
 
-    // 没开缓存：保持原样，一次调用交出去。
-    if (!isCacheEnabled()) {
-        out = chosen->translate(req.paragraphs, src, dsts, req.options);
+    for (core::ITranslator *engine : candidates) {
+        core::TranslateOutcome attempt = runEngine(engine, req, src, dsts);
+
         // 同语言的目标语言原样回填（它们根本没走引擎）。
         for (auto it = passthrough.constBegin(); it != passthrough.constEnd(); ++it) {
-            out.byLang.insert(it.key(), it.value());
+            attempt.byLang.insert(it.key(), it.value());
         }
-        if (!out.ok) {
-            const QString inner =
-                out.error.isEmpty() ? i18n::s("未知错误", "unknown error") : out.error;
-            out.error = QStringLiteral("[%1] %2").arg(engineId, inner);
-        } else {
-            out.warning = sourceWarning;
+
+        if (attempt.ok) {
+            attempt.warning = sourceWarning;
+            return attempt;
         }
-        m_lastCacheReport = CacheReport{};
-        return out;
+
+        const QString inner = attempt.error.trimmed().isEmpty()
+                                  ? i18n::s("未知错误", "unknown error")
+                                  : attempt.error;
+
+        // 语义类失败不降级；强制引擎也没有"下一个"——两者都原样上报。
+        if (forced || !isAvailabilityFailure(attempt)) {
+            attempt.error = QStringLiteral("[%1] %2").arg(engine->id(), inner);
+            return attempt;
+        }
+
+        qWarning("router: engine %s failed (%s), trying next",
+                 qUtf8Printable(engine->id()),
+                 qUtf8Printable(inner));
+        failures << i18n::sf("%1：%2", "%1: %2", {engine->id(), inner});
+        last = attempt;
+    }
+
+    // 全部失败：把每个引擎的原因聚合成一行，前端直接展示即可。
+    core::TranslateOutcome failed = last;
+    failed.ok = false;
+    failed.warning.clear();
+    failed.error = i18n::sf("所有可用引擎都失败了：%1",
+                            "All available engines failed: %1",
+                            {failures.join(i18n::s("；", "; "))});
+    return failed;
+}
+
+core::TranslateOutcome TranslatorRouter::runEngine(core::ITranslator *engine,
+                                                   const core::TranslateRequest &req,
+                                                   const QString &src,
+                                                   const QStringList &dsts)
+{
+    // 没开缓存：保持原样，一次调用交出去。
+    if (!isCacheEnabled()) {
+        return engine->translate(req.paragraphs, src, dsts, req.options);
     }
 
     // 开了缓存：逐段先查，只把未命中的送出去翻译。
     // 关键收益：全命中时一次网络请求都不发（LLM 单次往返约 1.1s，省一次就是省一秒）。
-    const QString cacheTag = chosen->cacheTag();
-    m_lastCacheReport = CacheReport{};
+    //
+    // 统计在多次尝试之间累加（降级前后一共查了多少段、命中多少段），
+    // 这样界面上"命中 3/5"在降级发生后依然说得通。
+    const QString cacheTag = engine->cacheTag();
     m_lastCacheReport.used = true;
 
+    core::TranslateOutcome out;
     QStringList errors;
 
     for (const QString &dst : dsts) {
@@ -283,11 +402,12 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
 
         if (!missTexts.isEmpty()) {
             const core::TranslateOutcome sub =
-                chosen->translate(missTexts, src, QStringList{dst}, req.options);
+                engine->translate(missTexts, src, QStringList{dst}, req.options);
             if (!sub.ok) {
-                const QString inner =
-                    sub.error.isEmpty() ? i18n::s("未知错误", "unknown error") : sub.error;
-                errors << QStringLiteral("[%1] %2").arg(engineId, inner);
+                // 引擎前缀由调用方统一加（降级聚合时格式才统一）。
+                errors << (sub.error.trimmed().isEmpty()
+                               ? i18n::s("未知错误", "unknown error")
+                               : sub.error);
             }
             const QStringList got = sub.byLang.value(dst);
             for (int k = 0; k < missTexts.size(); ++k) {
@@ -303,14 +423,7 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         out.byLang.insert(dst, merged);
     }
 
-    for (auto it = passthrough.constBegin(); it != passthrough.constEnd(); ++it) {
-        out.byLang.insert(it.key(), it.value());
-    }
-
     out.ok = errors.isEmpty();
-    if (out.ok && !sourceWarning.isEmpty()) {
-        out.warning = sourceWarning;
-    }
     if (!out.ok) {
         out.error = errors.join(i18n::s("；", "; "));
     }

@@ -475,6 +475,8 @@ private:
     bool m_running = false;
     QString m_statusText;
     bool m_statusIsError = false;
+    // 上一次已经弹过通知条的错误文本：setStatus 里用它去重，避免同一句话反复弹。
+    QString m_lastNotifiedError;
     QString m_statusWarning;
 
     QStringList m_lastParagraphs;

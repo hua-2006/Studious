@@ -43,6 +43,10 @@ Item {
     readonly property int hDivider: 22      // .tr-toolbar 竖分隔高
     readonly property int hMenuItem: 40     // .menu-item 高
     readonly property int paneFontSize: 16  // textarea.src 1rem
+    // 正文区（.pane-body）的最小高度。窗口压到最小尺寸时，双栏别塌成一条细线：
+    // 面板总高 = 头 + 正文 + 脚，正文至少这么多。只是「最小」，大窗口照样 fillHeight 伸展。
+    readonly property int paneBodyMinHeight: 120
+    readonly property int paneMinHeight: hPaneHead + hPaneFoot + paneBodyMinHeight
 
     // 语言名直接用后端给的：LanguageRegistry::displayName() 已经按界面语言双语取词，
     // 前端不再自己维护一份 code→中文映射表（两份表迟早会不一致）。
@@ -82,6 +86,21 @@ Item {
             if (entryCode(list[i]) === id)
                 return entryLabel(list[i])
         }
+        return id
+    }
+
+    // 状态条用的短名：backend.engineStatuses 每项只带裸 id（web / llm-cloud / llm-local /
+    // local-mt），直接把 id 印出来是给开发者看的，不是给用户看的。
+    // 只在本页做这一份映射，不去调 ConfigPage 的 engineName（跨文件调用会把两页耦死）。
+    function statusEngineName(id) {
+        if (id === "web")
+            return qsTr("Web 在线")
+        if (id === "llm-cloud")
+            return qsTr("云端 LLM")
+        if (id === "llm-local")
+            return qsTr("本地 LLM")
+        if (id === "local-mt")
+            return qsTr("本地 MT")
         return id
     }
 
@@ -508,6 +527,9 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            // 最小高度：头部 + 正文最小高 + 底部。低于这个值就宁可让整页纵向溢出，
+            // 也不要让输入框被压成 0 高（980×620 时的老毛病）。
+            Layout.minimumHeight: page.paneMinHeight
             spacing: Theme.s4
 
             // ---- 原文 ----
@@ -515,6 +537,8 @@ Item {
                 id: srcPane
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: page.paneMinHeight
+                Layout.minimumWidth: 220
                 radius: Theme.rXl
                 color: Theme.surface
                 border.width: 1
@@ -578,6 +602,7 @@ Item {
                         id: srcScroll
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        Layout.minimumHeight: page.paneBodyMinHeight
                         clip: true
 
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -631,13 +656,14 @@ Item {
                             spacing: Theme.s2
 
                             Text {
-                                text: qsTr("源语言 · %1").arg(backend.srcLang)
+                                Layout.fillWidth: true
+                                // 裸语言码（en）对用户没意义，走 languages 的 displayName。
+                                text: qsTr("源语言 · %1").arg(page.langName(backend.srcLang))
+                                elide: Text.ElideRight
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeTiny
                                 color: Theme.inkVariant
                             }
-
-                            Item { Layout.fillWidth: true }
 
                             Badge { text: qsTr("UTF-8 · %1 字符").arg(backend.charCount) }
                         }
@@ -650,6 +676,8 @@ Item {
                 id: dstPane
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: page.paneMinHeight
+                Layout.minimumWidth: 220
                 radius: Theme.rXl
                 color: Theme.surface
                 border.width: 1
@@ -747,6 +775,7 @@ Item {
                         id: dstScroll
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        Layout.minimumHeight: page.paneBodyMinHeight
                         clip: true
 
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -863,13 +892,13 @@ Item {
                             spacing: Theme.s2
 
                             Text {
+                                Layout.fillWidth: true
                                 text: qsTr("引擎 · %1").arg(page.engineName(backend.engineId))
+                                elide: Text.ElideRight
                                 font.family: Theme.fontUi
                                 font.pixelSize: Theme.fontSizeTiny
                                 color: Theme.inkVariant
                             }
-
-                            Item { Layout.fillWidth: true }
 
                             Badge {
                                 visible: backend.cacheHits > 0
@@ -948,34 +977,55 @@ Item {
                 anchors.fill: parent
                 anchors.leftMargin: Theme.s4
                 anchors.rightMargin: Theme.s3
-                spacing: Theme.s5
+                spacing: Theme.s3
 
-                Repeater {
-                    model: backend.engineStatuses
+                // 四个引擎 + 各自的 detail 在小窗口下一行排不下。以前是硬挤，
+                // 右边直接被窗口边缘裁掉；现在给状态点一条横向滚动带（默认看不出滚动条）。
+                // detail 本身也有 detailMaxWidth 上限，滚动条只是兜底。
+                ScrollView {
+                    id: statusScroll
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.preferredHeight: 26
+                    clip: true
 
-                    delegate: Item {
-                        id: statusSlot
-                        required property var modelData
+                    ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+                    ScrollBar.vertical.policy: ScrollBar.AlwaysOff
 
-                        Layout.alignment: Qt.AlignVCenter
-                        Layout.preferredWidth: statusDot.implicitWidth
-                        Layout.preferredHeight: statusDot.implicitHeight
+                    Row {
+                        spacing: Theme.s5
 
-                        StatusDot {
-                            id: statusDot
-                            anchors.verticalCenter: parent.verticalCenter
-                            label: statusSlot.modelData.id !== undefined ? statusSlot.modelData.id : ""
-                            detail: statusSlot.modelData.detail !== undefined ? statusSlot.modelData.detail : ""
-                            // 颜色分三层：装好了且这条请求能走 = 绿；装好了但当前源语言/目标
-                            // 语言走不通（比如本地 MT 不支持自动检测源语言）= 黄；缺资产 = 红。
-                            state: statusSlot.modelData.state === "ready"
-                                   ? (statusSlot.modelData.ready ? 0 : 1)
-                                   : (statusSlot.modelData.state === "missing-assets" ? 2 : 1)
+                        Repeater {
+                            model: backend.engineStatuses
+
+                            delegate: Item {
+                                id: statusSlot
+                                required property var modelData
+
+                                // 用 implicitWidth/Height 而不是 width/height：定位器
+                                // （Row）与 ScrollView 都是靠隐式尺寸算内容的，
+                                // 写死 height 会让 contentHeight 变成 0。
+                                implicitWidth: statusDot.implicitWidth
+                                implicitHeight: 24
+
+                                StatusDot {
+                                    id: statusDot
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    // 裸 id（llm-cloud）是给配置看的，这里换成人话。
+                                    label: page.statusEngineName(statusSlot.modelData.id !== undefined
+                                                                 ? String(statusSlot.modelData.id) : "")
+                                    detail: statusSlot.modelData.detail !== undefined ? statusSlot.modelData.detail : ""
+                                    detailMaxWidth: 160
+                                    // 颜色分三层：装好了且这条请求能走 = 绿；装好了但当前源语言/目标
+                                    // 语言走不通（比如本地 MT 不支持自动检测源语言）= 黄；缺资产 = 红。
+                                    state: statusSlot.modelData.state === "ready"
+                                           ? (statusSlot.modelData.ready ? 0 : 1)
+                                           : (statusSlot.modelData.state === "missing-assets" ? 2 : 1)
+                                }
+                            }
                         }
                     }
                 }
-
-                Item { Layout.fillWidth: true }
 
                 AppButton {
                     Layout.alignment: Qt.AlignVCenter

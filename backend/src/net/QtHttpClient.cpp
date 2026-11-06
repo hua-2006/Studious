@@ -3,9 +3,13 @@
 #include "i18n/L10n.h"
 
 #include <QEventLoop>
+#include <QList>
 #include <QNetworkProxy>
+#include <QNetworkProxyFactory>
+#include <QNetworkProxyQuery>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QObject>
 #include <QTimer>
 #include <QUrl>
 #include <QVariant>
@@ -19,6 +23,24 @@ int statusOf(const QNetworkReply *reply)
 {
     const QVariant statusVar = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
     return statusVar.isValid() ? statusVar.toInt() : 0;
+}
+
+// 回环判定。127.0.0.0/8 整段都是回环（不止 127.0.0.1），localhost 与 ::1 一并认。
+//
+// 这类地址只可能指向本机（本地 llama-server / 内置网关）。让它们走用户配的 HTTP 代理
+// 必然失败：实测 STUDIOUS_HTTP_PROXY=http://127.0.0.1:1 时本地探测报
+// "网络错误(101)"（ProxyConnectionRefusedError），也就是一开代理本地 LLM 就 100% 不可用。
+bool isLoopbackHost(QString host)
+{
+    host = host.trimmed().toLower();
+    if (host.isEmpty()) {
+        return false;
+    }
+    if (host == QLatin1String("localhost") || host == QLatin1String("::1")
+        || host == QLatin1String("0:0:0:0:0:0:0:1") || host == QLatin1String("[::1]")) {
+        return true;
+    }
+    return host.startsWith(QLatin1String("127."));
 }
 
 // 全局请求超时**下限**（环境变量 STUDIOUS_HTTP_TIMEOUT，毫秒）。
@@ -41,14 +63,60 @@ int effectiveTimeoutMs(const HttpRequest &req)
         return req.timeoutMs;
     }
 
-    const QString host = req.url.host().toLower();
-    if (host == QStringLiteral("127.0.0.1") || host == QStringLiteral("localhost")
-        || host == QStringLiteral("::1")) {
+    if (isLoopbackHost(req.url.host())) {
         return req.timeoutMs;
     }
 
     return qMax(req.timeoutMs, floorMs);
 }
+
+// 逐请求决定代理：回环直连，其余走配置好的代理。
+//
+// 为什么不用 QNetworkAccessManager::setProxy：它只能给整个 NAM 设一把代理，
+// 没有"按 host 区分"的入口，一旦设上，127.0.0.1 的本地 llama-server 也会被塞进代理。
+//
+// 生命周期：QNetworkProxyFactory 不是 QObject，setProxyFactory() 也不接管所有权，
+// 所以这里让它**同时派生 QObject**，以 NAM 为 parent —— NAM 析构时一并 delete，
+// 既不裸 new 泄漏，也不会在 ~QNetworkAccessManager 期间留下悬垂指针
+// （QObject 只在自己的 ~QObject 里删子对象，那时 NAM 的析构体早已跑完）。
+class LoopbackAwareProxyFactory final : public QObject, public QNetworkProxyFactory
+{
+public:
+    LoopbackAwareProxyFactory(QNetworkProxy envProxy, QObject *parent)
+        : QObject(parent)
+        , m_envProxy(std::move(envProxy))
+    {
+    }
+
+    QList<QNetworkProxy> queryProxy(const QNetworkProxyQuery &query) override
+    {
+        // 回环地址一律直连，绝不交给代理。前一个字段给 URL 查询，后一个给 peerHost 查询，
+        // 两个都判是因为不同调用路径填的字段不一样。
+        if (isLoopbackHost(query.peerHostName()) || isLoopbackHost(query.url().host())) {
+            return {QNetworkProxy(QNetworkProxy::NoProxy)};
+        }
+
+        if (m_envProxy.type() != QNetworkProxy::NoProxy) {
+            return {m_envProxy};
+        }
+
+        // 没配环境变量：保持原来的"跟随系统代理"语义（Qt 默认走的就是系统配置）。
+        // Windows 上这次查询要读注册表，只做一次并缓存，别让每段译文都付一次开销。
+        if (!m_systemQueried) {
+            m_systemQueried = true;
+            m_systemProxies = QNetworkProxyFactory::systemProxyForQuery(query);
+            if (m_systemProxies.isEmpty()) {
+                m_systemProxies = {QNetworkProxy(QNetworkProxy::NoProxy)};
+            }
+        }
+        return m_systemProxies;
+    }
+
+private:
+    QNetworkProxy m_envProxy;
+    QList<QNetworkProxy> m_systemProxies;
+    bool m_systemQueried = false;
+};
 
 } // namespace
 
@@ -101,10 +169,13 @@ QtHttpClient::QtHttpClient(QString userAgent, QObject *parent)
         m_userAgent = QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
     }
 
-    const QNetworkProxy proxy = proxyFromEnvironment();
-    if (proxy.type() != QNetworkProxy::NoProxy) {
-        m_nam.setProxy(proxy);
-    }
+    // 全局关掉"系统配置即默认工厂"那条路：本 NAM 的代理决策只由下面这个工厂负责，
+    // 免得两套机制打架。进程级设置，重复调用无副作用。
+    QNetworkProxyFactory::setUseSystemConfiguration(false);
+
+    // 不再无条件 m_nam.setProxy(...)：改成安装按 host 判定的工厂，
+    // 回环地址（本地 llama-server）永远直连，其余请求仍走配置的代理。
+    m_nam.setProxyFactory(new LoopbackAwareProxyFactory(proxyFromEnvironment(), &m_nam));
 }
 
 QtHttpClient::~QtHttpClient() = default;
@@ -184,7 +255,12 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
     }
 
     res.status = statusOf(reply);
-    res.body = reply->readAll();
+    // 超时路径里上面调过 abort()，Qt 会把 reply 的设备关掉；
+    // 此时再 readAll() 只会打出 "QIODevice::read (QNetworkReplyHttpImpl): device not open"
+    // 这类告警，且读不到东西。先判可读性再读。
+    if (reply->isOpen() && reply->isReadable()) {
+        res.body = reply->readAll();
+    }
 
     const QNetworkReply::NetworkError netError = reply->error();
     const QString netErrorStr = reply->errorString();
@@ -297,7 +373,9 @@ HttpResponse QtHttpClient::sendStream(const HttpRequest &req, const HttpStreamCa
     idle.stop();
 
     // finished 之后可能还有没读的尾巴（本地服务器一次性写完整份时很常见）。
-    if (!rejected && !sinkAborted && !timedOut && beginStream(statusOf(reply))) {
+    // abort() 过的 reply 设备已关闭，读之前先判可读性，避免 "device not open" 告警。
+    if (!rejected && !sinkAborted && !timedOut && reply->isOpen() && reply->isReadable()
+        && beginStream(statusOf(reply))) {
         for (;;) {
             const QByteArray chunk = reply->readAll();
             if (chunk.isEmpty()) {

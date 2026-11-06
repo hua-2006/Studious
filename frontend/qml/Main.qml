@@ -17,8 +17,10 @@ Window {
     // 所以改成按可用屏幕比例算，并给一个上限，换分辨率也不会失控。
     width: Math.min(1440, Math.round(Screen.desktopAvailableWidth * 0.85))
     height: Math.min(900, Math.round(Screen.desktopAvailableHeight * 0.88))
-    minimumWidth: 980
-    minimumHeight: 620
+    // 最小尺寸按「翻译页双栏 + 页脚状态条」的实测需求抬上来：
+    // 980×620 时原文/译文面板的正文区会被压成 0 高，状态条右侧也会被窗口边缘裁掉。
+    minimumWidth: 1120
+    minimumHeight: 720
     visible: true
     title: "Studious"
 
@@ -101,6 +103,30 @@ Window {
             Theme.applySeed(backend.accentColor)
             syncInterfacePalette()
         }
+        // 后端的错误出口就这一个信号：void errorRaised(const QString &title, const QString &detail)
+        // （签名见 frontend/src/AppBackend.h 的 signals 段）。以前 QML 侧没有消费者，
+        // 出错误等于静默失败，现在统一弹顶部横幅。
+        // 不去轮询 statusText / statusIsError：状态行本来就会自己显示，信号才是「新事件」。
+        function onErrorRaised(title, detail) {
+            root.showErrorNotice(title, detail)
+        }
+    }
+
+    // ---------------- 全局错误通知条 ----------------
+    // 同一时间只显示一条：新错误直接覆盖旧的，并重置 8 秒自动收起计时。
+    Timer {
+        id: noticeTimer
+        interval: 8000
+        repeat: false
+        onTriggered: noticeBar.shown = false
+    }
+
+    function showErrorNotice(title, detail) {
+        noticeBar.title = title.length > 0 ? title : qsTr("出错了")
+        noticeBar.detail = detail
+        noticeBar.tone = "error"
+        noticeBar.shown = true
+        noticeTimer.restart()
     }
 
     // ---------------- 外框（圆角 + 描边）----------------
@@ -395,6 +421,31 @@ Window {
                     }
                     AppearancePage { }
                 }
+            }
+        }
+
+        // ---------------- 全局错误通知条（覆盖层）----------------
+        // 不参与上面的 RowLayout：绝对定位 + 顶部边距，弹出来不挤动页面布局。
+        NoticeBar {
+            id: noticeBar
+            z: 100
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.topMargin: Theme.s4
+            anchors.leftMargin: Theme.s4
+            anchors.rightMargin: Theme.s4
+
+            onDismissed: {
+                noticeTimer.stop()
+                noticeBar.shown = false
+            }
+            // 「去处理」：后端已有的 errorRaised 绝大多数来自资产安装/卸载与本地 LLM 启动，
+            // 落点放在设置页（资产分区就在这一页），用户一眼能看到缺什么。
+            onActivated: {
+                noticeTimer.stop()
+                noticeBar.shown = false
+                root.currentPage = 3
             }
         }
     }

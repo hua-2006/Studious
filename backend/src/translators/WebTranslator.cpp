@@ -20,6 +20,35 @@ QString WebTranslator::id() const
     return QStringLiteral("web");
 }
 
+QString WebTranslator::cacheTag() const
+{
+    // 基类默认实现是 id()，对所有 web 来源都返回 "web"：
+    // google 与 mymemory 的译文因此落在同一个缓存键上，用户切换来源后
+    // 拿到的是另一家的译文（且缓存命中率看起来还"很健康"）。
+    //
+    // 这里把装配顺序编进 tag —— 它既是降级顺序，也是"用户勾了哪些来源"：
+    // 来源集合或顺序一变，key 就跟着变。
+    //
+    // 只统计能真正发请求的来源（isConfigured()）：没填 key 的 Azure 永远不产译文，
+    // 让它进 tag 只会造成无意义的失效。
+    QStringList sources;
+    for (const auto &adapter : m_adapters) {
+        if (adapter && adapter->isConfigured()) {
+            sources << adapter->id().trimmed();
+        }
+    }
+    if (sources.isEmpty()) {
+        // 一个都用不了时回落到"全部已装配来源"：tag 仍然稳定、非空，
+        // 不会和别的引擎或空串撞上。
+        for (const auto &adapter : m_adapters) {
+            if (adapter) {
+                sources << adapter->id().trimmed();
+            }
+        }
+    }
+    return QStringLiteral("web|") + sources.join(QLatin1Char('+'));
+}
+
 bool WebTranslator::isReady() const
 {
     // web 无资产依赖：能联网就能用，联网失败以 error 形式反馈，不算"未就绪"。

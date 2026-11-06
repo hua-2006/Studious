@@ -28,14 +28,20 @@ TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job)
     // 装配参数（LLM 配置 / Web 来源顺序）在这里落地：
     //   空 LlmConfig -> llm 组件未就绪，Router 自动跳过；
     //   空 webProviders -> web 组件走默认 google -> mymemory。
-    auto translators =
-        studious::factory::makeDefaultTranslators(http, job.llm, job.webProviders);
+    // mock 只能是显式选择（--engine mock / 界面选 mock），所以装配时按 engineId 决定
+    // 要不要把它注册进来 —— 平时它连注册表都不在，自然不可能被"兜底"选中。
+    const bool wantsMock = job.engineId == QLatin1String("mock");
+    auto translators = studious::factory::makeDefaultTranslators(
+        http, job.llm, job.webProviders, /*includeMock=*/wantsMock);
 
-    // 优先级为空时用后端默认顺序。注意不能直接传空列表——那会让 Router 一个引擎都不选。
+    // 优先级为空时用兜底顺序：与后端/界面一致的本地优先（local-mt -> llm -> web）。
+    // 这里刻意不含 mock —— mock 输出的是【语言码】原文的假译文，只能由用户显式
+    // --engine mock / 界面里选 mock 时才用；作为兜底会让"什么都没配好"静默变成假成功。
+    // 正常路径上 job.priority 来自 AppBackend 的 settings.enginePriority，走不到这个分支。
     const QStringList priority =
         job.priority.isEmpty()
-            ? QStringList{QStringLiteral("mock"), QStringLiteral("web"),
-                          QStringLiteral("llm"), QStringLiteral("local-mt")}
+            ? QStringList{QStringLiteral("local-mt"), QStringLiteral("llm"),
+                          QStringLiteral("web")}
             : job.priority;
 
     studious::router::TranslatorRouter router(std::move(translators), priority);

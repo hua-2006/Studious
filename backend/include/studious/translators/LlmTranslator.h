@@ -4,6 +4,7 @@
 #include "contract/ITranslator.h"
 #include "net/IHttpClient.h"
 
+#include <QElapsedTimer>
 #include <QString>
 
 namespace studious::translate {
@@ -77,6 +78,21 @@ private:
                   QString &outContent,
                   QString &outError);
 
+    // 唯一一份"配置 -> HTTP 请求"的构造逻辑：payload（model / temperature /
+    // max_tokens / reasoning_effort / thinking）、URL、鉴权头全在这里。
+    // postChat() 调它，所以单段与批量两条路径拿到的参数一定同源——
+    // 之前批量路径自己硬编码 prompt / 温度 / maxTokens，用户的设置会静默失效。
+    net::HttpRequest buildChatRequest(const QString &systemPrompt,
+                                      const QString &userPrompt,
+                                      double temperature,
+                                      int maxTokens) const;
+
+    // retryBudgetMs 是**整个 translate() 调用**共享的预算，不是每段各自重置。
+    // 每段重新计时会让 N 段的实际耗时无上界（实测 2 段 × 20s 早已超 30s 还在跑）。
+    // 注意：预算只在两次请求之间检查，已经发出去的请求无法被它中断
+    // （同步 HTTP 实现没有外部打断能力），单次超时由 timeoutMs 负责。
+    bool retryBudgetExhausted() const;
+
     // 从模型输出里抠出 JSON 字符串数组，并校验长度与内容非空。
     static bool parseJsonStringArray(const QString &content, int expected, QStringList &out);
 
@@ -93,6 +109,10 @@ private:
     config::LlmConfig m_cfg;
     net::IHttpClient *m_http = nullptr;   // 不持有，生命周期由调用方保证
     bool m_cancelRequested = false;
+
+    // 本次 translate() 的时间基准，retryBudgetExhausted() 用它取 elapsed()。
+    // 每次 translate() 开头重置一次，整次调用的所有段 / 所有目标语言共用一个 deadline。
+    QElapsedTimer m_retryClock;
 
     // 本次 translate() 的源语言（"auto" 或内部码）。
     // 用它给 prompt 补上「把英文翻译成中文」这类明确指示——
