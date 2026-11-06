@@ -65,6 +65,88 @@ QVariantMap entry(const QString &code, const QString &label)
 // 资产归类。依据是清单里的 family 和 id 前缀，不靠猜：
 //   · opus-mt 家族、mt.opus.* 语言对、onnxruntime 运行时 → 本地 MT
 //   · 其余（qwen 模型、llama.cpp 运行时）→ LLM
+// 自动引擎的四个真实成员。mock 是开发占位，不进界面。
+QStringList knownEngineIds()
+{
+    return {QStringLiteral("web"), QStringLiteral("llm"),
+            QStringLiteral("llm-local"), QStringLiteral("local-mt")};
+}
+
+// 把任意顺序整理成「只含已知 id、无重复、不缺项」。
+QStringList sanitizedPriority(const QStringList &input)
+{
+    const QStringList known = knownEngineIds();
+    QStringList out;
+    for (const QString &id : input) {
+        if (known.contains(id) && !out.contains(id)) {
+            out.append(id);
+        }
+    }
+    for (const QString &id : known) {
+        if (!out.contains(id)) {
+            out.append(id);
+        }
+    }
+    return out;
+}
+
+// LlmConfig <-> QVariantMap。QML 侧只认 QVariantMap，这里做双向转换，
+// 键名跟 config::LlmConfig 的成员一一对应（QML 里用这些键读写）。
+QVariantMap llmConfigToMap(const studious::config::LlmConfig &config)
+{
+    QVariantMap map;
+    map.insert(QStringLiteral("baseUrl"), config.baseUrl);
+    map.insert(QStringLiteral("apiKey"), config.apiKey);
+    map.insert(QStringLiteral("model"), config.model);
+    map.insert(QStringLiteral("timeoutMs"), config.timeoutMs);
+    map.insert(QStringLiteral("maxTokens"), config.maxTokens);
+    map.insert(QStringLiteral("temperature"), config.temperature);
+    map.insert(QStringLiteral("systemPrompt"), config.systemPrompt);
+    map.insert(QStringLiteral("retryBudgetMs"), config.retryBudgetMs);
+    map.insert(QStringLiteral("reasoningEffort"), config.reasoningEffort);
+    map.insert(QStringLiteral("batchSize"), config.batchSize);
+    map.insert(QStringLiteral("stripModelNotes"), config.stripModelNotes);
+    return map;
+}
+
+// 只覆盖 map 里出现的键，其余保持 base 的值 —— 这样 QML 可以只提交改过的字段。
+studious::config::LlmConfig llmConfigFromMap(const QVariantMap &map,
+                                             const studious::config::LlmConfig &base)
+{
+    studious::config::LlmConfig config = base;
+
+    const auto str = [&map](const char *key, const QString &fallback) {
+        const QVariant value = map.value(QLatin1String(key));
+        return value.isValid() ? value.toString() : fallback;
+    };
+
+    config.baseUrl = str("baseUrl", config.baseUrl);
+    config.apiKey = str("apiKey", config.apiKey);
+    config.model = str("model", config.model);
+    config.systemPrompt = str("systemPrompt", config.systemPrompt);
+    config.reasoningEffort = str("reasoningEffort", config.reasoningEffort);
+
+    if (map.contains(QStringLiteral("timeoutMs"))) {
+        config.timeoutMs = map.value(QStringLiteral("timeoutMs")).toInt();
+    }
+    if (map.contains(QStringLiteral("maxTokens"))) {
+        config.maxTokens = map.value(QStringLiteral("maxTokens")).toInt();
+    }
+    if (map.contains(QStringLiteral("temperature"))) {
+        config.temperature = map.value(QStringLiteral("temperature")).toDouble();
+    }
+    if (map.contains(QStringLiteral("retryBudgetMs"))) {
+        config.retryBudgetMs = map.value(QStringLiteral("retryBudgetMs")).toInt();
+    }
+    if (map.contains(QStringLiteral("batchSize"))) {
+        config.batchSize = map.value(QStringLiteral("batchSize")).toInt();
+    }
+    if (map.contains(QStringLiteral("stripModelNotes"))) {
+        config.stripModelNotes = map.value(QStringLiteral("stripModelNotes")).toBool();
+    }
+    return config;
+}
+
 QString assetCategory(const QString &id, const QString &family)
 {
     if (family == QLatin1String("opus-mt")
@@ -149,6 +231,13 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     // 设置里空串 = 跟随系统，界面用 "system" 表达。
     m_uiLanguage = settings.uiLanguage.isEmpty() ? QStringLiteral("system")
                                                  : settings.uiLanguage;
+    // 自动引擎顺序：设置里没有就按默认，有就整理一遍（防手改注册表）。
+    m_enginePriority = sanitizedPriority(settings.enginePriority);
+
+    m_llmConfig = llmConfigToMap(settings.llm);
+    m_webProviderId = settings.webProviderId;
+    m_localModel = settings.localModelFileName;
+    m_localUseGpu = settings.localUseGpu;
     // load() 已经过滤过非法值，这里拿到的要么是 "#RRGGBB"，要么是空（= 默认紫）。
     m_accentColor = settings.accentSeed;
 
@@ -575,12 +664,18 @@ void AppBackend::refreshEngineStatuses()
 
     studious::net::QtHttpClient http;
     auto translators = studious::factory::makeDefaultTranslators(http, settings.llm, {});
-    const QStringList priority =
-        settings.enginePriority.isEmpty()
-            ? QStringList{QStringLiteral("mock"), QStringLiteral("web"),
-                          QStringLiteral("llm"), QStringLiteral("local-mt")}
-            : settings.enginePriority;
-    const studious::router::TranslatorRouter router(std::move(translators), priority);
+    // Router 只认 web / llm / local-mt。
+    // llm-local 走 LocalEngine 分支、不参与降级链，但界面排序里有它 —— 这里滤掉，
+    // 免得把未知 id 塞进 Router 的 priority。
+    const QStringList stored = settings.enginePriority.isEmpty()
+                                   ? knownEngineIds()
+                                   : settings.enginePriority;
+    QStringList priority;
+    for (const QString &id : stored) {
+        if (id != QLatin1String("llm-local") && !priority.contains(id)) {
+            priority.append(id);
+        }
+    }    const studious::router::TranslatorRouter router(std::move(translators), priority);
 
     const QString dst = m_dstLangs.value(0, QStringLiteral("zh"));
     QVariantList list;
@@ -593,20 +688,70 @@ void AppBackend::refreshEngineStatuses()
         item.insert(QStringLiteral("id"), row.first);
         item.insert(QStringLiteral("ready"), row.second.ready);
         item.insert(QStringLiteral("detail"), row.second.reason);
+        // 三态给界面用：就绪 / 缺资产 / 未就绪。
+        // ready=false 且缺资产时，用户能直接去资产页补，这种要让界面区分出来。
+        QString state;
+        if (row.second.ready) {
+            state = QStringLiteral("ready");
+        } else if (!row.second.missingAssets.isEmpty()) {
+            state = QStringLiteral("missing-assets");
+        } else {
+            state = QStringLiteral("not-ready");
+        }
+        item.insert(QStringLiteral("state"), state);
+        item.insert(QStringLiteral("missingAssets"), row.second.missingAssets.size());
         list.append(item);
     }
 
     // 本地 LLM 不在 Router 里，单独按 LocalEngine 的实况补一条。
+    //
+    // 三态定义（与产品约定一致）：
+    //   ready          —— 服务在跑，能用
+    //   missing-assets —— llama 运行时/驱动还没下载
+    //   not-ready      —— 运行时装了，但服务没启动
     QVariantMap local;
     local.insert(QStringLiteral("id"), QStringLiteral("llm-local"));
     local.insert(QStringLiteral("ready"), m_localEngine.isRunning());
     local.insert(QStringLiteral("detail"),
                  m_localEngine.isRunning() ? m_localEngine.baseUrl()
                                            : i18n::s().common.notReady);
+
+    QString localState = QStringLiteral("not-ready");
+    if (m_localEngine.isRunning()) {
+        localState = QStringLiteral("ready");
+    } else if (!llamaRuntimeInstalled()) {
+        localState = QStringLiteral("missing-assets");
+    }
+    local.insert(QStringLiteral("state"), localState);
+    local.insert(QStringLiteral("missingAssets"),
+                 localState == QLatin1String("missing-assets") ? 1 : 0);
     list.append(local);
 
     m_engineStatuses = list;
     emit engineStatusesChanged();
+}
+
+QStringList AppBackend::enginePriority() const
+{
+    return m_enginePriority;
+}
+
+void AppBackend::setEnginePriority(const QStringList &order)
+{
+    const QStringList next = sanitizedPriority(order);
+    if (next == m_enginePriority) {
+        return;
+    }
+
+    m_enginePriority = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.enginePriority = next;
+    settings.save();
+
+    emit enginePriorityChanged();
+    // 顺序变了，「自动」的解析结果也变了，状态要重算。
+    refreshEngineStatuses();
 }
 
 void AppBackend::refreshCacheStats()
@@ -830,11 +975,87 @@ void AppBackend::uninstallAsset(const QString &id)
     refreshAssets();
 }
 
-QString AppBackend::systemLanguage() const
+bool AppBackend::llamaRuntimeInstalled() const
 {
+    // 直接查资产列表（refreshAssets 已经在构造和下载/卸载后刷过），
+    // 别再扫一遍盘 —— refreshEngineStatuses 是要频繁调的。
+    for (const QVariant &value : m_assets) {
+        const QVariantMap asset = value.toMap();
+        if (asset.value(QStringLiteral("id")).toString().startsWith(
+                QLatin1String("runtime.llama."))
+            && asset.value(QStringLiteral("installed")).toBool()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString AppBackend::systemLanguage() const{
     return studious::ui::i18n::detectSystemLanguage() == studious::ui::i18n::Lang::Chinese
                ? QStringLiteral("zh")
                : QStringLiteral("en");
+}
+
+void AppBackend::setLlmConfig(const QVariantMap &config)
+{
+    const studious::config::LlmConfig next = llmConfigFromMap(config, studious::config::LlmConfig{});
+    const QVariantMap nextMap = llmConfigToMap(next);
+    if (nextMap == m_llmConfig) {
+        return;
+    }
+
+    m_llmConfig = nextMap;
+
+    AppSettings settings = AppSettings::load();
+    settings.llm = next;
+    settings.save();
+
+    emit llmConfigChanged();
+    // 改了连接参数，「云端 LLM 是否就绪」要重算。
+    refreshEngineStatuses();
+}
+
+void AppBackend::setWebProviderId(const QString &id)
+{
+    if (m_webProviderId == id) {
+        return;
+    }
+    m_webProviderId = id;
+
+    AppSettings settings = AppSettings::load();
+    settings.webProviderId = id;
+    settings.save();
+
+    emit webProviderIdChanged();
+    refreshEngineStatuses();
+}
+
+void AppBackend::setLocalModel(const QString &fileName)
+{
+    if (m_localModel == fileName) {
+        return;
+    }
+    m_localModel = fileName;
+
+    AppSettings settings = AppSettings::load();
+    settings.localModelFileName = fileName;
+    settings.save();
+
+    emit localModelChanged();
+}
+
+void AppBackend::setLocalUseGpu(bool enabled)
+{
+    if (m_localUseGpu == enabled) {
+        return;
+    }
+    m_localUseGpu = enabled;
+
+    AppSettings settings = AppSettings::load();
+    settings.localUseGpu = enabled;
+    settings.save();
+
+    emit localUseGpuChanged();
 }
 
 void AppBackend::setUiLanguage(const QString &code)

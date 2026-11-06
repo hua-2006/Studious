@@ -162,367 +162,477 @@
 <context>
     <name>ConfigPage</name>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="42"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="115"/>
         <source>Web</source>
         <translation>Web</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="44"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="747"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="117"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1153"/>
         <source>云端 LLM</source>
         <translation>Cloud LLM</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="46"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="941"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="121"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1367"/>
         <source>本地 MT</source>
         <translation>Local MT</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="53"/>
         <source>开发占位 · 永远就绪</source>
-        <translation>Dev placeholder · always ready</translation>
+        <translation type="vanished">Dev placeholder · always ready</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="55"/>
         <source>google → mymemory · 无需 key</source>
-        <translation>google → mymemory · no key needed</translation>
+        <translation type="vanished">google → mymemory · no key needed</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="57"/>
         <source>未配置 API 时自动跳过</source>
-        <translation>Skipped when no API is configured</translation>
+        <translation type="vanished">Skipped when no API is configured</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="59"/>
         <source>OPUS-MT · 缺资产时跳过</source>
-        <translation>OPUS-MT · skipped when assets are missing</translation>
+        <translation type="vanished">OPUS-MT · skipped when assets are missing</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="89"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="130"/>
         <source>Google 在线翻译</source>
         <translation>Google Translate (online)</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="91"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="132"/>
         <source>MyMemory 记忆库</source>
         <translation>MyMemory translation memory</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="93"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="134"/>
         <source>Microsoft Azure 翻译</source>
         <translation>Microsoft Azure Translator</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="100"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="143"/>
         <source>无需 key · 免费 · 国内通常需要代理；高频会限流</source>
         <translation>No key · free · usually needs a proxy in mainland China; rate-limited under heavy use</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="102"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="145"/>
         <source>无需 key · 源语言未知时按 en 处理 · 额度有限</source>
         <translation>No key · treats an unknown source language as en · limited quota</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="104"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="147"/>
         <source>需要 key · v1 仅保留接口，填了也不参与翻译</source>
         <translation>Key required · v1 keeps the interface only; even if filled in it is not used for translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="116"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="85"/>
         <source>已获取的模型会出现在下拉里；当前为占位项。</source>
         <translation>Fetched models appear in the list; currently a placeholder.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="117"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="86"/>
         <source>尚未探测：会真的发一次翻译请求，用返回的 usage 判断思考是否被关掉。</source>
         <translation>Not probed yet: it really sends one translation request and reads the returned usage to tell whether thinking was turned off.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="439"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="119"/>
+        <source>本地 LLM</source>
+        <translation>Local LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="128"/>
+        <source>自动（google → mymemory）</source>
+        <translation>Auto (google → mymemory)</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="141"/>
+        <source>先试 Google，失败再退到 MyMemory；两个都不用 key。</source>
+        <translation>Tries Google first, falls back to MyMemory; neither needs a key.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="189"/>
+        <source>就绪</source>
+        <translation>Ready</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="190"/>
+        <source>缺资产</source>
+        <translation>Missing assets</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="190"/>
+        <source>未就绪</source>
+        <translation>Not ready</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="355"/>
+        <source>自动（第一个可用）</source>
+        <translation>Auto (first available)</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="779"/>
         <source>配置</source>
         <translation>Configuration</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="448"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="788"/>
         <source>翻译链路怎么接通：选引擎、填凭据、装模型。</source>
         <translation>How the translation pipeline is wired: pick engines, fill in credentials, install models.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="462"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="802"/>
         <source>引擎</source>
         <translation>Engine</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="463"/>
         <source>优先级：靠前的先试，前一个不可用才轮到下一个；未列出的组件永不被自动选中。</source>
-        <translation>Priority: earlier entries are tried first and the next one is used only when the previous is unavailable; unlisted components are never auto-selected.</translation>
+        <translation type="vanished">Priority: earlier entries are tried first and the next one is used only when the previous is unavailable; unlisted components are never auto-selected.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="520"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="686"/>
         <source>上移</source>
-        <translation>Move up</translation>
+        <translation type="vanished">Move up</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="529"/>
         <source>下移</source>
-        <translation>Move down</translation>
+        <translation type="vanished">Move down</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="541"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1028"/>
         <source>换引擎 / 换模型 / 换 Base URL 后，缓存键（含引擎标签）互不命中，同一句原文译文可能完全不同。</source>
         <translation>After changing engine / model / Base URL the cache key (which includes the engine tag) no longer matches: the same source text may produce a completely different translation.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="555"/>
         <source>引擎状态面板</source>
-        <translation>Engine status</translation>
+        <translation type="vanished">Engine status</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="556"/>
         <source>按当前语言对实时探测每个引擎是否可用；绿点＝就绪，灰点＝未就绪。</source>
-        <translation>Probes every engine live for the current language pair; green dot = ready, grey dot = not ready.</translation>
+        <translation type="vanished">Probes every engine live for the current language pair; green dot = ready, grey dot = not ready.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="559"/>
         <source>刷新</source>
-        <translation>Refresh</translation>
+        <translation type="vanished">Refresh</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="592"/>
         <source>尚未探测到任何引擎。</source>
-        <translation>No engine has been probed yet.</translation>
+        <translation type="vanished">No engine has been probed yet.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="614"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1043"/>
         <source>Web 来源</source>
         <translation>Web providers</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="615"/>
         <source>列表顺序即优先级，靠前的先试。</source>
-        <translation>List order is the priority; earlier entries are tried first.</translation>
+        <translation type="vanished">List order is the priority; earlier entries are tried first.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="716"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1128"/>
         <source>填入 Key</source>
         <translation>Enter key</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="726"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1138"/>
         <source>例如 eastasia</source>
         <translation>e.g. eastasia</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="735"/>
         <source>未知的来源 id 会被静默忽略；只剩一个来源时「上移」自动置灰。</source>
-        <translation>Unknown provider ids are silently ignored; with a single provider left, Move up is disabled.</translation>
+        <translation type="vanished">Unknown provider ids are silently ignored; with a single provider left, Move up is disabled.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="748"/>
+        <source>自动按顺序降级，手动固定一个；状态就在行上，点行跳到下面的对应配置。</source>
+        <translation type="vanished">Auto falls back in order, manual pins one engine; the status sits on the row, and clicking a row jumps to the config below.</translation>
+    </message>
+    <message>
+        <source>自动引擎</source>
+        <translation type="vanished">Automatic engines</translation>
+    </message>
+    <message>
+        <source>按顺序尝试，前一个不可用才轮下一个</source>
+        <translation type="vanished">Tried in order; the next one only runs when the previous is unavailable</translation>
+    </message>
+    <message>
+        <source>拖动 ⠿ 排序</source>
+        <translation type="vanished">Drag ⠿ to reorder</translation>
+    </message>
+    <message>
+        <source>手动引擎</source>
+        <translation type="vanished">Manual engine</translation>
+    </message>
+    <message>
+        <source>固定使用某一个，与翻译页的引擎选择同步</source>
+        <translation type="vanished">Always use one engine; kept in sync with the engine picker on the translate page</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="803"/>
+        <source>自动按优先级降级，强制只用一个；点行跳到下面的对应配置。</source>
+        <translation>Auto falls back by priority, forced uses exactly one; click a row to jump to its config below.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="813"/>
+        <source>自动选择</source>
+        <translation>Auto select</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="814"/>
+        <source>强制引擎</source>
+        <translation>Force engine</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="826"/>
+        <source>当前：自动</source>
+        <translation>Current: auto</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="827"/>
+        <source>当前：%1</source>
+        <translation>Current: %1</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="829"/>
+        <source>自动 = 优先级，前一个不可用才轮下一个</source>
+        <translation>Auto = priority order; the next one only runs when the previous is unavailable</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1044"/>
+        <source>单选；「自动」按 google → mymemory 依次尝试，固定某个来源后失败就直接报错，不会偷偷换源。</source>
+        <translation>Single choice; “Auto” tries google → mymemory in order, while a pinned provider reports the failure instead of silently switching.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1154"/>
         <source>OpenAI 兼容接口；没填 API Key 时这条链路自动跳过。</source>
         <translation>OpenAI-compatible endpoint; skipped when no API key is filled in.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="771"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1179"/>
         <source>模型</source>
         <translation>Model</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="780"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1191"/>
         <source>获取模型</source>
         <translation>Fetch models</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="781"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1192"/>
         <source>后端还没有「获取模型」接口，先按占位列表选。</source>
         <translation>The backend has no fetch-models endpoint yet; pick from the placeholder list for now.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="840"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1251"/>
         <source>留空使用内置提示词</source>
         <translation>Leave empty to use the built-in prompt</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="866"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1284"/>
         <source>留空使用内置提示词。</source>
         <translation>Leave empty to use the built-in prompt.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="873"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1291"/>
         <source>思考等级</source>
         <translation>Reasoning effort</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="876"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
         <source>关闭</source>
         <translation>Off</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="876"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
         <source>极低</source>
         <translation>Minimal</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="876"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
         <source>低</source>
         <translation>Low</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="876"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
         <source>中</source>
         <translation>Medium</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="876"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1294"/>
         <source>高</source>
         <translation>High</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="877"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1295"/>
         <source>跟随默认</source>
         <translation>Follow default</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="881"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1304"/>
         <source>探测</source>
         <translation>Probe</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="882"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1305"/>
         <source>后端还没有探测接口；接上后会真的发一次翻译请求。</source>
         <translation>The backend has no probe endpoint yet; once wired it really sends one translation request.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="897"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1320"/>
         <source>批量合并段数</source>
         <translation>Batch size</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="908"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1331"/>
         <source>重试预算</source>
         <translation>Retry budget</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="919"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1342"/>
         <source>清理模型注记</source>
         <translation>Strip model notes</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="927"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1350"/>
         <source>清掉小模型加的「【中文】」注记，只删整行括注，正文不动。</source>
         <translation>Drops the annotations small models add; only whole-line notes are removed, the body stays untouched.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="942"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1368"/>
         <source>按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。</source>
         <translation>Uses the first available route in order; pivoting through English needs two inferences and is noticeably slower.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="953"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1379"/>
         <source>语言对</source>
         <translation>Language pair</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="962"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1388"/>
         <source>实际路径</source>
         <translation>Actual path</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1009"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1435"/>
         <source>需下载</source>
         <translation>Needs download</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1021"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1450"/>
         <source>本地 LLM（llama-server）</source>
         <translation>Local LLM (llama-server)</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1022"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1451"/>
         <source>由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。</source>
         <translation>The main thread owns the process; starting it blocks the /v1/models poll, and a failed start always reaps the process.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1025"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1454"/>
         <source>模型文件</source>
         <translation>Model file</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1034"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1467"/>
         <source>浏览…</source>
         <translation>Browse…</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1035"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1468"/>
         <source>后端还没有文件选择接口。</source>
         <translation>The backend has no file picker yet.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1040"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1473"/>
         <source>上下文</source>
         <translation>Context</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1051"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1484"/>
         <source>线程</source>
         <translation>Threads</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1062"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1495"/>
         <source>GPU 层数</source>
         <translation>GPU layers</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1072"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1505"/>
         <source>Vulkan 构建需要 99</source>
         <translation>Vulkan builds need 99</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1079"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1512"/>
+        <source>优先 GPU</source>
+        <translation>Prefer GPU</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1520"/>
+        <source>装了 Vulkan 运行时就走 GPU；关掉只用 CPU。</source>
+        <translation>Uses the GPU when the Vulkan runtime is installed; off means CPU only.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1530"/>
         <source>附加参数</source>
         <translation>Extra args</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1094"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1545"/>
         <source>运行中</source>
         <translation>Running</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1094"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1545"/>
         <source>已停止</source>
         <translation>Stopped</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1107"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1558"/>
         <source>端口</source>
         <translation>Port</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1148"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1599"/>
         <source>日志</source>
         <translation>Log</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1158"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1609"/>
         <source>llama-server 已就绪</source>
         <translation>llama-server is ready</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1158"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1609"/>
         <source>等待启动…</source>
         <translation>Waiting to start…</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1167"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1618"/>
         <source>启动</source>
         <translation>Start</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1174"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="1625"/>
         <source>停止</source>
         <translation>Stop</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1667"/>
+        <source>%1 还没有配置好</source>
+        <translation>%1 is not configured yet</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1677"/>
+        <source>需要先填好连接参数才能使用。</source>
+        <translation>Fill in the connection settings before using it.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1692"/>
+        <source>取消</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1697"/>
+        <source>去配置</source>
+        <translation>Set up</translation>
     </message>
 </context>
 <context>

@@ -84,6 +84,15 @@ AppSettings AppSettings::load()
     s.llm.reasoningEffort =
         store.value(key("llm/reasoningEffort"), def.llm.reasoningEffort).toString().trimmed();
 
+    // 这三个界面上可调，必须一起落盘 —— 少了它们，用户改完重启就回默认，
+    // 会以为「设置没生效」。
+    s.llm.retryBudgetMs = clampedInt(
+        store.value(key("llm/retryBudgetMs"), def.llm.retryBudgetMs).toInt(), 1000, 300000);
+    s.llm.batchSize =
+        clampedInt(store.value(key("llm/batchSize"), def.llm.batchSize).toInt(), 1, 64);
+    s.llm.stripModelNotes =
+        store.value(key("llm/stripModelNotes"), def.llm.stripModelNotes).toBool();
+
     // 这两个空串本身是合法值（= 自动），textOr 回落到的也是空串，行为一致。
     s.webProviderId = textOr(key("web/providerId"), def.webProviderId);
     s.engineId = textOr(key("engine/id"), def.engineId);
@@ -147,6 +156,9 @@ void AppSettings::save() const
     store.setValue(key("llm/temperature"), llm.temperature);
     store.setValue(key("llm/systemPrompt"), llm.systemPrompt);
     store.setValue(key("llm/reasoningEffort"), llm.reasoningEffort);
+    store.setValue(key("llm/retryBudgetMs"), llm.retryBudgetMs);
+    store.setValue(key("llm/batchSize"), llm.batchSize);
+    store.setValue(key("llm/stripModelNotes"), llm.stripModelNotes);
 
     store.setValue(key("web/providerId"), webProviderId);
     store.setValue(key("engine/id"), engineId);

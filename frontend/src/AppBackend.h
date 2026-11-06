@@ -48,6 +48,12 @@ class AppBackend : public QObject {
     Q_PROPERTY(QVariantList engines READ engines CONSTANT)
     Q_PROPERTY(QVariantList engineStatuses READ engineStatuses NOTIFY engineStatusesChanged)
 
+    // 自动引擎的优先级顺序（拖动排序用）。
+    // 只含四个真实引擎：web / llm（云端）/ llm-local（本地）/ local-mt。
+    // mock 是开发占位，不进列表。
+    Q_PROPERTY(QStringList enginePriority READ enginePriority WRITE setEnginePriority
+               NOTIFY enginePriorityChanged)
+
     // ---- 资产清单（来自 backend/asset/manifest.json + 磁盘扫描）----
     // 每项：{ id, category("llm"|"mt"), type, state, stateText, sizeBytes, sizeText,
     //         path, installed(bool), placeholder(bool), note }
@@ -76,6 +82,18 @@ class AppBackend : public QObject {
 
     // ---- 主题："system" / "light" / "dark"，落 QSettings ----
     Q_PROPERTY(QString themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged)
+
+    // ---- 配置页用：引擎具体配置的读写 ----
+    // 云端 LLM 的全部连接与采样参数（对应 config::LlmConfig）。
+    // 键：baseUrl / apiKey / model / timeoutMs / maxTokens / temperature /
+    //     systemPrompt / retryBudgetMs / reasoningEffort / batchSize / stripModelNotes
+    Q_PROPERTY(QVariantMap llmConfig READ llmConfig WRITE setLlmConfig NOTIFY llmConfigChanged)
+    // Web 来源：空 = 自动（google → mymemory）。后端只吃单个 id，见实现注释。
+    Q_PROPERTY(QString webProviderId READ webProviderId WRITE setWebProviderId
+               NOTIFY webProviderIdChanged)
+    // 本地 LLM：模型文件名（空 = 用第一个可用模型）+ 是否优先 GPU。
+    Q_PROPERTY(QString localModel READ localModel WRITE setLocalModel NOTIFY localModelChanged)
+    Q_PROPERTY(bool localUseGpu READ localUseGpu WRITE setLocalUseGpu NOTIFY localUseGpuChanged)
 
     // ---- 界面语言 ----
     // 取值："system" | "zh" | "en"。
@@ -121,6 +139,9 @@ public:
     QVariantList engines() const;
     QVariantList engineStatuses() const { return m_engineStatuses; }
 
+    QStringList enginePriority() const;
+    void setEnginePriority(const QStringList &order);
+
     QVariantList assets() const { return m_assets; }
     QString assetInstallRoot() const { return m_assetInstallRoot; }
     QVariantMap assetProgress() const { return m_assetProgress; }
@@ -148,6 +169,18 @@ public:
     QString uiLanguage() const { return m_uiLanguage; }
     void setUiLanguage(const QString &code);
     QString systemLanguage() const;
+
+    QVariantMap llmConfig() const { return m_llmConfig; }
+    void setLlmConfig(const QVariantMap &config);
+
+    QString webProviderId() const { return m_webProviderId; }
+    void setWebProviderId(const QString &id);
+
+    QString localModel() const { return m_localModel; }
+    void setLocalModel(const QString &fileName);
+
+    bool localUseGpu() const { return m_localUseGpu; }
+    void setLocalUseGpu(bool enabled);
 
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
     QString accentColor() const;
@@ -205,6 +238,7 @@ signals:
     void statusTextChanged();
     void statusWarningChanged();
     void engineStatusesChanged();
+    void enginePriorityChanged();
     void cacheStatsChanged();
     void assetsChanged();
     void assetProgressChanged();
@@ -216,6 +250,10 @@ signals:
     void themeModeChanged();
     void fontScaleChanged();
     void uiLanguageChanged();
+    void llmConfigChanged();
+    void webProviderIdChanged();
+    void localModelChanged();
+    void localUseGpuChanged();
     void accentColorChanged();
 
     // 供 QML 弹提示 / 打开对话框
@@ -228,6 +266,10 @@ private:
     void saveSettings();
     bool useLocalEngine() const;
     QString routerEngineId() const;
+
+    // llama.cpp 运行时是否已装（用于把本地 LLM 的失败区分成
+    // 「缺资产」= 运行时没下载 / 「未就绪」= 已下载但服务没起）。
+    bool llamaRuntimeInstalled() const;
 
     studious::cache::TranslationCache *m_cache = nullptr;
     TranslateJob *m_job = nullptr;
@@ -255,10 +297,15 @@ private:
     QString m_themeMode = QStringLiteral("system");
     int m_fontScale = 100;
     QString m_uiLanguage = QStringLiteral("system");
+    QVariantMap m_llmConfig;
+    QString m_webProviderId;
+    QString m_localModel;
+    bool m_localUseGpu = true;
     // 规范化的 "#RRGGBB"（大写）；空 = 用默认紫，由 accentColor() 兜底。
     QString m_accentColor;
 
     QVariantList m_engineStatuses;
+    QStringList m_enginePriority;
     QVariantList m_assets;
     QString m_assetInstallRoot;
     QVariantMap m_assetProgress;
