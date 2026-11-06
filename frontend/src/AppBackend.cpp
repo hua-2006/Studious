@@ -14,7 +14,9 @@
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QPalette>
 #include <QStandardPaths>
+#include <QVariantMap>
 #include <QtConcurrent>
 
 #include <studious/Factory.h>
@@ -830,6 +832,47 @@ void AppBackend::copyText(const QString &text)
         return;
     }
     QGuiApplication::clipboard()->setText(text);
+}
+
+void AppBackend::applyPalette(const QVariantMap &colors)
+{
+    if (colors.isEmpty()) {
+        return;
+    }
+
+    const auto pick = [&colors](const char *key, const QColor &fallback) {
+        const QVariant value = colors.value(QLatin1String(key));
+        return value.canConvert<QColor>() && value.value<QColor>().isValid()
+                   ? value.value<QColor>()
+                   : fallback;
+    };
+
+    const QColor window = pick("window", QColor(Qt::white));
+    const QColor windowText = pick("windowText", QColor(Qt::black));
+    const QColor base = pick("base", window);
+    const QColor text = pick("text", windowText);
+
+    QPalette pal;
+    pal.setColor(QPalette::Window, window);
+    pal.setColor(QPalette::WindowText, windowText);
+    pal.setColor(QPalette::Base, base);
+    pal.setColor(QPalette::AlternateBase, pick("alternateBase", base));
+    pal.setColor(QPalette::Text, text);
+    pal.setColor(QPalette::Button, pick("button", base));
+    pal.setColor(QPalette::ButtonText, pick("buttonText", text));
+    pal.setColor(QPalette::Highlight, pick("highlight", window));
+    pal.setColor(QPalette::HighlightedText, pick("highlightedText", text));
+    pal.setColor(QPalette::ToolTipBase, pick("toolTipBase", base));
+    pal.setColor(QPalette::ToolTipText, pick("toolTipText", text));
+    pal.setColor(QPalette::PlaceholderText, pick("placeholderText", windowText));
+
+    // 禁用态跟着正文色走，避免系统默认的灰在深色主题下看不清。
+    QColor disabled = text;
+    disabled.setAlpha(110);
+    pal.setColor(QPalette::Disabled, QPalette::Text, disabled);
+    pal.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+    pal.setColor(QPalette::Disabled, QPalette::ButtonText, disabled);
+    QGuiApplication::setPalette(pal);
 }
 
 } // namespace studious::ui

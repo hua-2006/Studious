@@ -50,17 +50,45 @@ Window {
 
     // 主题：启动时按设置落一次，之后后端一变就跟着切。
     // 所有 Theme.xxx 都是 `dark ? 暗 : 亮` 的绑定，改 Theme.dark 会整体重算，无需重建界面。
+    // 把当前主题色推给 QPalette。
+    // QML 是配色唯一来源，但这个 app 里还有些东西是系统绘制的（文件对话框、
+    // 滚动条、右键菜单、ToolTip），它们只认 QPalette。不同步就会出现
+    // 「浅色界面 + 深色对话框」这种割裂。
+    function syncInterfacePalette() {
+        backend.applyPalette({
+            "window": Theme.surface,
+            "windowText": Theme.ink,
+            "base": Theme.surfaceLow,
+            "alternateBase": Theme.surfaceMid,
+            "text": Theme.ink,
+            "button": Theme.surfaceHigh,
+            "buttonText": Theme.ink,
+            "highlight": Theme.primaryContainer,
+            "highlightedText": Theme.primaryContainerText,
+            "toolTipBase": Theme.surfaceHigh,
+            "toolTipText": Theme.ink,
+            "placeholderText": Theme.inkVariant
+        })
+    }
+
     Component.onCompleted: {
         Theme.systemDark = systemPrefersDark
         Theme.applyMode(backend.themeMode)
         // 强调色：启动就按用户配置生成整套调色板（非法值由 Theme 内部回落默认紫）。
         Theme.applySeed(backend.accentColor)
+        syncInterfacePalette()
     }
 
     Connections {
         target: backend
-        function onThemeModeChanged() { Theme.applyMode(backend.themeMode) }
-        function onAccentColorChanged() { Theme.applySeed(backend.accentColor) }
+        function onThemeModeChanged() {
+            Theme.applyMode(backend.themeMode)
+            syncInterfacePalette()
+        }
+        function onAccentColorChanged() {
+            Theme.applySeed(backend.accentColor)
+            syncInterfacePalette()
+        }
     }
 
     // ---------------- 外框（圆角 + 描边）----------------

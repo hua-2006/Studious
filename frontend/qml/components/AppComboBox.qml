@@ -71,21 +71,23 @@ ComboBox {
     }
 
     popup: Popup {
-        y: combo.height + 2
+        y: combo.height + Theme.s1
         width: combo.width
-        implicitHeight: Math.min(contentItem.implicitHeight + Theme.s2, 280)
+        implicitHeight: Math.min(contentItem.implicitHeight + Theme.s2, 340)
+        padding: Theme.s1
 
         contentItem: ListView {
             clip: true
             implicitHeight: contentHeight
             model: combo.popup.visible ? combo.delegateModel : null
             currentIndex: combo.highlightedIndex
+            boundsBehavior: Flickable.StopAtBounds
             ScrollIndicator.vertical: ScrollIndicator { }
         }
 
         background: Rectangle {
-            radius: Theme.rSm
-            color: Theme.surface
+            radius: Theme.rMd
+            color: Theme.surfaceHigh
             border.width: 1
             border.color: Theme.outlineVariant
         }

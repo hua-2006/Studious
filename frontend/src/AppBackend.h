@@ -164,6 +164,15 @@ public slots:
     // 复制任意文本到剪贴板（许可证正文、资产路径等）。
     Q_INVOKABLE void copyText(const QString &text);
 
+    // 把 QPalette 同步成当前主题。
+    // QML 侧是配色唯一来源，这里只负责把它转交给 Qt ——
+    // 系统绘制的部分（文件对话框、滚动条、右键菜单、ToolTip）吃的是 QPalette，
+    // 不跟着 Theme 走就会出现「浅色主题 + 深色对话框」这种割裂。
+    // 入参键名：window / windowText / base / alternateBase / text / button /
+    //           buttonText / highlight / highlightedText / toolTipBase /
+    //           toolTipText / placeholderText
+    Q_INVOKABLE void applyPalette(const QVariantMap &colors);
+
     // ---- 本地引擎 ----
     void startLocalServer();
     void stopLocalServer();

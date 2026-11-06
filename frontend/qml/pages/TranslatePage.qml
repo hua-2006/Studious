@@ -252,29 +252,8 @@ Item {
                         }
                     }
 
-                    popup: Popup {
-                        y: srcCombo.height + Theme.s1
-                        width: srcCombo.width
-                        implicitHeight: Math.min(contentItem.implicitHeight + Theme.s2, 340)
-                        padding: Theme.s1
-
-                        background: Rectangle {
-                            radius: Theme.rMd
-                            color: Theme.surfaceHigh
-                            border.width: 1
-                            border.color: Theme.outlineVariant
-                        }
-
-                        contentItem: ListView {
-                            clip: true
-                            implicitHeight: contentHeight
-                            model: srcCombo.popup.visible ? srcCombo.delegateModel : null
-                            currentIndex: srcCombo.highlightedIndex
-                            boundsBehavior: Flickable.StopAtBounds
-
-                            ScrollIndicator.vertical: ScrollIndicator { }
-                        }
-                    }
+                    // 下拉列表样式统一在 components/AppComboBox.qml 里定义，
+                    // 这里不再单独覆盖 popup —— 否则两个下拉会长得不一样。
                 }
             }
 
