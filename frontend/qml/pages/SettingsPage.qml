@@ -1736,11 +1736,16 @@ Item {
                                 }
 
                                 Repeater {
+                                    // 版本与许可证以仓库里的实际文件为准：逐条核对过
+                                    // backend/third_party/<name>/LICENSE 与版本号文件，
+                                    // 不要凭印象填（这里以前把 onnxruntime 写成 Apache-2.0）。
                                     model: [
-                                        { name: "onnxruntime",  version: "1.31.1", use: qsTr("本地 MT 推理运行时"), license: "Apache-2.0" },
+                                        { name: "onnxruntime",  version: "1.31.1", use: qsTr("本地 MT 推理运行时"), license: "MIT" },
                                         { name: "sentencepiece", version: "0.2.0",  use: qsTr("分词"),               license: "Apache-2.0" },
                                         { name: "monocypher",   version: "4.0.2",  use: qsTr("清单验签 / 加密"),     license: "BSD-2-Clause" },
-                                        { name: "miniz",        version: "3.0.2",  use: qsTr("资产 zip 解压"),       license: "MIT" }
+                                        { name: "miniz",        version: "11.0.2", use: qsTr("资产 zip 解压"),       license: "MIT" },
+                                        { name: "Qt",           version: "6.12.0", use: qsTr("界面框架（动态链接）"), license: "LGPL-3.0" },
+                                        { name: qsTr("内置字体"), version: "—",      use: qsTr("思源黑体 / 霞鹜文楷"), license: "OFL-1.1" }
                                     ]
 
                                     delegate: RowLayout {
@@ -2250,25 +2255,27 @@ Item {
                     font.family: Theme.fontMono
                     font.pixelSize: Theme.fontSizeSmall
                     text:
-                        qsTr("本程序包含以下第三方开源组件，各自遵循其原始许可证：\n\n")
-                        + "onnxruntime 1.31.1 — Microsoft — Apache License 2.0\n"
-                        + qsTr("  本地 MT（OPUS-MT / Marian）推理运行时\n")
+                        qsTr("本程序包含以下第三方开源组件，各自遵循其原始许可证。完整许可证文本随各自源码分发，也能在仓库的 backend/third_party/<组件名>/LICENSE 里读到。\n\n")
+                        + "onnxruntime 1.31.1 — Microsoft — MIT License\n"
+                        + qsTr("  本地 MT（OPUS-MT / Marian）推理运行时；编译期链接，随包分发 onnxruntime.dll\n")
                         + "  https://github.com/microsoft/onnxruntime\n\n"
                         + "sentencepiece 0.2.0 — Google — Apache License 2.0\n"
-                        + qsTr("  源文本 / 译文分词（SentencePiece 模型）\n")
+                        + qsTr("  源文本 / 译文分词（SentencePiece 模型）；静态编入，随附其 vendored 子库：\n")
+                        + qsTr("  absl（Apache-2.0）、darts-clone（BSD-3-Clause）、esaxx（MIT）、protobuf-lite（BSD-3-Clause）\n")
                         + "  https://github.com/google/sentencepiece\n\n"
                         + "monocypher 4.0.2 — Loup Vaillant — BSD-2-Clause OR CC0-1.0\n"
-                        + qsTr("  资产清单的 ed25519 签名校验\n")
+                        + qsTr("  资产清单的 ed25519 签名校验；本项目按 BSD-2-Clause 使用\n")
                         + "  https://monocypher.org\n\n"
-                        + qsTr("miniz 3.0.2 — Rich Geldreich 等 — MIT / Public Domain\n")
+                        + "miniz 11.0.2 — Rich Geldreich / RAD Game Tools / Valve — MIT License\n"
                         + qsTr("  资产 zip 包解压\n")
                         + "  https://github.com/richgel999/miniz\n\n"
-                        + qsTr("Qt 6 — The Qt Company — LGPL-3.0（动态链接使用）\n")
+                        + "Qt 6.12.0 — The Qt Company — LGPL-3.0（动态链接使用）\n"
+                        + qsTr("  桌面界面框架；以动态链接方式分发，允许替换 Qt 库文件\n")
                         + "  https://www.qt.io\n\n"
                         + qsTr("字体：\n")
                         + qsTr("  思源黑体 Source Han Sans SC — Adobe — SIL Open Font License 1.1\n")
                         + qsTr("  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1\n\n")
-                        + qsTr("以上组件的完整许可证文本随各自的源分发提供。")
+                        + qsTr("推断与翻译模型（Qwen2.5、OPUS-MT、PP-OCRv4）不属于本程序，按需单独下载，各自遵循其原始许可证。")
                 }
             }
          }

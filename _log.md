@@ -1381,3 +1381,32 @@ Qt 6.12 可用；手工跟随只作为兜底。
 **坑**：
 - 语言的注册表键是 `settings/lang/src` 与 `settings/lang/dst`，不是 `ui/dstLang` —— 一开始读错键，以为归一没生效。
 - `AppBackend::setEngineId` 是属性 WRITE 访问器、不是槽，`--ui-shot` 的 `invokeMethod` 调不到（返回 0），所以规则验证改成「先写注册表多选 + 启动看是否被收成单选」。
+## 关于页第三方清单 + README 状态更新（2026-11-08）
+
+### 起因
+用户要求：① 更新「设置 · 关于」里的第三方组件表与「第三方声明」弹窗；② 更新 README —— 说明基础设施已完成，剩下的是测试打磨。
+
+### 实际核对到的数据（不是凭印象填的）
+| 组件 | 版本 | 许可证 | 依据 |
+|---|---|---|---|
+| onnxruntime | 1.31.1 | **MIT** | backend/third_party/onnxruntime/LICENSE 首行；onnxruntime.dll 文件版本 1.31.1.20261023.4.41d61 |
+| sentencepiece | 0.2.0 | Apache-2.0 | VERSION.txt + LICENSE |
+| monocypher | 4.0.2 | BSD-2-Clause（上游 BSD-2-Clause OR CC0-1.0） | monocypher/README.md |
+| miniz | **11.0.2** | MIT | MZ_VERSION 宏 + LICENSE |
+| Qt | 6.12.0 | LGPL-3.0（动态链接） | 运行时 qVersion() |
+| 内置字体 | — | OFL-1.1 | font/ 下两套字体的许可证 |
+
+- 旧表两处错：onnxruntime 写成 Apache-2.0、miniz 写成 3.0.2。
+- sentencepiece 的 vendored 子库也写进声明了：absl（Apache-2.0）、darts-clone（BSD-3-Clause）、esaxx（MIT）、protobuf-lite（BSD-3-Clause）—— 逐个看过 third_party/sentencepiece/third_party/*/LICENSE。
+- 声明里补了一条：推理与翻译模型（Qwen2.5 / OPUS-MT / PP-OCRv4）不属于本程序，按需下载。
+
+### 改了什么
+- frontend/qml/pages/SettingsPage.qml：第三方表 4 行 → 6 行（补 Qt 与内置字体），修 onnxruntime 许可证与 miniz 版本；表上方加注释「版本与许可证以仓库里的实际文件为准」；「第三方声明」正文重写（许可证纠正 + 子库 + 动态链接说明 + 模型边界 + 许可证文本位置）。
+- README.md：状态行改成「基础设施已全部落地」；已完成表补小窗翻译 / 实时翻译两行；「尚未实现」表换成「下一步：测试与打磨」（端到端测试为主线，另列主界面翻译入口、翻译字号、快捷键页、外观页 6 处、Linux 抓屏、清单验签、API Key 存储）；界面章节五页 → 六页并补「浮层」页；路线图 M2/M5 改 ✅、新增 P0 进行中；使用章节补小窗与实时两小节，并写明三入口共用同一份引擎与语言设置。
+
+### 验证
+- 构建通过（[9/9]、[5/5] Linking）；update_translations 567 条，10 条新串补齐英文，unfinished = 0。
+- 按用户要求这轮没有截图。
+
+### 未做
+- 改动未提交（README.md / SettingsPage.qml / studious_en.ts / studious_zh_CN.ts）。
