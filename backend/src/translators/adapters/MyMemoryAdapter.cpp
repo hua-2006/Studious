@@ -150,6 +150,28 @@ WebAdapterResult MyMemoryAdapter::translate(net::IHttpClient &http,
         return r;
     }
 
+    // 配额耗尽时 translatedText 里放的是告警文案（HTTP 200、responseStatus 甚至也是 200）：
+    // "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY..."
+    // 以前只判非空就当译文返回，Router 再把它写进缓存 —— 一段告警于是永久命中。
+    // 这里一律当失败上报。注意 error 不能含"已取消/不支持/请求被拒绝"这类语义类关键字，
+    // 否则 Router 会认为是"换谁都一样"的失败而不再降级到下一家。
+    if (webLooksLikeServiceNotice(translated)) {
+        r.error = i18n::sf("mymemory: 返回的是限流/告警文案而不是译文：%1",
+                           "mymemory: the API returned a rate-limit/notice message instead of a "
+                           "translation: %1",
+                           {translated.left(160)})
+                  + limitationNote;
+        return r;
+    }
+
+    // 原样退回输入同样是假成功（语言对不支持、源语言猜错时很常见），不能当译文。
+    if (webLooksLikeSourceEcho(translated, text)) {
+        r.error = i18n::s("mymemory: 译文与原文完全一致，已丢弃",
+                          "mymemory: the translation is identical to the source text, discarded")
+                  + limitationNote;
+        return r;
+    }
+
     r.ok = true;
     r.text = translated;
     return r;

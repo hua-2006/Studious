@@ -21,6 +21,11 @@ Window {
     // 页脚「更多设置」：关掉小窗，回主界面的「浮层」页（那里是完整版）。
     signal moreSettingsRequested()
 
+    // 谁在用它："capture" = 截屏翻译浮层（默认），"live" = 实时翻译控制条。
+    // 两边的可调项不一样（截图有「选完直接翻译」，实时有「刷新间隔」），
+    // 所以同一个面板按 mode 只显示对应那一组，而不是各写一份窗口。
+    property string mode: "capture"
+
     // 浮层的子窗口：无边框 + 透明底（圆角与描边由里面的 card 画），Tool 位不进任务栏。
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
     color: "transparent"
@@ -129,8 +134,8 @@ Window {
 
                 Rectangle {
                     implicitWidth: 22
-                    implicitHeight: 22
-                    radius: Theme.rXs
+                    implicitHeight: 26
+                    radius: Theme.rSm
                     color: closeHover.hovered ? Theme.surfaceHighest : "transparent"
 
                     Text {
@@ -153,6 +158,13 @@ Window {
             }
 
             // ------------------------------------------------------------ 截图翻译（真控件）
+            ColumnLayout {
+                id: captureSection
+
+                Layout.fillWidth: true
+                spacing: Theme.s2
+                visible: panel.mode === "capture"
+
             Text {
                 Layout.fillWidth: true
                 text: qsTr("截图翻译")
@@ -311,6 +323,226 @@ Window {
                     suffix: qsTr("秒")
                     value: backend.overlayAutoHideDelay
                     onModified: function (v) { backend.overlayAutoHideDelay = v }
+                }
+            }
+            }
+
+            // ------------------------------------------------------------ 小窗翻译（mode="mini"）
+            ColumnLayout {
+                id: miniSection
+
+                Layout.fillWidth: true
+                spacing: Theme.s2
+                visible: panel.mode === "mini"
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("小窗翻译")
+                    color: Theme.ink
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.DemiBold
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("固定在最前")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                    }
+
+                    AppToggle {
+                        checked: backend.miniAlwaysOnTop
+                        onToggled: function (on) {
+                            backend.miniAlwaysOnTop = on
+                            checked = backend.miniAlwaysOnTop
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("译文带原文")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                    }
+
+                    AppToggle {
+                        checked: backend.showSource
+                        onToggled: function (on) {
+                            backend.showSource = on
+                            checked = backend.showSource
+                        }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("「译文带原文」打开后，每段译文上方会多一行原文；关掉就只看译文。")
+                    color: Theme.inkVariant
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeTiny
+                    wrapMode: Text.Wrap
+                }
+            }
+
+            // ------------------------------------------------------------ 实时翻译（mode="live"）
+            // 和截图翻译那一组互斥显示：同一个窗口，按调用方是谁换内容。
+            ColumnLayout {
+                id: liveSection
+
+                Layout.fillWidth: true
+                spacing: Theme.s2
+                visible: panel.mode === "live"
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("实时翻译")
+                    color: Theme.ink
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.DemiBold
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("刷新间隔")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    // 400~1500：再快引擎跟不上（每帧都会堆积一样的结果），
+                    // 再慢就不像"实时"了。和后端 clamp 对齐。
+                    SetStepper {
+                        Layout.alignment: Qt.AlignVCenter
+                        from: 400
+                        to: 1500
+                        step: 100
+                        suffix: qsTr("ms")
+                        value: backend.liveIntervalMs
+                        onModified: function (v) { backend.liveIntervalMs = v }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("只在内容变化时翻译")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    AppToggle {
+                        Layout.alignment: Qt.AlignVCenter
+                        checked: backend.liveOnlyOnChange
+                        onToggled: {
+                            backend.liveOnlyOnChange = checked
+                            checked = backend.liveOnlyOnChange
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("区域底色")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    // 0 = 不铺底（原文会透过贴纸显出来）。
+                    SetStepper {
+                        Layout.alignment: Qt.AlignVCenter
+                        from: 0
+                        to: 100
+                        step: 10
+                        suffix: "%"
+                        value: backend.overlayBackdrop
+                        onModified: function (v) { backend.overlayBackdrop = v }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("译文不透明度")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    SetStepper {
+                        Layout.alignment: Qt.AlignVCenter
+                        from: 40
+                        to: 100
+                        step: 5
+                        suffix: "%"
+                        value: backend.overlayOpacity
+                        onModified: function (v) { backend.overlayOpacity = v }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.s2
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("译文字号")
+                        color: Theme.ink
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeBody
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    SetStepper {
+                        Layout.alignment: Qt.AlignVCenter
+                        from: 10
+                        to: 20
+                        step: 1
+                        suffix: "px"
+                        value: backend.overlayFontSize
+                        onModified: function (v) { backend.overlayFontSize = v }
+                    }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("改完立刻生效，不用重开这一单。")
+                    wrapMode: Text.WordWrap
+                    color: Theme.inkVariant
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeTiny
                 }
             }
 

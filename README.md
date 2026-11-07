@@ -6,7 +6,7 @@
 
 跨平台截图翻译工具（Windows 优先）。
 
-> **状态：翻译后端 + 桌面界面 + 截屏翻译（框选 / OCR / 译文浮层 / 全局热键）已完成（当前版本 0.9.2-separate）；
+> **状态：翻译后端 + 桌面界面 + 截屏翻译（框选 / OCR / 译文浮层 / 全局热键）已完成（当前版本 0.9.9 Erstling）；
 > 小窗翻译与实时翻译尚未开工。**
 
 ---
@@ -198,7 +198,7 @@ studious.exe --asset-download backend\asset\manifest.json <assetId>
 版本号 / 渠道名读仓库根的 `version.json`；提交号在构建期从 git 取，Qt 版本与架构运行期取。
 发版只需改 `version.json`，再打一个 `vX.Y.Z` 标签。
 
-当前：`0.9.2-separate`（separate/分离版）。
+当前：`0.9.9`，版名 **Erstling**（channel `separate` / 分离版）。
 
 ---
 

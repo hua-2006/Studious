@@ -623,7 +623,9 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
     Q_UNUSED(options)
 
     core::TranslateOutcome out;
-    m_cancelRequested = false;
+
+    // 取消标志不在这里清：清零权归 Router（每次请求开始清一次，见 ICancelControl.h）。
+    // 各引擎在自己的 translate() 入口清会吞掉降级边界上到达的取消。
 
     // 源语言：用户显式指定就信用户；auto 时用语言检测（MT 没有自纠能力，
     // 选错语言对必然输出垃圾，所以这里必须检测而不是猜）。
@@ -706,6 +708,12 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
 void LocalMtTranslator::cancel()
 {
     m_cancelRequested = true;
+}
+
+void LocalMtTranslator::resetCancel()
+{
+    // 只允许 Router 在请求开始时调用（见 ICancelControl.h）。
+    m_cancelRequested = false;
 }
 
 } // namespace studious::translate

@@ -1802,13 +1802,13 @@ Item {
                                 onValueModified: backend.localGpuLayers = value
 
                                 ToolTip.visible: gpuHover.hovered
-                                ToolTip.text: qsTr("-1 = 自动（Vulkan 99 / CPU 0）；0 = 不卸载任何层，纯 CPU 算")
+                                ToolTip.text: qsTr("-1 = 自动（不传 -ngl，由 llama.cpp 按空闲显存挑层数）；0 = 不卸载任何层，纯 CPU 算")
 
                                 HoverHandler { id: gpuHover }
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("-1 = 自动，对应 -ngl。显存不够时手动降档。")
+                                text: qsTr("-1 = 自动，对应 -ngl。显存不够时手动降档（留空/自动就交给 llama.cpp 自己挑）。")
                                 elide: Text.ElideRight
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi

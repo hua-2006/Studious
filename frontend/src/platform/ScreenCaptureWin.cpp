@@ -275,7 +275,8 @@ struct GdiCapture
 
     ~GdiCapture()
     {
-        if (memDc && oldBitmap)
+        // HGDI_ERROR 不是可用的旧句柄（SelectObject 失败时就是它），拿它回 Select 只会再错一次。
+        if (memDc && oldBitmap && oldBitmap != HGDI_ERROR)
             SelectObject(memDc, oldBitmap);
         if (dib)
             DeleteObject(dib);
@@ -323,6 +324,9 @@ CaptureResult capturePhysical(const QRect &target)
     if (!g.dib || !bits)
         return failedCapture(errText(QStringLiteral("抓屏失败：CreateDIBSection 失败"), GetLastError()));
 
+    // SelectObject 失败时返回 NULL 或 HGDI_ERROR((HGDIOBJ)-1)，两者都不是可用的旧句柄：
+    // 记到 g.oldBitmap 后立刻退出，析构里会跳过回 Select（否则等于拿 -1 再错一次）。
+    // 注意 GDI 不保证设置 LastError，错误码只作参考。
     g.oldBitmap = SelectObject(g.memDc, g.dib);
     if (!g.oldBitmap || g.oldBitmap == HGDI_ERROR)
         return failedCapture(errText(QStringLiteral("抓屏失败：SelectObject 失败"), GetLastError()));

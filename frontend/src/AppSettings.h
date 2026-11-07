@@ -165,6 +165,11 @@ struct AppSettings {
     // 0 = 复制完立刻收；非 0 是给"再看一眼译文"留的时间。
     int overlayAutoHideDelay = 0;
 
+    // 实时翻译选区的背景底色（键 settings/overlay/backdrop，0~100，百分比）。
+    // 实时贴纸是半透明的，底下原本的字会透出来、跟译文打架；铺一层底就好读多了。
+    // 0 = 完全不要底色（只在有译文的地方画贴纸）。
+    int overlayBackdrop = 70;
+
     // 小窗是否置顶（键 settings/mini/alwaysOnTop，默认 true）。
     bool miniAlwaysOnTop = true;
 
@@ -175,6 +180,11 @@ struct AppSettings {
     // 实时翻译锁本地引擎（键 settings/live/engineLocked，默认 true）：
     // 云端 / web 单次 1 秒以上，做实时没有意义，默认逼用户走本地。
     bool liveEngineLocked = true;
+
+    // 只在内容变化时才翻译（键 settings/live/onlyOnChange，默认 true）：
+    // 每一帧都翻会把引擎压满，而且同样的句子重复请求也只是吃缓存。
+    // 关掉 = 每帧都重翻，用来验证"引擎是不是真的在跑"。
+    bool liveOnlyOnChange = true;
 
     // 记录里存哪一份文本（键 settings/record/saveMode）："original"（OCR 原文）或 "current"。
     QString recordSaveMode = QStringLiteral("original");

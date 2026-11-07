@@ -65,7 +65,8 @@ core::TranslateOutcome MockTranslator::translate(const QStringList &paragraphs,
     Q_UNUSED(srcLang)
     Q_UNUSED(options)
     core::TranslateOutcome out;
-    m_cancelRequested = false;
+
+    // 取消标志不在这里清：清零权归 Router（每次请求开始清一次，见 ICancelControl.h）。
 
     if (dstLangs.isEmpty()) {
         out.error = i18n::s("mock 未收到目标语言", "The mock engine received no target language");
@@ -93,6 +94,12 @@ core::TranslateOutcome MockTranslator::translate(const QStringList &paragraphs,
 void MockTranslator::cancel()
 {
     m_cancelRequested = true;
+}
+
+void MockTranslator::resetCancel()
+{
+    // 只允许 Router 在请求开始时调用（见 ICancelControl.h）。
+    m_cancelRequested = false;
 }
 
 } // namespace studious::translate

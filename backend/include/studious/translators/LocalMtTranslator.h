@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "contract/ITranslator.h"
+#include "translators/ICancelControl.h"
 
 #include <QSet>
 #include <QString>
@@ -32,7 +33,7 @@ namespace studious::translate {
 //
 // 注意 "mul" 不是真语言码，只是 mt.opus.mul-en 目录名里的伪语言标签：
 // 它绝不能被当成 en→mul / mul→zh 这类"直连"去匹配（否则 en-mul 会被误用）。
-class LocalMtTranslator final : public core::ITranslator {
+class LocalMtTranslator final : public core::ITranslator, public ICancelControl {
 public:
     // modelsRoot 为空时用 %APPDATA%/studious/assets/models（与资产系统一致）。
     explicit LocalMtTranslator(const QString &modelsRoot = QString());
@@ -48,6 +49,9 @@ public:
                                      const QStringList &dstLangs,
                                      const QJsonObject &options) override;
     void cancel() override;
+
+    // 取消标志只由 Router 在每个请求开始时清零（见 ICancelControl.h 的说明）。
+    void resetCancel() override;
 
     QString cacheTag() const override;
 

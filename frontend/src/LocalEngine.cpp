@@ -38,9 +38,9 @@ QString serverExeName()
     return studious::platform::IPlatform::serverExecutableName();
 }
 
-// 实测结论：Vulkan 构建必须显式给 -ngl 99（整个模型上卡）。
-// 只把 exe 换成 vulkan 版而不传 -ngl，它照样用 CPU 算——启动日志里也不会出现 device Vulkan0。
-constexpr int kVulkanGpuLayers = 99;
+// 注意：以前这里硬给 -ngl 99（「整个模型上卡」），在 1.5B 上被 llama.cpp 判为
+// 「塞不进空闲显存」并 abort，直接把机器拖死。现在「自动」一律不传 -ngl，
+// 由 llama.cpp 的 common_fit_params 按实际显存挑层数 —— 少卸载几层也不会崩。
 
 // 一次只翻几句，2048 够用且省内存。界面「0 = 自动」时落到这个值，
 // 用户显式填的数不去夹逼——分配失败是用户自己的选择，我们不替他猜。
@@ -92,16 +92,20 @@ QString resolveBackend(bool preferGpu)
 }
 
 // -ngl 的语义分三种，这里一次说清：
-//   负数（-1）= 自动：Vulkan 给满层，CPU 给 0；
+//   负数（-1）= 自动：**不传 -ngl**，让 llama.cpp 自己的 common_fit_params 按空闲显存挑层数。
+//                以前这里在 Vulkan 下硬给 99，结果 1.5B 模型上 llama.cpp 直接报
+//                「failed to fit params to free device memory: n_gpu_layers already set by
+//                user to 99, abort」，把整机显存撑到卡死。自动就交给它自己算。
 //   0          = 用户明确要求「一层都不卸载」——Vulkan exe 也照样不传 -ngl（纯 CPU 算，
 //                这是 LlamaServerOptions 的既有语义，不是取巧）；
 //   正数       = 用户要的层数原样传下去（放不下就让 llama-server 自己报错，别偷偷改）。
 int resolvedGpuLayers(int requested, const QString &backend)
 {
+    Q_UNUSED(backend);
     if (requested >= 0) {
         return requested;
     }
-    return backend == QLatin1String("vulkan") ? kVulkanGpuLayers : 0;
+    return 0;
 }
 
 // 「用户写的配置」折算成「进程真正吃到的参数」。
@@ -129,7 +133,7 @@ EffectiveLaunchConfig effectiveConfig(const LocalEngineConfig &cfg)
 }
 
 // 「这次要的配置」与「当前跑着的那份」是否等价——热切换的唯一判据。
-// 比的是折算后的生效值，所以 contextSize=0 与 2048、gpuLayers=-1 与 99（Vulkan）算同一个配置，
+// 比的是折算后的生效值，所以 contextSize=0 与 2048、gpuLayers=-1 与 0（都是「不传 -ngl」）算同一个配置，
 // 不会因为「自动」和「恰好等于默认值」的写法不同就白重启一次。
 // 四项运行参数必须全在比较里：漏一项，用户改完点「应用」界面上就毫无反应。
 bool sameLaunchConfig(const LocalEngineConfig &a, const LocalEngineConfig &b)
@@ -320,7 +324,7 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
     // 全部取折算后的值：界面填 0 / -1 / 空 时这里已经换成内置默认或按后端算出来的数。
     options.contextSize = effective.contextSize;
     options.threads = effective.threads;
-    // Vulkan 默认必须给足层数，否则等于白装一个 40MB 的 DLL；CPU 给 0 就是「不传 -ngl」。
+    // 「自动」= 不传 -ngl，llama.cpp 按空闲显存自己挑层数（显式填的数才原样传）。
     options.gpuLayers = effective.gpuLayers;
     options.extraArgs = effective.extraArgs;
     options.startupTimeoutMs = 120000;

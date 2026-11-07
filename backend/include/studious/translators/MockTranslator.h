@@ -3,12 +3,13 @@
 #include <atomic>
 
 #include "contract/ITranslator.h"
+#include "translators/ICancelControl.h"
 
 namespace studious::translate {
 
 // 离线自测用的假引擎：不联网、无资产，把原文加上目标语言前缀原样返回。
 // 用途：CI / 无网环境下验证 Router 选路与数据契约是否打通。
-class MockTranslator final : public core::ITranslator {
+class MockTranslator final : public core::ITranslator, public ICancelControl {
 public:
     QString id() const override;
     bool isReady() const override;
@@ -21,6 +22,9 @@ public:
                                      const QStringList &dstLangs,
                                      const QJsonObject &options) override;
     void cancel() override;
+
+    // 取消标志只由 Router 在每个请求开始时清零（见 ICancelControl.h 的说明）。
+    void resetCancel() override;
 
 private:
     std::atomic_bool m_cancelRequested{false};

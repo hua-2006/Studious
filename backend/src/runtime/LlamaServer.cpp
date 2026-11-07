@@ -41,6 +41,14 @@ constexpr int kLogTailLines = 24;
 // 日志文件超过这个大小就在下次启动时清空，避免长期使用无限膨胀。
 constexpr qint64 kLogRotateBytes = 8 * 1024 * 1024;
 
+// 优雅退出的让步时间：POSIX 上 terminate() = SIGTERM，200 ms 足够它收摊；
+// Windows 上 terminate() 对无窗口控制台程序无效，所以那边直接用 kill()。
+constexpr int kTerminateGraceMs = 200;
+
+// kill() 之后等收尸的时间。kill 是立即生效的，这里只是等 QProcess 把状态刷成 NotRunning，
+// 正常情况下几毫秒就返回，不是"固定等 3 秒"。
+constexpr int kExitGraceMs = 3000;
+
 #ifdef Q_OS_WIN
 // CREATE_NO_WINDOW = 0x08000000。
 // 这里手写常量，不引任何平台头文件：backend 保持零平台头依赖
@@ -48,6 +56,73 @@ constexpr qint64 kLogRotateBytes = 8 * 1024 * 1024;
 // QProcess 的 modifier 只需要把这一位或进 flags，用不到任何 Windows 类型。
 constexpr unsigned long kCreateNoWindow = 0x08000000UL;
 #endif
+
+// 受管参数：这些由 LlamaServerOptions 的字段决定，extraArgs 里出现一律拒绝。
+// 尤其 --host / --port：放行等于允许用户把**无鉴权**的 llama-server 顶到 0.0.0.0 上。
+const QStringList &managedFlags()
+{
+    static const QStringList flags{
+        QStringLiteral("--host"),  QStringLiteral("--port"),
+        QStringLiteral("-m"),      QStringLiteral("--model"),
+        QStringLiteral("-t"),      QStringLiteral("--threads"),
+        QStringLiteral("-c"),      QStringLiteral("--ctx-size"),
+        QStringLiteral("-ngl"),    QStringLiteral("--n-gpu-layers"),
+    };
+    return flags;
+}
+
+// 敏感参数：命令行会写进 logs/llama-server.log，界面「本地 LLM」卡片还会原样展示日志尾部，
+// 所以这几个 flag 后面跟的值落盘前必须打码。
+const QStringList &secretFlags()
+{
+    static const QStringList flags{
+        QStringLiteral("--api-key"),
+        QStringLiteral("--token"),
+        QStringLiteral("--password"),
+        QStringLiteral("--auth"),
+    };
+    return flags;
+}
+
+// 把 "--host=0.0.0.0" 拆成 flag + 值；不带 '=' 时 value 为空。
+QString flagOf(const QString &token, QString *value)
+{
+    const int eq = token.indexOf(QLatin1Char('='));
+    if (value != nullptr) {
+        *value = eq >= 0 ? token.mid(eq + 1) : QString();
+    }
+    return eq >= 0 ? token.left(eq) : token;
+}
+
+// 命令行脱敏：`--api-key xxx` 与 `--api-key=xxx` 两种写法都盖成 ***。
+QString maskedCommandLine(const QStringList &args)
+{
+    QStringList out;
+    out.reserve(args.size());
+
+    bool maskNext = false;
+    for (const QString &arg : args) {
+        if (maskNext) {
+            out << QStringLiteral("***");
+            maskNext = false;
+            continue;
+        }
+
+        const QString flag = flagOf(arg, nullptr);
+        if (flag.startsWith(QLatin1Char('-')) && secretFlags().contains(flag, Qt::CaseInsensitive)) {
+            if (arg.contains(QLatin1Char('='))) {
+                out << flag + QStringLiteral("=***");
+            } else {
+                // 值在下一个 token 里：先照抄 flag，把它标成待打码。
+                out << arg;
+                maskNext = true;
+            }
+            continue;
+        }
+        out << arg;
+    }
+    return out.join(QLatin1Char(' '));
+}
 
 } // namespace
 
@@ -78,8 +153,10 @@ bool LlamaServer::start(QString *error)
     m_lastError.clear();
 
     const auto fail = [this, error](const QString &text) {
+        // 顺序要紧：stop() 现在会清 m_lastError（它代表"上一次的失败"，
+        // 停了就该翻篇），所以必须先回收进程、再把这次的原因写进去。
+        stop();
         recordError(text);
-        stop();   // 起不来就别留残留进程
         if (error != nullptr) {
             *error = text;
         }
@@ -103,6 +180,13 @@ bool LlamaServer::start(QString *error)
                              {m_options.modelPath}));
     }
 
+    // 附加参数先解析一遍：受管 flag（--host/--port/-m/-t/-c/-ngl）在这里就拒掉，
+    // 用户在点「启动」时就看到人话，而不是等满 120 s 只拿到一句「就绪超时」。
+    QString extraError;
+    if (!parseExtraArguments(nullptr, &extraError)) {
+        return fail(extraError);
+    }
+
     if (!pickPort(error)) {
         // pickPort 已写好错误文案，这里只补一条记录 + 回收。
         recordError(error != nullptr ? *error : QString());
@@ -111,14 +195,14 @@ bool LlamaServer::start(QString *error)
     m_baseUrl = QStringLiteral("http://127.0.0.1:%1/v1").arg(m_port);
 
     if (!launch(error)) {
-        recordError(error != nullptr ? *error : QString());
         stop();
+        recordError(error != nullptr ? *error : QString());
         return false;
     }
     if (!waitUntilReady(error)) {
         // waitUntilReady 内部已带日志尾巴；这里仍要回收进程，否则 5xx 就是常驻内存。
-        recordError(error != nullptr ? *error : QString());
         stop();
+        recordError(error != nullptr ? *error : QString());
         return false;
     }
 
@@ -169,8 +253,18 @@ bool LlamaServer::prepareLogFile(QString *logPath, QString *error)
 
     // 超限就清空，再追加本次启动的头部信息（命令行 + 时间），
     // 这样失败时读到的日志尾部一定属于**这一次**启动。
+    //
+    // 用 truncate 而不是 remove：remove 在文件被占用 / 只读时静默失败（返回值以前被丢了），
+    // 之后 append 照样写进一个 8 MB+ 的旧文件，日志尾巴就再也不是本次启动的内容。
     if (QFileInfo(path).size() > kLogRotateBytes) {
-        QFile::remove(path);
+        QFile stale(path);
+        if (!stale.open(QIODevice::ReadWrite)) {
+            qWarning("[local] could not open the log for rotation: %s (%s)",
+                     qUtf8Printable(path), qUtf8Printable(stale.errorString()));
+        } else if (!stale.resize(0)) {
+            qWarning("[local] could not truncate the log: %s (%s)",
+                     qUtf8Printable(path), qUtf8Printable(stale.errorString()));
+        }
     }
 
     QFile log(path);
@@ -183,10 +277,12 @@ bool LlamaServer::prepareLogFile(QString *logPath, QString *error)
         }
         return false;
     }
+    // 命令行必须脱敏后再落盘：这份日志会被界面「本地 LLM」卡片原样展示，
+    // --api-key / --token / --password / --auth 的值不能跟着写出去。
     log.write(QStringLiteral("[studious] %1  start: %2 %3\n")
                   .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
                        QDir::toNativeSeparators(m_options.executablePath),
-                       arguments().join(QLatin1Char(' ')))
+                       maskedCommandLine(arguments()))
                   .toUtf8());
     log.flush();
 
@@ -320,17 +416,26 @@ bool LlamaServer::waitUntilReady(QString *error)
 void LlamaServer::stop()
 {
     m_ready = false;
+    // 停掉之后就没有"上一次启动失败的原因"可言了。不清的话，start() 失败 → 用户改成
+    // 正确配置 → 再次 start() 成功，lastError() 还会挂着上一条错误。
+    m_lastError.clear();
 
     if (m_process != nullptr) {
         if (m_process->state() != QProcess::NotRunning) {
-            // terminate() 在 Windows 上是发 WM_CLOSE：控制台程序没有窗口，
-            // 多半不会自己退，所以 3 秒后必须 kill()。这段时间是有意的等待，
-            // 给那些能优雅退出的构建一个体面收场的机会。
+#ifdef Q_OS_WIN
+            // Windows 的 terminate() 是发 WM_CLOSE：llama-server 是无窗口控制台程序，
+            // 根本没有消息循环，收不到也不会处理它 —— 先前那段固定 3 s 的等待是纯浪费。
+            // 直接 kill()（TerminateProcess），再等一个很短的收尸窗口。
+            m_process->kill();
+            m_process->waitForFinished(kExitGraceMs);
+#else
+            // POSIX 上 SIGTERM 是真信号：给 200 ms 的面子，不退出再强杀。
             m_process->terminate();
-            if (!m_process->waitForFinished(3000)) {
+            if (!m_process->waitForFinished(kTerminateGraceMs)) {
                 m_process->kill();
-                m_process->waitForFinished(5000);
+                m_process->waitForFinished(kExitGraceMs);
             }
+#endif
         }
         m_process.reset();
     }
@@ -375,7 +480,16 @@ QStringList LlamaServer::arguments() const
     //   llama-server.exe -m <model> --host 127.0.0.1 --port <port> -c 2048 -t 6 --no-webui
     // GPU（Vulkan 运行时）时额外追一个 -ngl <n>：
     //   llama-server.exe -m <model> ... -ngl 99 ...
+    //
+    // 附加参数放在**最前面**：受管 flag 已经在 parseExtraArguments() 里拒掉了，
+    // 但万一还有其它重名，靠后的受管参数说了算（llama.cpp 的解析是后出现者生效）。
     QStringList args;
+    if (!m_options.extraArgs.trimmed().isEmpty()) {
+        // start() 里已经校验过一次；这里再解析一遍取值。
+        // 校验失败的话 start() 根本没走到这里，所以忽略返回值是安全的。
+        parseExtraArguments(&args, nullptr);
+    }
+
     args << QStringLiteral("-m") << QDir::toNativeSeparators(m_options.modelPath);
     args << QStringLiteral("--host") << QStringLiteral("127.0.0.1");
     args << QStringLiteral("--port") << QString::number(m_port);
@@ -390,14 +504,49 @@ QStringList LlamaServer::arguments() const
     }
     // 内置 Web UI 对一个只当后端用的服务毫无用处，还会拖慢启动。
     args << QStringLiteral("--no-webui");
-
-    const QString extra = m_options.extraArgs.trimmed();
-    if (!extra.isEmpty()) {
-        // 只做最朴素的分隔：带空格的单个参数（例如路径）请用引号自行处理，
-        // 这一栏是给排障 / 临时试参用的，不值得引入完整的分词器。
-        args << extra.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    }
     return args;
+}
+
+// 解析 extraArgs，并把受管 flag 挡在门外。
+//
+// 为什么不再手写 split(' ')：双引号会被原样带进参数里（"--path \"C:\\a b\"" 直接起不来，
+// 只表现为 120 s 就绪超时），tab 又不切。QProcess::splitCommand() 用的就是 QProcess
+// 起进程时同一套分组规则（引号 / 反斜杠 / 任意空白），解析结果和最终命令行一致。
+bool LlamaServer::parseExtraArguments(QStringList *parsed, QString *error) const
+{
+    const QString extra = m_options.extraArgs.trimmed();
+    QStringList tokens;
+    if (!extra.isEmpty()) {
+        tokens = QProcess::splitCommand(extra);
+    }
+
+    for (const QString &token : tokens) {
+        if (!token.startsWith(QLatin1Char('-'))) {
+            continue;
+        }
+        const QString flag = flagOf(token, nullptr).toLower();
+        if (!managedFlags().contains(flag)) {
+            continue;
+        }
+        const QString text =
+            i18n::sf("附加参数不能包含 %1：它由本页的设置项控制（模型 / 上下文 / 线程 / GPU 层数），"
+                     "服务端口由程序自动挑选，且只监听 127.0.0.1。\n"
+                     "请删掉这条参数后重试。",
+                     "Extra args must not contain %1: it is controlled by the settings on this "
+                     "page (model / context / threads / GPU layers), the port is picked "
+                     "automatically, and the server only listens on 127.0.0.1.\n"
+                     "Remove that argument and try again.",
+                     {flag});
+        if (error != nullptr) {
+            *error = text;
+        }
+        return false;
+    }
+
+    if (parsed != nullptr) {
+        *parsed = tokens;
+    }
+    return true;
 }
 
 QString LlamaServer::installRoot() const

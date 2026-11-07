@@ -29,7 +29,10 @@ struct LlamaServerOptions {
     // 只换 Vulkan 版 exe 而不传 -ngl，它照样用 CPU 算，日志里也不会出现 device Vulkan0。
     int     gpuLayers = 0;
     int     startupTimeoutMs = 120000;
-    QString extraArgs;          // 可选，空格分隔
+    // 可选，按命令行规则解析（支持双引号包住带空格的路径，见 QProcess::splitCommand），
+    // 追加在受管参数之前。受管 flag（--host/--port/-m/--model/-t/--threads/-c/--ctx-size/
+    // -ngl）会被拒绝并报错：端口由程序挑、只监听 127.0.0.1，不给 extraArgs 覆盖的机会。
+    QString extraArgs;
 };
 
 class LlamaServer {
@@ -44,7 +47,8 @@ public:
     // 失败时进程一定已经被回收，不会留半死的 llama-server。
     bool start(QString *error = nullptr);
 
-    // 先 terminate()，3 秒不退再 kill()，并 waitForFinished()。可重复调用。
+    // 回收子进程并清空 m_lastError。Windows 上直接 kill()（terminate() 对无窗口的
+    // 控制台程序无效），POSIX 上先 terminate() 200 ms 再 kill()。可重复调用。
     void stop();
 
     bool isRunning() const;   // 进程在跑且 /v1/models 已经探测成功过
@@ -65,6 +69,8 @@ private:
     bool waitUntilReady(QString *error);
 
     QStringList arguments() const;
+    // 解析 extraArgs（QProcess 同款分词）并拒绝受管 flag；失败写 error 并返回 false。
+    bool parseExtraArguments(QStringList *parsed, QString *error) const;
     QString installRoot() const;
     void recordError(const QString &text);
 

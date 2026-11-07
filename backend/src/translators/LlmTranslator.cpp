@@ -134,7 +134,8 @@ bool targetUsesCjk(const QString &dstLang)
            || dstLang == QLatin1String("ja") || dstLang == QLatin1String("ko");
 }
 
-// 目标语言是日文时，正常译文一定含假名；只有汉字的输出多半是中文。
+// 目标语言是日文时，正常译文大多含假名 —— 但纯汉字也是合法日文（「東京」「情報」），
+// 所以这个函数只回答"有没有假名"，"像不像日文"由 matchesTargetScript 按「假名 or 汉字」判。
 bool hasKana(const QString &text)
 {
     for (const QChar ch : text) {
@@ -157,14 +158,28 @@ bool hasHangul(const QString &text)
     return false;
 }
 
-bool hasLatinLetter(const QString &text)
+// 是否含汉字（假名、谚文不算）。日文只写汉字也是合法输出，所以要单独判。
+bool hasHanzi(const QString &text)
 {
     for (const QChar ch : text) {
-        if (ch.isLetter() && ch.unicode() < 0x0250) {
+        const ushort u = ch.unicode();
+        if (u >= 0x4E00 && u <= 0x9FFF) {
             return true;
         }
     }
     return false;
+}
+
+// 一个字母都没有（纯数字 / 纯符号 / 纯空白）。
+// 这类段落"翻译"就是原样保留：不该进"照抄原文"判定，也不该触发补救请求。
+bool hasNoLetters(const QString &text)
+{
+    for (const QChar ch : text) {
+        if (ch.isLetter()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // 判断输出是否"像"目标语言。
@@ -172,6 +187,14 @@ bool hasLatinLetter(const QString &text)
 // 这是业务底线：宁可报错让用户换模型，也不要把意大利语当成中文显示出来。
 // 判据只用字符集（不引语言检测模型），所以对拉丁语系之间（英/法/德/意）
 // 无法区分——那超出了字符集能判断的范围，需要真正的语言识别。
+//
+// 但"字符集不符"只在**有足够信息**时才成立：
+//   1. 没有任何字母的串（"3.14"、"-->"、"♪"）没有语种可言，放行；
+//   2. 极短输出（"OK"、"東京"、"Wi-Fi"）常是缩写/专有名词，原样保留就是正确答案；
+//   3. 日文允许纯汉字。
+// 以前这里要求"拉丁目标必须含拉丁字母""日文必须含假名"，于是 "3.14"/"OK"/「東京」
+// 被判语种不符，进而触发补救请求（每段最多 5 次）—— 全是白花钱。
+// 真正的"没翻译"由 isUntranslatedOutput()（译文 == 原文）单独判，那条才是硬失败。
 bool matchesTargetScript(const QString &text, const QString &dstLang)
 {
     int latinLetters = 0;
@@ -184,22 +207,34 @@ bool matchesTargetScript(const QString &text, const QString &dstLang)
             }
         }
     }
+
+    // 1. 没有字母：纯数字/符号/emoji，无所谓"语种"。
+    if (allLetters == 0) {
+        return true;
+    }
+
+    // 2. 极短输出不判语种（阈值 4 是实测尺度："OK"、"PDF"、"東京"、"Wi-Fi" 都在内）。
+    if (text.trimmed().size() <= 4) {
+        return true;
+    }
+
     // 目标语言是中日韩，却有一半以上是拉丁字母 —— 说明只翻了半句
     // （实测 0.5B/1.5B 英文→日文会输出 "quick brown foxがさぼったogeを跳び越える。"）。
-    const bool tooMuchLatin = allLetters > 0 && latinLetters * 100 / allLetters > 50;
+    const bool tooMuchLatin = latinLetters * 100 / allLetters > 50;
 
     if (dstLang == QLatin1String("zh") || dstLang == QLatin1String("zh-TW")) {
         return containsCjk(text) && !tooMuchLatin;
     }
     if (dstLang == QLatin1String("ja")) {
-        // 日文正常含假名；纯汉字输出更可能是中文，判为不符。
-        return hasKana(text) && !tooMuchLatin;
+        // 3. 日文允许纯汉字（「東京」「情報」），不再强制必须有假名。
+        return (hasKana(text) || hasHanzi(text)) && !tooMuchLatin;
     }
     if (dstLang == QLatin1String("ko")) {
         return hasHangul(text) && !tooMuchLatin;
     }
-    // 拉丁语系（en/fr/de/es/it/pt…）：必须是拉丁字母，且不得混入中日韩文字。
-    return hasLatinLetter(text) && !containsCjk(text);
+    // 拉丁语系（en/fr/de/es/it/pt…）：不得整段残留中日韩文字即可。
+    // 不再要求"必须含拉丁字母"——数字/符号串与短串已由上面两条放行。
+    return !containsCjk(text);
 }
 
 // 缓存标签里的地址归一化：回环地址去掉端口。
@@ -345,7 +380,9 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
     Q_UNUSED(options)
 
     core::TranslateOutcome out;
-    m_cancelRequested = false;
+
+    // 取消标志不在这里清：清零权归 Router（每次请求开始清一次，见 ICancelControl.h）。
+    // 以前各引擎在自己的 translate() 入口清，降级边界上到达的取消会被下一个引擎吞掉。
 
     // 预算时钟在这里起一次，整次 translate() 共用（所有段落、所有目标语言）。
     // 以前 translateOne 内部各自 start()，于是"每段都有 30s 预算"：2 段 × 20s = 40s
@@ -492,8 +529,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
             }
 
             for (int k = 0; k < chunk.size(); ++k) {
-                // 取消要能打断"逐段补救"：每段最多 5 次重试，14 段就是 70 次请求，
-                // 不在这里检查，用户点了取消还要再等好几分钟。
+                // 取消要能打断"逐段补救"：补救请求同样计费，点了取消就别再发。
                 if (m_cancelRequested) {
                     cancelled = true;
                     break;
@@ -503,7 +539,11 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                 }
                 QString one;
                 QString err;
-                if (translateOne(texts.at(k), dst, endpoint, one, err)) {
+                // 补救只给 1 次机会（maxAttempts=1）：
+                // 批量请求已经把这一批的"正常节奏"用掉了，逐段再各跑 5 次的话
+                // 8 段最坏就是 40 次请求，全部计费，而首轮就失败的段落换个 prompt
+                // 通常也翻不出来。1 次足够区分"偶发格式抖动"和"真的不行"。
+                if (translateOne(texts.at(k), dst, endpoint, one, err, 1)) {
                     translated[chunk.at(k)] = one;
                 } else if (firstParagraphError.isEmpty()) {
                     firstParagraphError = i18n::sf("目标语言 %1 第 %2 段失败：%3",
@@ -536,6 +576,12 @@ void LlmTranslator::cancel()
 {
     // 同步 HTTP 实现无法从外部打断进行中的请求；这里只能让段落循环尽快退出。
     m_cancelRequested = true;
+}
+
+void LlmTranslator::resetCancel()
+{
+    // 只允许 Router 在请求开始时调用（见 ICancelControl.h）。
+    m_cancelRequested = false;
 }
 
 // ---------------------------------------------------------------- 内部实现
@@ -663,9 +709,14 @@ bool LlmTranslator::translateOne(const QString &text,
                                  const QString &dstLang,
                                  const QString &endpoint,
                                  QString &outText,
-                                 QString &outError)
+                                 QString &outError,
+                                 int maxAttempts)
 {
     Q_UNUSED(endpoint)   // 端点已在 postChat 内部按配置拼接
+
+    if (maxAttempts < 1) {
+        maxAttempts = 1;
+    }
 
     // 输出上限按输入长度估算：小模型陷入复读时，2,048 token 会烧掉七八秒，
     // 而正常译文不会超过原文两倍长度。这里把损耗封顶。
@@ -695,14 +746,17 @@ bool LlmTranslator::translateOne(const QString &text,
 
     const QString standardPrompt = buildUserPrompt(text, dstLang);
 
-    // 最多 5 次尝试，每次换一种策略。
+    // 最多 maxAttempts 次尝试，每次换一种策略（默认 5 次 = 用户直接请求的单段翻译）。
     //
     // 为什么换策略而不是"再问一遍"：小模型一旦卡进某种失败模式
     // （照抄原文 / 译成别的语言 / 复读），同一条 prompt 重问往往得到同样的结果。
     // 实测把「中文指令 + <<<>>> 分隔符」换成「纯英文指令」能跳出很多坑。
+    //
+    // 批量的"逐段补救"路径传 maxAttempts = 1：那里已经失败过一轮，
+    // 再各跑 5 次会让成本按段数线性放大（8 段最坏 40 次请求）。
     QString lastError;
 
-    for (int attempt = 1; attempt <= 5; ++attempt) {
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
         // 用户按了取消：别再为这一段换下一种 prompt 重试（每次都是一次完整请求）。
         if (m_cancelRequested) {
             outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
@@ -795,10 +849,13 @@ bool LlmTranslator::translateOne(const QString &text,
         return true;
     }
 
-    outError = i18n::sf("翻译失败（已重试 5 次）：%1。可以换成更大的模型，或手动指定源语言。",
-                        "Translation failed after 5 attempts: %1. "
+    // 文案里的次数跟着实际尝试次数走：补救路径只试了 1 次时，
+    // 说"已重试 5 次"会让用户以为我们花了很多钱还失败。
+    outError = i18n::sf("翻译失败（已尝试 %1 次）：%2。可以换成更大的模型，或手动指定源语言。",
+                        "Translation failed after %1 attempt(s): %2. "
                         "Try a larger model, or set the source language explicitly.",
-                        {lastError.isEmpty() ? i18n::s("未给出原因", "no reason given") : lastError});
+                        {maxAttempts,
+                         lastError.isEmpty() ? i18n::s("未给出原因", "no reason given") : lastError});
     return false;
 }
 
@@ -955,6 +1012,13 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
         return true;
     }
 
+    // 入口先查一次取消：批量路径以前全程不看标志，用户点了取消还要等这一批
+    // （含一次降温重试）全部跑完才回到界面。
+    if (m_cancelRequested) {
+        outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
+        return false;
+    }
+
     const QString dstName = core::LanguageRegistry::displayName(dstLang);
     const QString srcNormalized = core::LanguageRegistry::normalize(m_activeSrcLang);
     const bool sameLanguage = !srcNormalized.isEmpty() && srcNormalized == dstLang;
@@ -1013,6 +1077,16 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
                 results[i] = stripAnnotationLines(results.at(i)).trimmed();
             }
 
+            // 纯数字/符号段（"3.14"、"-->"、"2026-11-04"）：原样返回就是正确答案。
+            // 不在这里放行的话，它会被判"返回了原文"，进而拖出一轮逐段补救请求。
+            // 直接用原文而不是模型给的那份：translateOne() 的输入预检也是原样返回，
+            // 这样 batch=1 与 batch>1 的输出完全一致（否则模型顺手改个标点就会让
+            // 用户看到"开了批量日期格式就变了"）。
+            if (hasNoLetters(texts.at(i))) {
+                results[i] = texts.at(i);
+                continue;
+            }
+
             QString reason;
             if (results.at(i).isEmpty()) {
                 reason = i18n::sf("第 %1 条译文为空", "item %1 is empty", {i + 1});
@@ -1042,6 +1116,12 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
     QString err;
     if (!postChat(system, user, m_cfg.temperature, maxTokens, content, err)) {
         outError = err;
+        return false;
+    }
+
+    // 请求在飞的时候用户可能按了取消：这一批的后续（解析 + 降温重试）都不必做了。
+    if (m_cancelRequested) {
+        outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
         return false;
     }
 
@@ -1082,10 +1162,22 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
                        "\n\nReminder: output only a JSON array of exactly the same length, "
                        "with no other text.");
 
+    // 降温重试前再查一次取消：这是第二次完整请求，取消之后发出去就是白花的钱。
+    if (m_cancelRequested) {
+        outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
+        return false;
+    }
+
     QString retryContent;
     QString retryErr;
     if (!postChat(system, retryUser, 0.0, maxTokens, retryContent, retryErr)) {
         outError = i18n::sf("批量翻译失败：%1", "The batch translation failed: %1", {retryErr});
+        return false;
+    }
+
+    // 重试请求期间又被取消：同样的道理，直接收手。
+    if (m_cancelRequested) {
+        outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
         return false;
     }
 

@@ -141,22 +141,51 @@ QWindow *WinPlatform::createOverlay(const OverlayOptions &)
     return nullptr;
 }
 
+void WinPlatform::rememberClickThrough(QWindow *w, bool on)
+{
+    if (w == nullptr)
+        return;
+
+    if (!m_clickThrough.contains(w)) {
+        // 只给每个窗口连一次。destroyed 在 QObject 析构里发，那时指针本身还有效，
+        // 拿来当键擦除是安全的；连接以 this 为 context，本对象先死时自动断开，
+        // 不会回调到已析构的 WinPlatform。
+        connect(w, &QObject::destroyed, this, [this](QObject *obj) {
+            m_clickThrough.remove(static_cast<QWindow *>(obj));
+        });
+    }
+    m_clickThrough.insert(w, on);
+}
+
 bool WinPlatform::setClickThrough(QWindow *w, bool on, QString *error)
 {
     if (!ensureNativeHandle(w, error))
         return false;
-    // 关穿透时仍然保留「不被截进图里」，这两个开关在界面上是独立的。
-    return winApplyOverlayFlags(w, on, true, error);
+    // 只改穿透，不动「截图排除」。以前这里顺手把排除一起打开，导致控制条调
+    // setClickThrough(false) 之后仍然拍不到（affinity 还是 0x11）——用户拿截图
+    // 工具反馈问题时，看得见却拍不下来。
+    // 需要排除截图的窗口（译文浮层）自己会再调 setExcludeFromCapture(true)。
+    // 反过来的方向现在也是安全的：winApplyOverlayFlags 在 exclude=false 时会把
+    // 窗口原有的 display affinity 读回来、改完样式再回填 —— 锁定/解锁切穿透
+    // 不会再把 WDA_EXCLUDEFROMCAPTURE 顺手清掉（清掉就等于浮层进了录屏）。
+    if (!winApplyOverlayFlags(w, on, /*excludeFromCapture=*/false, error))
+        return false;
+    // 只有真的设成功才记账：失败时下次 setExcludeFromCapture 回填的仍是旧值，
+    // 而不是一个没落到窗口上的「我们以为的状态」。
+    rememberClickThrough(w, on);
+    return true;
 }
 
 bool WinPlatform::setExcludeFromCapture(QWindow *w, bool on, QString *error)
 {
     if (!ensureNativeHandle(w, error))
         return false;
-    // 穿透状态由调用方上一次设置决定；这里不改穿透，只改截图排除。
-    // winApplyOverlayFlags 一次改两项，所以先把当前窗口的穿透态读出来太绕 ——
-    // 折中：穿透恒开（浮层默认穿透），这是 ScreenFlow / LiveRunner 的唯一用法。
-    return winApplyOverlayFlags(w, true, on, error);
+    // winApplyOverlayFlags 一次改两项。这里必须回填**该窗口当前的**穿透态，
+    // 不能写死 true：实时译文浮层解锁后是不穿透的（要接鼠标拖手柄），
+    // 写死 true 会把 WS_EX_TRANSPARENT 又加回去，手柄立刻点不动。
+    // 没记录过就按 false 兜底（本平台没给它设过穿透，说明它不是穿透浮层）。
+    const bool clickThrough = m_clickThrough.value(w, false);
+    return winApplyOverlayFlags(w, clickThrough, on, error);
 }
 
 bool WinPlatform::placeOverlay(QWindow *w, const QRect &globalRect, QString *error)

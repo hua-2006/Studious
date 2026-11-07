@@ -1650,8 +1650,12 @@ Item {
 
                                         Text {
                                             Layout.fillWidth: true
+                                            // 版名来自 version.json 的 codename（可空）：
+                                            // 有就显示成「版本 0.9.9 Erstling」，没有就只显示版本号。
                                             text: qsTr("版本 %1 · 提交 %2 · 构建 %3 / Qt %4")
-                                                  .arg(appVersion).arg(appCommit).arg(buildArch).arg(qtVersion)
+                                                  .arg(appCodename ? appVersion + " " + appCodename
+                                                                   : appVersion)
+                                                  .arg(appCommit).arg(buildArch).arg(qtVersion)
                                             wrapMode: Text.Wrap
                                             font.family: Theme.fontMono
                                             font.pixelSize: Theme.fontSizeSmall

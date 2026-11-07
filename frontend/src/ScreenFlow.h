@@ -27,6 +27,10 @@
 #include <memory>
 
 class QScreen;
+// OCR 工作线程的句柄：这里只声明类型，析构时用它把在飞的识别等回来（见 ~ScreenFlow）。
+// 用非模板基类而不是 QFutureWatcher<T>：头文件里不必带 QtConcurrent 的模板定义，
+// waitForFinished() 本来就在基类上。
+class QFutureWatcherBase;
 
 namespace studious::ocr {
 class OcrEngine;
@@ -161,12 +165,20 @@ private:
     QVariantList m_lastWords;      // OCR 原始结果，重新翻译时不再 OCR
     bool m_showOriginal = false;
     bool m_busy = false;
+    // 识别中：OCR 在 工作线程跑，这段时间 m_busy 还没置位（它要到 startTranslation 才置），
+    // 所以必须单独挡一次 —— 否则 Recognizing 阶段再按热键会用同一个无锁 OcrEngine 并发识别。
+    // 由识别回调清（取消也清不了：线程收不回来，只能等它自己结束）。
+    bool m_recognizing = false;
     // 用户点了「取消」：QuickTranslate::cancel() 会同步发一个「已取消」的 finished，
     // 那不是错误，别让它把浮层推进错误态。
     bool m_cancelling = false;
     quint64 m_shotToken = 0;
+    // 在飞的那一个 OCR watcher（同一时刻最多一个，见 m_recognizing）。
+    QFutureWatcherBase *m_ocrWatcher = nullptr;
 
-    std::unique_ptr<studious::ocr::OcrEngine> m_ocr;
+    // shared_ptr 而不是 unique_ptr：工作线程的 lambda 自己也持一份，
+    // 这样即使本对象析构，引擎也会活到那次 recognize() 返回为止（不受析构顺序影响）。
+    std::shared_ptr<studious::ocr::OcrEngine> m_ocr;
     QuickTranslate *m_qt = nullptr;
     QString m_sourceLabel = QStringLiteral("capture");
 };

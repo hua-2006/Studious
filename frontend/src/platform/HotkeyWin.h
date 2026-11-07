@@ -27,6 +27,11 @@ public:
     // 系统里已被别的程序占用（ERROR_HOTKEY_ALREADY_REGISTERED）→ false，
     // *error 写「热键 %1 已被其它程序占用」（含用户可读的组合键，如 Ctrl+Alt+S）。
     //
+    // 裸键（modifiers == 0）一律拒绝并返回可读错误：全局热键会抢走整个系统的输入，
+    // 单独注册 "S" / "F1" 等于让用户从此打不出 s、让所有程序的帮助键失效。
+    // 唯一例外是 F13~F24（普通键盘上没有这些键）。注册一律带 MOD_NOREPEAT，
+    // 长按不会连发 activated。
+    //
     // 组合键的两种给法（key 非 0 优先，两种都大小写不敏感、允许空格）：
     //   · 数值式：key != 0 时按 Qt::Key 解释（A-Z / 0-9 / F1-F24 / Space / Enter …），
     //     1..0xFF 的原始虚拟键码也认；modifiers 按 Qt::KeyboardModifiers 解释，

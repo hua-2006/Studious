@@ -2,6 +2,8 @@
 #include "AppSettings.h"
 #include "AssetFormat.h"
 #include "LocalEngine.h"
+#include "LiveSession.h"
+#include "MiniSession.h"
 #include "ScreenFlow.h"
 #include "TranslateJob.h"
 #include "i18n/Strings.h"
@@ -1182,6 +1184,8 @@ bool hasFlag(int argc, char *argv[], const char *flag){
 struct AppInfo {
     QString name = QStringLiteral("Studious");
     QString version = QStringLiteral("0.0.0");
+    // 版名（release codename）：version.json 里的 codename，可空。
+    QString codename;
     QString channel = QStringLiteral("stable");
     QString channelLabel = QStringLiteral("开发版");
 };
@@ -1216,12 +1220,15 @@ AppInfo loadAppInfo()
         AppInfo info;
         info.name = obj.value(QStringLiteral("name")).toString(info.name);
         info.version = obj.value(QStringLiteral("version")).toString(info.version);
+        info.codename = obj.value(QStringLiteral("codename")).toString(info.codename);
         info.channel = obj.value(QStringLiteral("channel")).toString(info.channel);
         info.channelLabel = obj.value(QStringLiteral("channelLabel")).toString(info.channelLabel);
 
-        std::printf("[appinfo] %s 版本 %s（%s）\n",
+        std::printf("[appinfo] %s 版本 %s%s%s（%s）\n",
                     info.name.toUtf8().constData(),
                     info.version.toUtf8().constData(),
+                    info.codename.isEmpty() ? "" : " ",
+                    info.codename.toUtf8().constData(),
                     path.toUtf8().constData());
         return info;
     }
@@ -1329,6 +1336,15 @@ int main(int argc, char *argv[])
     auto *screenFlow = new studious::ui::ScreenFlow(platform.get(), &app);
     engine.rootContext()->setContextProperty(QStringLiteral("screenFlow"), screenFlow);
 
+    // 实时翻译：和截屏共用平台实例（抓屏、热键、窗口标记都在那一层），
+    // 但自己一条轮询链 —— 它的节拍是毫秒，不能被截屏那条链的慢动作拖住。
+    auto *liveSession = new studious::ui::LiveSession(platform.get(), &app);
+    engine.rootContext()->setContextProperty(QStringLiteral("liveSession"), liveSession);
+
+    // 小窗翻译：一条独立的同步链（用户敲一次、翻一次），不需要平台能力。
+    auto *miniSession = new studious::ui::MiniSession(&app);
+    engine.rootContext()->setContextProperty(QStringLiteral("miniSession"), miniSession);
+
     // 热键：文本写在设置里（"Ctrl+Alt+S"），这里翻译成 HotkeySpec 注册。
     // 注册失败（被别的程序占用）只发通知，不改设置、不阻断启动。
     const studious::platform::CapabilityReport platformCaps = platform->capabilities();
@@ -1373,6 +1389,8 @@ int main(int argc, char *argv[])
     const AppInfo appInfo = loadAppInfo();
     engine.rootContext()->setContextProperty(QStringLiteral("appName"), appInfo.name);
     engine.rootContext()->setContextProperty(QStringLiteral("appVersion"), appInfo.version);
+    // 版名（release codename）：关于页显示成「版本 0.9.9 Erstling」。
+    engine.rootContext()->setContextProperty(QStringLiteral("appCodename"), appInfo.codename);
     engine.rootContext()->setContextProperty(QStringLiteral("appChannel"), appInfo.channel);
     engine.rootContext()->setContextProperty(QStringLiteral("appChannelLabel"),
                                              appInfo.channelLabel);
@@ -1511,8 +1529,16 @@ int main(int argc, char *argv[])
             const QRect rect(parts[0].toInt(), parts[1].toInt(),
                              parts[2].toInt(), parts[3].toInt());
             QEventLoop rectLoop;
-            QMetaObject::invokeMethod(screenFlow, "confirmSelection",
-                                      Qt::DirectConnection, Q_ARG(QRect, rect));
+            // 实时翻译的取证：同一个矩形换成"在那个选区上开一局实时"。
+            // 两条链的入口都叫"给我一个框"，所以共用一个环境变量、按 target 分流。
+            const bool liveTarget = qgetenv("STUDIOUS_UI_TARGET") == QByteArray("liveSession");
+            if (liveTarget) {
+                QMetaObject::invokeMethod(liveSession, "start",
+                                          Qt::DirectConnection, Q_ARG(QRect, rect));
+            } else {
+                QMetaObject::invokeMethod(screenFlow, "confirmSelection",
+                                          Qt::DirectConnection, Q_ARG(QRect, rect));
+            }
             const int rectWaitMs = [] {
                 bool ok = false;
                 const int ms = qEnvironmentVariableIntValue("STUDIOUS_UI_RECT_WAIT", &ok);
@@ -1520,6 +1546,14 @@ int main(int argc, char *argv[])
             }();
             QTimer::singleShot(rectWaitMs, &rectLoop, &QEventLoop::quit);
             rectLoop.exec();
+            if (liveTarget) {
+                qWarning("[ui-shot] live start done: phase=%s blocks=%d updates=%d status=%s",
+                         qUtf8Printable(liveSession->property("phase").toString()),
+                         liveSession->property("blocks").toList().size(),
+                         liveSession->property("updateCount").toInt(),
+                         qUtf8Printable(liveSession->property("statusText").toString()));
+                return;
+            }
             qWarning("[ui-shot] confirmSelection done: phase=%s words=%d blocks=%d status=%s",
                      qUtf8Printable(screenFlow->property("phase").toString()),
                      screenFlow->property("blocks").toList().size(),
@@ -1537,8 +1571,22 @@ int main(int argc, char *argv[])
             // 硬塞一个 QString 会匹配不到方法、静默什么都不做。
             // STUDIOUS_UI_TARGET=screenFlow 时把调用打到截屏流程上（截图取证要它）。
             QObject *uiTarget = backend;
-            if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("screenFlow"))
+            if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("screenFlow")) {
                 uiTarget = screenFlow;
+            } else if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("liveSession")) {
+                uiTarget = liveSession;
+            } else if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("miniSession")) {
+                uiTarget = miniSession;
+            } else if (const QByteArray named = qgetenv("STUDIOUS_UI_TARGET"); !named.isEmpty()) {
+                // 其它名字当 objectName 处理：取证时要能调某个浮层窗口上的 QML 函数
+                //（例如 liveControlBar.toggleSettings()），不必再为每个窗口加一条分支。
+                for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                    if (w->objectName() == QString::fromUtf8(named)) {
+                        uiTarget = w;
+                        break;
+                    }
+                }
+            }
             // 一次要按顺序触发好几个动作（先 begin() 再 debugSampleBlocks()）时用 `|` 分隔。
             // 每一项可以带 `@毫秒` 后缀，表示"这一步做完后等多久"（默认 400）。
             // 验证"翻译中途取消"就得靠它：begin@4000 等 OCR+翻译跑起来，
@@ -1558,19 +1606,42 @@ int main(int argc, char *argv[])
                     applyUiRect();
                     continue;
                 }
-                const QMetaObject *mo = uiTarget->metaObject();
+                // "objectName:method" 形式：一次序列里要调不同对象时用
+                //（例如先 liveSession 开局，再 liveControlBar.toggleSettings()）。
+                QObject *oneTarget = uiTarget;
+                QByteArray oneName = one;
+                const qsizetype colon = one.indexOf(':');
+                if (colon > 0) {
+                    const QString wanted = QString::fromUtf8(one.left(colon));
+                    for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                        if (w->objectName() == wanted) {
+                            oneTarget = w;
+                            break;
+                        }
+                    }
+                    // 页面是普通 Item、不是窗口：窗口里没搜到就进 contentItem 里找
+                    //（例如 overlayPage 这种页级 objectName，用来切页内分段控件）。
+                    if (oneTarget == uiTarget && window) {
+                        if (auto *root = window->contentItem()) {
+                            if (auto *item = root->findChild<QQuickItem *>(wanted))
+                                oneTarget = item;
+                        }
+                    }
+                    oneName = one.mid(colon + 1);
+                }
+                const QMetaObject *mo = oneTarget->metaObject();
                 const QMetaMethod method = mo->method(mo->indexOfMethod(
-                    QByteArray(one + "()").constData()));
+                    QByteArray(oneName + "()").constData()));
                 const bool zeroArg = method.isValid() && method.parameterCount() == 0;
                 if (zeroArg) {
-                    QMetaObject::invokeMethod(uiTarget, one.constData(), Qt::DirectConnection);
-                    qInfo("[ui-shot] called %s()", one.constData());
+                    QMetaObject::invokeMethod(oneTarget, oneName.constData(), Qt::DirectConnection);
+                    qInfo("[ui-shot] called %s()", oneName.constData());
                 } else {
-                    const bool ok = QMetaObject::invokeMethod(uiTarget,
-                                                              one.constData(),
+                    const bool ok = QMetaObject::invokeMethod(oneTarget,
+                                                              oneName.constData(),
                                                               Qt::DirectConnection,
                                                               Q_ARG(QString, uiArg));
-                    qInfo("[ui-shot] called %s(\"%s\") -> %d", one.constData(),
+                    qInfo("[ui-shot] called %s(\"%s\") -> %d", oneName.constData(),
                           qUtf8Printable(uiArg), ok ? 1 : 0);
                 }
                 QTimer::singleShot(waitMs, &callLoop, &QEventLoop::quit);

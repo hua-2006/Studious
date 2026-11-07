@@ -510,24 +510,96 @@ Window {
         // 这里只接它页脚那句「更多设置」：收掉这一单、回主界面的「浮层」页。
         onMoreSettingsRequested: {
             screenFlow.cancel();
-            root.show();
-            root.raise();
-            root.requestActivate();
-            root.currentPage = 2;
+            root.openFloatingSettings();
+        }
+
+        // 实时模式：框选完点了「开始实时翻译」，把选区交给 LiveSession。
+        // 浮层自己会退回 Idle，接下来屏幕上就只剩贴纸窗口 + 控制条。
+        onLiveStartRequested: function (region) {
+            liveSession.start(region);
         }
     }
 
+    // ---------------- 实时翻译的两块界面 ----------------
+    // 贴纸窗口：完全透明、点击穿透、不被自己截图拍到（这三条都在 platform 层设，
+    // QML 这边只负责画行）。它永远不该拿到焦点，所以没有任何可点元素。
+    LiveOverlay {
+        id: liveOverlay
+        // 必须是**独立**顶层窗口：声明在 Main 里时 Qt 会自动把它认成主窗口的
+        // transient 子窗口，主窗口一最小化它就跟着消失（用户实测提过这点）。
+        // 置空之后它只受自己的 visible 管。
+        transientParent: null
+    }
+
+    // 控制条：贴纸窗口点不到，所以暂停/停止/退出这些必须放在这个独立小窗里。
+    LiveControlBar {
+        id: liveControlBar
+        transientParent: null
+
+        // 页脚「更多设置」：控制条不切页，回主界面的「浮层」页。
+        // 不暂停这一单 —— 用户只是去看设置，回来还要接着看译文。
+        onMoreSettingsRequested: root.openFloatingSettings()
+    }
+
+    // ---------------- 小窗翻译 ----------------
+    // 一个常驻置顶的小窗（设计稿 B 页）。同样是独立顶层窗口：主窗口最小化时
+    // 它得留在屏幕上，而且它自己的关闭按钮只关它自己。
+    MiniWindow {
+        id: miniWindow
+        transientParent: null
+
+        onMoreSettingsRequested: root.openFloatingSettings()
+    }
+
+    // 语言对是全局一份（settings/lang/src、settings/lang/dst）：主页、截屏、实时
+    // 读的是 AppBackend 的内存副本，小窗读的是 MiniSession 的内存副本。任一侧改
+    // 完都落盘，然后由这里把另一侧的副本拉平 —— 否则界面上会同时存在两套语言。
+    // reload* 都是"值不同才 emit"，所以来回拉不会打环。
+    Connections {
+        target: miniSession
+        function onLanguagesChanged() { backend.reloadLanguagesFromSettings() }
+    }
+
+    Connections {
+        target: backend
+        function onSrcLangChanged() { miniSession.reloadLanguagesFromSettings() }
+        function onDstLangsChanged() { miniSession.reloadLanguagesFromSettings() }
+    }
+
+    Connections {
+        target: liveSession
+        // 会话结束（停止 / 连续无文字 / 出错）时整组写一条 live.db 记录。
+        // historyEnabled 关着的时候 AppBackend 自己会挡掉，这里不用判断。
+        function onSessionFinished(originals, blocks) {
+            backend.saveLiveRecord(originals, blocks, liveSession.engineLabel)
+        }
+    }
+
+    // 三个浮层窗（截图 / 实时 / 小窗）的「设置 → 更多设置」都到这里：
+    // 收起各自的面板，把主窗口叫到最前，切到「浮层」页（页序见 rail：
+    // 0 翻译 / 1 快捷键 / 2 浮层 / 3 配置 / 4 设置 / 5 外观）。
+    function openFloatingSettings() {
+        root.show()
+        root.raise()
+        root.requestActivate()
+        root.currentPage = 2
+    }
+
     // 入口分发：三张卡片与全局热键都从这里进来。
-    // 小窗与实时还没做界面，先用通知条明确说一句，别让人以为点了没反应。
+    // 小窗还没做界面，先用通知条明确说一句，别让人以为点了没反应。
     function launch(kind) {
         if (kind === "capture") {
+            captureOverlay.purpose = "capture"
             screenFlow.begin()
-        } else if (kind === "mini" || kind === "live") {
-            const title = kind === "mini" ? qsTr("小窗翻译") : qsTr("实时翻译")
-            noticeBar.title = title
-            noticeBar.detail = qsTr("这个入口的地基已就位，界面在下一批接上。")
-            noticeBar.shown = true
-            noticeTimer.restart()
+        } else if (kind === "live") {
+            // 实时先借用同一个选区浮层，只是工具栏换成「开始实时翻译 / 取消」。
+            captureOverlay.purpose = "live"
+            screenFlow.begin()
+        } else if (kind === "mini") {
+            // 小窗就一个：已经在开就抬到最前，别再开第二个。
+            miniWindow.show()
+            miniWindow.raise()
+            miniWindow.requestActivate()
         }
     }
 

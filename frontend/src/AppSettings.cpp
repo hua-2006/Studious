@@ -80,11 +80,13 @@ AppSettings AppSettings::defaults()
     s.overlayMagnifier = true;      // 拖框时给个放大镜，不然 8px 的字根本对不准
     s.magnifierCorner = QStringLiteral("bottomRight");   // 光标右下角，离内容最远
     s.overlayDim = 45;              // 45% 压暗：能看清框外轮廓，又明显"暗下来"
+    s.overlayBackdrop = 70;         // 70%：刚好压住原文，又不至于像一块纯色板
     s.overlayArrowNudge = true;     // 鼠标到 1px 很难，方向键补位
     s.overlayAutoHideDelay = 0;     // 0 = 复制完立刻收
     s.miniAlwaysOnTop = true;
     s.liveIntervalMs = 600;         // 400 太快，本地 MT 跟不上
     s.liveEngineLocked = true;      // 实时默认锁本地引擎，免得每 600 ms 打一次云端
+    s.liveOnlyOnChange = true;      // 内容没变就不重翻，省一次引擎调用
     s.recordSaveMode = QStringLiteral("original");   // original / current
     s.hotkeyCapture = QStringLiteral("Ctrl+Alt+S");
     s.hotkeyMini = QStringLiteral("Ctrl+Alt+W");
@@ -262,12 +264,14 @@ AppSettings AppSettings::load()
     s.overlayDim = clampedInt(store.value(key("overlay/dim"), def.overlayDim).toInt(), 20, 80);
     s.overlayArrowNudge = store.value(key("overlay/arrowNudge"), def.overlayArrowNudge).toBool();
     s.overlayAutoHideDelay = clampedInt(store.value(key("overlay/autoHideDelay"), def.overlayAutoHideDelay).toInt(), 0, 10);
+    s.overlayBackdrop = clampedInt(store.value(key("overlay/backdrop"), def.overlayBackdrop).toInt(), 0, 100);
     // 历史：开关只有 true/false；目录为空 = 用默认位置（AppBackend 解析）。
     s.historyEnabled = store.value(key("history/enabled"), def.historyEnabled).toBool();
     s.historyDir = store.value(key("history/dir"), def.historyDir).toString().trimmed();
     s.miniAlwaysOnTop = store.value(key("mini/alwaysOnTop"), def.miniAlwaysOnTop).toBool();
     s.liveIntervalMs = clampedInt(store.value(key("live/intervalMs"), def.liveIntervalMs).toInt(), 400, 1500);
     s.liveEngineLocked = store.value(key("live/engineLocked"), def.liveEngineLocked).toBool();
+    s.liveOnlyOnChange = store.value(key("live/onlyOnChange"), def.liveOnlyOnChange).toBool();
     // 只认两个已知值，其余一律回默认——这值会决定记录里存哪份文本，写错就是数据事故。
     const QString saveMode = store.value(key("record/saveMode"), def.recordSaveMode).toString().trimmed().toLower();
     s.recordSaveMode = (saveMode == QLatin1String("current")) ? saveMode : QStringLiteral("original");
@@ -347,11 +351,13 @@ void AppSettings::save() const
     store.setValue(key("overlay/dim"), overlayDim);                   // 20~80
     store.setValue(key("overlay/arrowNudge"), overlayArrowNudge);
     store.setValue(key("overlay/autoHideDelay"), overlayAutoHideDelay);  // 0~10 秒
+    store.setValue(key("overlay/backdrop"), overlayBackdrop);  // 0~100
     store.setValue(key("history/enabled"), historyEnabled);
     store.setValue(key("history/dir"), historyDir);                   // 空 = 默认位置
     store.setValue(key("mini/alwaysOnTop"), miniAlwaysOnTop);
     store.setValue(key("live/intervalMs"), liveIntervalMs);       // 400~1500
     store.setValue(key("live/engineLocked"), liveEngineLocked);
+    store.setValue(key("live/onlyOnChange"), liveOnlyOnChange);
     store.setValue(key("record/saveMode"), recordSaveMode);       // original / current
     store.setValue(key("hotkey/capture"), hotkeyCapture);
     store.setValue(key("hotkey/mini"), hotkeyMini);

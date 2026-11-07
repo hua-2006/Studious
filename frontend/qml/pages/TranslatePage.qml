@@ -9,7 +9,7 @@ import Studious
 
 // 起点页（原「翻译」页）。
 //
-// 这一页现在只负责「调配置 + 看信息」：语言对、引擎、原文对照、引擎状态。
+// 这一页现在只负责「调配置 + 看信息」：语言对、引擎、引擎状态。
 // 真正的翻译动作全部交给三个入口卡片：
 //   小窗口 / 截图翻译 / 实时翻译
 // 三张卡的动作还没实现，先留 signal launchRequested(kind)，Main.qml 以后接。
@@ -17,7 +17,7 @@ import Studious
 // 结构：
 //   .page-head   页头
 //   .tr-controls 源语言 / 目标语言 / 引擎
-//   .tr-toolbar  左侧提示 + 右侧「原文对照」开关与缓存键提示
+//   .tr-toolbar  左侧提示 + 右侧「缓存键含引擎」提示
 //   .launchers   三个入口卡片
 //   .statusbar   底部引擎状态条
 Item {
@@ -45,7 +45,6 @@ Item {
     readonly property int hField: 44        // .field-like 高
     readonly property int wSourceField: 200 // .tr-controls 第一列 200px
     readonly property int hStatusBar: 48    // .statusbar 高
-    readonly property int hDivider: 22      // .tr-toolbar 竖分隔高
     readonly property int hMenuItem: 40     // .menu-item 高
 
     // 入口卡被点了但功能还没接通时的回执，显示在工具行左侧。
@@ -576,7 +575,7 @@ Item {
             }
         }
 
-        // ------------------------------------------- 工具行：提示 + 原文对照
+        // ------------------------------------------------------------ 工具行
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.s3
@@ -595,30 +594,6 @@ Item {
                 Layout.alignment: Qt.AlignVCenter
                 text: qsTr("缓存键含引擎")
             }
-
-            Rectangle {
-                Layout.alignment: Qt.AlignVCenter
-                Layout.preferredWidth: 1
-                Layout.preferredHeight: page.hDivider
-                color: Theme.outlineVariant
-            }
-
-            // 「原文对照」搬到原来「开始翻译」按钮的位置（右侧）。
-            // 现在没有翻译页，它控制的是三个入口给出的结果要不要带上原文。
-            Text {
-                Layout.alignment: Qt.AlignVCenter
-                text: qsTr("原文对照")
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.fontSizeBody
-                color: Theme.ink
-            }
-
-            AppToggle {
-                id: sourceToggle
-                Layout.alignment: Qt.AlignVCenter
-                checked: backend.showSource
-                onToggled: function (on) { backend.showSource = on }
-            }
         }
 
         // -------------------------------------------------------- 三个入口
@@ -634,7 +609,7 @@ Item {
                 description: qsTr("一个置顶小窗，随手输入随手出译文，不打断你正在做的事。")
                 tags: qsTr("全局热键　·　置顶不抢焦点　·　回车即译")
                 objectName: "cardMini"
-                footer: qsTr("接口已预留")
+                footer: qsTr("点一下打开小窗")
                 kind: "mini"
                 onActivated: page.launchRequested("mini")
             }
@@ -656,7 +631,7 @@ Item {
                 description: qsTr("盯住一块屏幕，字幕和对话边说边翻，只翻变化的部分。")
                 tags: qsTr("锁定区域　·　增量翻译　·　悬浮字幕")
                 objectName: "cardLive"
-                footer: qsTr("接口已预留")
+                footer: qsTr("点一下开始框选")
                 kind: "live"
                 onActivated: page.launchRequested("live")
             }
@@ -809,7 +784,6 @@ Item {
         function onSrcLangChanged() { srcCombo.syncIndex() }
         // 「自动检测源语言」关掉后「自动」那一项会从列表里消失，索引得重新落一次。
         function onPrefsChanged() { srcCombo.syncIndex() }
-        function onShowSourceChanged() { sourceToggle.checked = backend.showSource }
         function onEngineIdChanged() { engineSeg.current = backend.engineId }
     }
 }

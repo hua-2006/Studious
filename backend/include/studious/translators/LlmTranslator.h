@@ -5,6 +5,7 @@
 #include "config/LlmConfig.h"
 #include "contract/ITranslator.h"
 #include "net/IHttpClient.h"
+#include "translators/ICancelControl.h"
 
 #include <QElapsedTimer>
 #include <QString>
@@ -26,7 +27,7 @@ namespace studious::translate {
 //   - 上下文：galgame 场景注入前 2~4 句原文/译文，改善对话连贯性。
 //   - 术语表：注入专有名词表，保证人名/技能名一致。
 //   - 缓存：原文 hash -> 译文，命中即免请求。
-class LlmTranslator final : public core::ITranslator {
+class LlmTranslator final : public core::ITranslator, public ICancelControl {
 public:
     // 空配置版本：isReady() == false，供 Router 的降级链探测用。
     LlmTranslator();
@@ -46,6 +47,9 @@ public:
                                      const QJsonObject &options) override;
     void cancel() override;
 
+    // 取消标志只由 Router 在每个请求开始时清零（见 ICancelControl.h 的说明）。
+    void resetCancel() override;
+
 private:
     // 拼 baseUrl + /chat/completions（容忍 baseUrl 末尾带斜杠）。
     QString chatCompletionsUrl() const;
@@ -57,11 +61,14 @@ private:
     QString buildUserPrompt(const QString &text, const QString &dstLang) const;
 
     // 单段翻译。失败返回 false 并写 outError（中文可读原因）。
+    // maxAttempts：换策略重试的次数上限。默认 5（用户直接请求一段时值得多试几次）；
+    // 批量的逐段补救传 1 —— 那里已经失败过一轮，再各跑 5 次会让请求数按段数放大。
     bool translateOne(const QString &text,
                       const QString &dstLang,
                       const QString &endpoint,
                       QString &outText,
-                      QString &outError);
+                      QString &outError,
+                      int maxAttempts = 5);
 
     // 多段合并成一次请求（JSON 字符串数组输出）。
     // 解析失败内部会重试 1 次；仍失败返回 false，由调用方回退到逐段。

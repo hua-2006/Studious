@@ -52,10 +52,21 @@ QString normalizeRelative(const QString &relative)
     return out;
 }
 
+// 原生可执行/可加载二进制：这一类文件"装着就可能被执行"，校验时最不能放过。
+bool isNativeBinary(const QString &relative)
+{
+    const QString suffix = QFileInfo(relative).suffix().toLower();
+    return suffix == QLatin1String("exe") || suffix == QLatin1String("dll")
+           || suffix == QLatin1String("so") || suffix == QLatin1String("dylib")
+           || suffix == QLatin1String("com") || suffix == QLatin1String("bat")
+           || suffix == QLatin1String("cmd") || suffix == QLatin1String("scr")
+           || suffix == QLatin1String("msi") || suffix == QLatin1String("pif");
+}
+
 } // namespace
 
 AssetRegistry::AssetRegistry(QString installRoot, Manifest manifest)
-    : m_root(std::move(installRoot))
+    : m_root(QDir(installRoot).absolutePath())
     , m_manifest(std::move(manifest))
 {
     // 去掉末尾斜杠，后面拼路径只处理一次。
@@ -80,19 +91,61 @@ QString AssetRegistry::installRoot() const
     return m_root;
 }
 
-QString AssetRegistry::targetPath(const QString &id) const
+QString AssetRegistry::resolveTarget(const QString &id, QString *error) const
 {
+    const auto fail = [error](const QString &why) {
+        if (error != nullptr) {
+            *error = why;
+        }
+        return QString();
+    };
+
     const AssetEntry *entry = m_manifest.find(id);
     if (entry == nullptr) {
-        return QString();
+        return fail(i18n::s("清单中不存在该资产", "This asset is not listed in the manifest"));
     }
+
+    // 第一道闸：id 白名单。id 直接来自清单，不净化就会被 "../../.." 写到根外。
+    QString idError;
+    if (!isSafeAssetId(id, &idError)) {
+        return fail(i18n::sf("资产 id \"%1\" 不安全，拒绝把它当路径使用：%2",
+                             "Unsafe asset id \"%1\"; refusing to use it as a path: %2",
+                             {id, idError}));
+    }
+
     const QString category = entry->isRuntime() ? QStringLiteral("runtime")
                                                 : QStringLiteral("models");
-    return joinPath(joinPath(m_root, category), id);
+    const QString categoryDir = QDir::cleanPath(joinPath(m_root, category));
+    const QString target = QDir::cleanPath(joinPath(categoryDir, id));
+
+    // 第二道闸：cleanPath 之后必须仍在分类目录里。白名单哪天被放宽，这里还在。
+    if (!isPathInside(target, categoryDir)) {
+        return fail(i18n::sf("资产 %1 的安装路径越出安装目录（疑似清单被篡改），已拒绝：%2",
+                             "The install path for asset %1 escapes the install directory (the "
+                             "manifest looks tampered with); refusing: %2",
+                             {id, target}));
+    }
+
+    if (error != nullptr) {
+        error->clear();
+    }
+    return target;
+}
+
+QString AssetRegistry::targetPath(const QString &id) const
+{
+    return resolveTarget(id, nullptr);
 }
 
 QString AssetRegistry::partialPath(const QString &id) const
 {
+    // 文件名逐字符清洗会把恶意 id "洗成"一个合法名字，两个不同 id 因而可能撞到同一个
+    // .part 上（续传就会续到别人的数据里）。所以先过白名单：不合规的 id 干脆不给路径。
+    if (!isSafeAssetId(id, nullptr)) {
+        return QString();
+    }
+
+    // 白名单已保证只剩 [A-Za-z0-9._-]，这段清洗留着当第二层（将来放宽 id 规则时的兜底）。
     QString safe = id;
     for (QChar &c : safe) {
         const bool keep = (c >= QLatin1Char('a') && c <= QLatin1Char('z'))
@@ -110,11 +163,14 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
 {
     AssetStatus st;
     st.id = entry.id;
-    st.installPath = targetPath(entry.id);
 
+    QString pathError;
+    st.installPath = resolveTarget(entry.id, &pathError);
     if (st.installPath.isEmpty()) {
         st.state = AssetState::NotInstalled;
-        st.detail = i18n::s("清单中不存在该资产", "This asset is not listed in the manifest");
+        st.detail = pathError.isEmpty()
+                        ? i18n::s("清单中不存在该资产", "This asset is not listed in the manifest")
+                        : pathError;
         return st;
     }
 
@@ -149,17 +205,33 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
     }
 
     QStringList missing;
+    QString unsafeFile;
     for (const QString &relative : entry.files) {
         const QString normalized = normalizeRelative(relative);
         if (normalized.isEmpty()) {
             continue;
         }
-        if (!QFileInfo::exists(joinPath(st.installPath, normalized))) {
+        // 清单里的相对路径也要过白名单 + 前缀断言：否则恶意清单靠
+        // "files": ["../../../Windows/System32/x.dll"] 就能把校验点挪到安装目录外。
+        const QString full = QDir::cleanPath(joinPath(st.installPath, normalized));
+        if (!isSafeRelativeEntryPath(normalized, nullptr) || !isPathInside(full, st.installPath)) {
+            unsafeFile = normalized;
+            continue;
+        }
+        if (!QFileInfo::exists(full)) {
             missing << normalized;
         }
     }
 
     st.installedBytes = directoryBytes(st.installPath);
+    if (!unsafeFile.isEmpty()) {
+        st.state = AssetState::Corrupted;
+        st.detail = i18n::sf("清单声明的关键文件路径不安全，拒绝校验：%1",
+                             "The manifest lists an unsafe required-file path; refusing to verify "
+                             "this install: %1",
+                             {unsafeFile});
+        return st;
+    }
     if (!missing.isEmpty()) {
         st.state = AssetState::Corrupted;
         st.detail = i18n::sf("缺少关键文件：%1",
@@ -225,10 +297,26 @@ bool AssetRegistry::uninstall(const QString &id, QString *error)
         error->clear();
     }
 
-    const QString target = targetPath(id);
+    // 清单外的 id：没有可删的东西，保持幂等（调用方常靠它做"确保不存在"）。
+    if (m_manifest.find(id) == nullptr) {
+        refresh();
+        return true;
+    }
+
+    // 这里对 target 做递归删除，所以路径必须来自 resolveTarget（白名单 + 前缀断言）。
+    // 空串 = id 可疑，宁可不删，也绝不"猜一个路径"删下去。
+    QString pathError;
+    const QString target = resolveTarget(id, &pathError);
+    if (target.isEmpty()) {
+        if (error != nullptr) {
+            *error = pathError;
+        }
+        return false;
+    }
+
     bool ok = true;
 
-    if (!target.isEmpty() && QFileInfo::exists(target)) {
+    if (QFileInfo::exists(target)) {
         const QFileInfo info(target);
         if (info.isDir()) {
             // removeRecursively 对不存在的路径也返回 true，天然幂等。
@@ -268,6 +356,16 @@ bool AssetRegistry::markInstalled(const QString &id, QString *error)
         error->clear();
     }
 
+    QString idError;
+    if (!isSafeAssetId(id, &idError)) {
+        if (error != nullptr) {
+            *error = i18n::sf("资产 id \"%1\" 不安全，拒绝登记：%2",
+                              "Unsafe asset id \"%1\"; refusing to register it: %2",
+                              {id, idError});
+        }
+        return false;
+    }
+
     const AssetEntry *entry = m_manifest.find(id);
     if (entry == nullptr) {
         if (error != nullptr) {
@@ -291,6 +389,148 @@ bool AssetRegistry::markInstalled(const QString &id, QString *error)
         return false;
     }
     return true;
+}
+
+bool AssetRegistry::verifyInstalled(const QString &id, QString *error) const
+{
+    const auto fail = [error](const QString &why) {
+        if (error != nullptr) {
+            *error = why;
+        }
+        return false;
+    };
+    const auto pass = [error]() {
+        if (error != nullptr) {
+            error->clear();
+        }
+        return true;
+    };
+
+    const AssetEntry *entry = m_manifest.find(id);
+    if (entry == nullptr) {
+        return fail(i18n::sf("无法校验资产 %1：清单中不存在该资产",
+                             "Cannot verify asset %1: it is not listed in the manifest", {id}));
+    }
+
+    QString pathError;
+    const QString target = resolveTarget(id, &pathError);
+    if (target.isEmpty()) {
+        return fail(pathError);
+    }
+
+    const QFileInfo targetInfo(target);
+    if (!targetInfo.exists()) {
+        return fail(i18n::sf("资产 %1 尚未安装，没有可校验的内容：%2",
+                             "Asset %1 is not installed, so there is nothing to verify: %2",
+                             {id, target}));
+    }
+
+    // —— 单文件资产（.gguf 之类）：整份文件就是唯一真值，直接对清单里的 sha256 ——
+    if (targetInfo.isFile()) {
+        if (targetInfo.size() <= 0) {
+            return fail(i18n::sf("资产 %1 的安装文件为空（0 字节）：%2",
+                                 "The installed file for asset %1 is empty (0 bytes): %2",
+                                 {id, target}));
+        }
+        const QString expected = entry->sha256.trimmed().toLower();
+        if (expected.isEmpty()) {
+            return fail(i18n::sf(
+                "清单没有 %1 的 sha256，无法校验已安装文件；拒绝使用未校验的可执行内容",
+                "The manifest carries no sha256 for %1, so the installed file cannot be verified; "
+                "refusing to use unverified executable content",
+                {id}));
+        }
+        QString hashError;
+        if (!verifyFileSha256(target, expected, &hashError)) {
+            return fail(i18n::sf("资产 %1 的已安装文件与清单哈希不符：%2",
+                                 "The installed file for asset %1 does not match the manifest hash: "
+                                 "%2",
+                                 {id, hashError}));
+        }
+        return pass();
+    }
+
+    if (!targetInfo.isDir()) {
+        return fail(i18n::sf("资产 %1 的安装位置既不是文件也不是目录：%2",
+                             "The install location for asset %1 is neither a file nor a directory: %2",
+                             {id, target}));
+    }
+
+    // —— 目录型资产（zip 解压）——
+    // 清单里的 sha256 覆盖的是压缩包，解压后无法逐字节复原，所以只能校验"点名文件都在"。
+    if (entry->files.isEmpty()) {
+        // 一个文件都没点名 = 没法校验内容。运行时资产会被直接启动，绝不能放行。
+        if (entry->isRuntime()) {
+            return fail(i18n::sf(
+                "清单没有为运行时资产 %1 声明任何关键文件，无法校验安装内容，拒绝使用",
+                "The manifest declares no required files for runtime asset %1, so the install cannot "
+                "be verified; refusing to use it",
+                {id}));
+        }
+        if (directoryBytes(target) <= 0) {
+            return fail(i18n::sf("资产 %1 的安装目录为空：%2",
+                                 "The install directory for asset %1 is empty: %2", {id, target}));
+        }
+        return pass();
+    }
+
+    QStringList missing;
+    QStringList emptyOrOdd;
+    QString unsafe;
+    int nativeBinaries = 0;
+
+    for (const QString &relative : entry->files) {
+        const QString normalized = normalizeRelative(relative);
+        if (normalized.isEmpty()) {
+            continue;
+        }
+
+        // 校验点必须在安装目录内：这一步是"清单说校验谁"与"实际读谁"的一致性保证。
+        const QString full = QDir::cleanPath(joinPath(target, normalized));
+        if (!isSafeRelativeEntryPath(normalized, nullptr) || !isPathInside(full, target)) {
+            unsafe = normalized;
+            continue;
+        }
+
+        const QFileInfo info(full);
+        if (!info.exists()) {
+            missing << normalized;
+            continue;
+        }
+        if (!info.isFile() || info.size() <= 0) {
+            emptyOrOdd << normalized;
+            continue;
+        }
+        if (isNativeBinary(normalized)) {
+            ++nativeBinaries;
+        }
+    }
+
+    if (!unsafe.isEmpty()) {
+        return fail(i18n::sf("资产 %1 的清单声明了不安全的文件路径，拒绝校验：%2",
+                             "Asset %1 lists an unsafe file path in its manifest; refusing to verify: "
+                             "%2",
+                             {id, unsafe}));
+    }
+    if (!missing.isEmpty()) {
+        return fail(i18n::sf("资产 %1 缺少清单要求的关键文件：%2",
+                             "Asset %1 is missing required files: %2",
+                             {id, missing.join(QStringLiteral(", "))}));
+    }
+    if (!emptyOrOdd.isEmpty()) {
+        return fail(i18n::sf("资产 %1 的关键文件为空或不是普通文件：%2",
+                             "The required files of asset %1 are empty or not regular files: %2",
+                             {id, emptyOrOdd.join(QStringLiteral(", "))}));
+    }
+    if (entry->isRuntime() && nativeBinaries == 0) {
+        return fail(i18n::sf(
+            "清单没有为运行时资产 %1 点名任何可执行文件（.exe/.dll/.so），"
+            "无法证明该目录里跑的是预期程序，拒绝使用",
+            "The manifest pins no executable (.exe/.dll/.so) for runtime asset %1, so it cannot be "
+            "shown that the expected program is what will run; refusing to use it",
+            {id}));
+    }
+    return pass();
 }
 
 qint64 AssetRegistry::totalInstalledBytes() const

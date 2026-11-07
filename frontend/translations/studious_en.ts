@@ -162,85 +162,85 @@
 <context>
     <name>CaptureOverlay</name>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="67"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="121"/>
         <source>云端</source>
         <translation>Cloud</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="69"/>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="82"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="123"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="136"/>
         <source>本地 LLM</source>
         <translation>Local LLM</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="71"/>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="83"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="125"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="137"/>
         <source>本地 MT</source>
         <translation>Local MT</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="73"/>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="79"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="127"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="133"/>
         <source>自动</source>
         <translation>Auto</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="81"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="135"/>
         <source>云端 LLM</source>
         <translation>Cloud LLM</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="137"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="191"/>
         <source>截屏翻译</source>
         <translation>Screenshot translation</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="346"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="400"/>
         <source>光标不在画面内</source>
         <translation>Cursor is outside the frame</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="513"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="567"/>
         <source>识别中…</source>
         <translation>Recognizing…</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="513"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="567"/>
         <source>翻译中…</source>
         <translation>Translating…</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="529"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="583"/>
         <source>取消 Esc</source>
         <translation>Cancel (Esc)</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="552"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="606"/>
         <source>没有翻译成功</source>
         <translation>Translation didn&apos;t go through</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="692"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="746"/>
         <source>已选 %1 × %2</source>
         <translation>Selected %1 × %2</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="695"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="749"/>
         <source>失败</source>
         <translation>Failed</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="696"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="750"/>
         <source>处理中…</source>
         <translation>Working…</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="696"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="750"/>
         <source>译文</source>
         <translation>Translation</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="728"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="823"/>
         <source>设置</source>
         <translation>Settings</translation>
     </message>
@@ -249,42 +249,47 @@
         <translation type="vanished">Save</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="776"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="874"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="882"/>
         <source>重新翻译</source>
         <translation>Retranslate</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="776"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="882"/>
         <source>翻译</source>
         <translation>Translate</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="750"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="860"/>
         <source>重新框选</source>
         <translation>Reselect</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="760"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="840"/>
         <source>显示译文</source>
         <translation>Show translation</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="760"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="840"/>
         <source>显示原文</source>
         <translation>Show original</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="765"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="845"/>
         <source>复制</source>
         <translation>Copy</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="770"/>
         <source>关闭 Esc</source>
-        <translation>Close (Esc)</translation>
+        <translation type="vanished">Close (Esc)</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="806"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="881"/>
+        <source>开始实时翻译</source>
+        <translation>Start live translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="926"/>
         <source>选区宽或高为 0，请重新框选</source>
         <translation>The selection has zero width or height. Please reselect.</translation>
     </message>
@@ -292,7 +297,7 @@
 <context>
     <name>CaptureSettingsPanel</name>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="97"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="102"/>
         <source>浮层设置</source>
         <translation>Overlay settings</translation>
     </message>
@@ -317,66 +322,106 @@
         <translation type="vanished">The mini window UI isn&apos;t wired up yet; this section is a placeholder.</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="158"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="170"/>
         <source>截图翻译</source>
         <translation>Screenshot translation</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="171"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="183"/>
         <source>选完直接翻译</source>
         <translation>Translate right after selecting</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="192"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="204"/>
         <source>关掉就是先框选，再点工具栏的「翻译」按钮。</source>
         <translation>Turned off, you frame the area first and then press &quot;Translate&quot; on the toolbar.</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="205"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="217"/>
         <source>保留原文标注</source>
         <translation>Keep the original line</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="228"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="240"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="497"/>
         <source>译文不透明度</source>
         <translation>Translation opacity</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="252"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="264"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="521"/>
         <source>译文字号</source>
         <translation>Translation font size</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="276"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="288"/>
         <source>自动复制译文</source>
         <translation>Copy translation automatically</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="299"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="311"/>
         <source>复制后延迟关闭</source>
         <translation>Delay before closing after copy</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="311"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="323"/>
         <source>秒</source>
         <translation>s</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="338"/>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="340"/>
+        <source>小窗翻译</source>
+        <translation>Mini window translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="353"/>
+        <source>固定在最前</source>
+        <translation>Always on top</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="374"/>
+        <source>译文带原文</source>
+        <translation>Show source with translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="391"/>
+        <source>「译文带原文」打开后，每段译文上方会多一行原文；关掉就只看译文。</source>
+        <translation>When on, each paragraph shows its source line above the translation; turn it off to see translations only.</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="437"/>
+        <source>ms</source>
+        <translation>ms</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="472"/>
+        <source>区域底色</source>
+        <translation>Area background</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="541"/>
+        <source>改完立刻生效，不用重开这一单。</source>
+        <translation>Takes effect immediately; no need to restart this session.</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="570"/>
         <source>更多设置</source>
         <translation>More settings</translation>
     </message>
     <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="410"/>
         <source>实时翻译</source>
-        <translation type="vanished">Live translation</translation>
+        <translation>Live translation</translation>
     </message>
     <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="423"/>
         <source>刷新间隔</source>
-        <translation type="vanished">Refresh interval</translation>
+        <translation>Refresh interval</translation>
     </message>
     <message>
+        <location filename="../qml/overlay/CaptureSettingsPanel.qml" line="449"/>
         <source>只在内容变化时翻译</source>
-        <translation type="vanished">Only translate when the content changes</translation>
+        <translation>Only translate when the content changes</translation>
     </message>
     <message>
         <source>实时翻译界面还没接上，这一节先占位。</source>
@@ -656,7 +701,7 @@
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="1567"/>
         <source>关闭</source>
-        <translation>Off</translation>
+        <translation>Close</translation>
     </message>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="1567"/>
@@ -809,14 +854,12 @@
         <translation>No usable local route for the current pair (local MT cannot auto-detect the source language - pick one on the Translate page first).</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1805"/>
         <source>-1 = 自动（Vulkan 99 / CPU 0）；0 = 不卸载任何层，纯 CPU 算</source>
-        <translation>-1 = auto (Vulkan 99 / CPU 0); 0 = offload nothing, pure CPU</translation>
+        <translation type="vanished">-1 = auto (Vulkan 99 / CPU 0); 0 = offload nothing, pure CPU</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="1811"/>
         <source>-1 = 自动，对应 -ngl。显存不够时手动降档。</source>
-        <translation>-1 = auto, maps to -ngl. Lower it manually when VRAM runs short.</translation>
+        <translation type="vanished">-1 = auto, maps to -ngl. Lower it manually when VRAM runs short.</translation>
     </message>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="2368"/>
@@ -913,6 +956,16 @@
         <location filename="../qml/pages/ConfigPage.qml" line="1740"/>
         <source>装了 Vulkan 运行时就走 GPU；关掉只用 CPU。</source>
         <translation>Uses the GPU when the Vulkan runtime is installed; off means CPU only.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1805"/>
+        <source>-1 = 自动（不传 -ngl，由 llama.cpp 按空闲显存挑层数）；0 = 不卸载任何层，纯 CPU 算</source>
+        <translation>-1 = auto (no -ngl passed; llama.cpp picks layers from free VRAM); 0 = offload nothing, pure CPU</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="1811"/>
+        <source>-1 = 自动，对应 -ngl。显存不够时手动降档（留空/自动就交给 llama.cpp 自己挑）。</source>
+        <translation>-1 = auto, maps to -ngl. Lower it manually when VRAM runs short (leave it on auto and llama.cpp decides).</translation>
     </message>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="1821"/>
@@ -1086,39 +1139,39 @@
 <context>
     <name>Desktop</name>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="123"/>
+        <location filename="../src/platform/Desktop.cpp" line="140"/>
         <source>显示主窗口</source>
         <translation>Show main window</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="124"/>
+        <location filename="../src/platform/Desktop.cpp" line="141"/>
         <source>退出</source>
         <translation>Quit</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="321"/>
-        <location filename="../src/platform/Desktop.cpp" line="352"/>
+        <location filename="../src/platform/Desktop.cpp" line="386"/>
+        <location filename="../src/platform/Desktop.cpp" line="417"/>
         <source>找不到程序自身路径，无法设置开机自启。</source>
         <translation>Could not locate the program&apos;s own path, so autostart cannot be set up.</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="340"/>
+        <location filename="../src/platform/Desktop.cpp" line="405"/>
         <source>写入注册表启动项失败（可能被安全软件拦截）。</source>
         <translation>Failed to write the startup registry entry (a security tool may be blocking it).</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="362"/>
+        <location filename="../src/platform/Desktop.cpp" line="427"/>
         <source>删除自启动项失败，请检查文件权限。</source>
         <translation>Could not remove the auto-start entry. Check file permissions.</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="371"/>
+        <location filename="../src/platform/Desktop.cpp" line="436"/>
         <source>创建自启动目录失败。</source>
         <translation>Could not create the auto-start directory.</translation>
     </message>
     <message>
-        <location filename="../src/platform/Desktop.cpp" line="379"/>
-        <location filename="../src/platform/Desktop.cpp" line="398"/>
+        <location filename="../src/platform/Desktop.cpp" line="444"/>
+        <location filename="../src/platform/Desktop.cpp" line="463"/>
         <source>写入自启动项失败，请检查文件权限。</source>
         <translation>Could not write the auto-start entry. Check file permissions.</translation>
     </message>
@@ -1344,6 +1397,112 @@
     </message>
 </context>
 <context>
+    <name>LiveControlBar</name>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="164"/>
+        <source>已暂停</source>
+        <translation>Paused</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="165"/>
+        <source>运行中</source>
+        <translation>Running</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="165"/>
+        <source>准备中</source>
+        <translation>Preparing</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="193"/>
+        <source>已中断：识别失败</source>
+        <translation>Interrupted: recognition failed</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="180"/>
+        <source>已更新 %1 次</source>
+        <translation>Updated %1 times</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="294"/>
+        <source>译文</source>
+        <translation>Translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="300"/>
+        <source>原文</source>
+        <translation>Original</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="323"/>
+        <source>继续</source>
+        <translation>Resume</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="323"/>
+        <source>暂停</source>
+        <translation>Pause</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="330"/>
+        <source>重新开始</source>
+        <translation>Start over</translation>
+    </message>
+    <message>
+        <source>关闭</source>
+        <translation type="vanished">Close</translation>
+    </message>
+    <message>
+        <source>停止</source>
+        <translation type="vanished">Stop</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="315"/>
+        <source>解锁选区</source>
+        <translation>Unlock region</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="315"/>
+        <source>锁定选区</source>
+        <translation>Lock region</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="269"/>
+        <source>设置</source>
+        <translation>Settings</translation>
+    </message>
+    <message>
+        <source>跟随设置</source>
+        <translation type="vanished">Follow settings</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="450"/>
+        <source>Web 在线</source>
+        <translation>Web online</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="450"/>
+        <source>云端 LLM</source>
+        <translation>Cloud LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="450"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="484"/>
+        <source>自动</source>
+        <translation>Auto</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="451"/>
+        <source>本地 LLM</source>
+        <translation>Local LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="451"/>
+        <source>本地 MT</source>
+        <translation>Local MT</translation>
+    </message>
+</context>
+<context>
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="53"/>
@@ -1401,157 +1560,533 @@
         <translation>Close</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="526"/>
+        <source>小窗翻译</source>
+        <translation type="vanished">Mini window translation</translation>
+    </message>
+    <message>
+        <source>实时翻译</source>
+        <translation type="vanished">Live translation</translation>
+    </message>
+    <message>
+        <source>这个入口的地基已就位，界面在下一批接上。</source>
+        <translation type="vanished">The foundation for this entry is in place; the UI lands in the next batch.</translation>
+    </message>
+</context>
+<context>
+    <name>MiniWindow</name>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="36"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="136"/>
         <source>小窗翻译</source>
         <translation>Mini window translation</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="526"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="61"/>
+        <source>自动检测 (auto)</source>
+        <translation>Auto-detect (auto)</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="73"/>
+        <source>选择目标语言</source>
+        <translation>Choose target languages</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="138"/>
         <source>实时翻译</source>
         <translation>Live translation</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="528"/>
-        <source>这个入口的地基已就位，界面在下一批接上。</source>
-        <translation>The foundation for this entry is in place; the UI lands in the next batch.</translation>
+        <location filename="../qml/overlay/MiniWindow.qml" line="139"/>
+        <source>截屏翻译</source>
+        <translation>Screenshot translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="153"/>
+        <source>（空）</source>
+        <translation>(empty)</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="221"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="233"/>
+        <source>Web 在线</source>
+        <translation>Web online</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="223"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="233"/>
+        <source>云端 LLM</source>
+        <translation>Cloud LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="225"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="234"/>
+        <source>本地 LLM</source>
+        <translation>Local LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="227"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="234"/>
+        <source>本地 MT</source>
+        <translation>Local MT</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="228"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="233"/>
+        <source>自动</source>
+        <translation>Auto</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="274"/>
+        <source>已保存到记录。</source>
+        <translation>Saved to records.</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="275"/>
+        <source>没存进去：历史对话是关着的，去「设置 · 缓存」里打开。</source>
+        <translation>Not saved: history is off. Turn it on under Settings - Cache.</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="359"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1013"/>
+        <source>翻译</source>
+        <translation>Translate</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="360"/>
+        <source>记录</source>
+        <translation>Records</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="411"/>
+        <source>置顶</source>
+        <translation>On top</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="435"/>
+        <source>设置</source>
+        <translation>Settings</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="569"/>
+        <source>多选</source>
+        <translation>Multi</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="569"/>
+        <source>单选</source>
+        <translation>Single</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="610"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="963"/>
+        <source>划词获取</source>
+        <translation>Grab selection</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="610"/>
+        <source>手动输入</source>
+        <translation>Typed</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="660"/>
+        <source>输入或粘贴要翻译的文本</source>
+        <translation>Type or paste text to translate</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="672"/>
+        <source>%1 字 · %2 段</source>
+        <translation>%1 chars - %2 paragraphs</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="745"/>
+        <source>正在翻译…</source>
+        <translation>Translating…</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="762"/>
+        <source>没有翻译成功</source>
+        <translation>Translation didn&apos;t go through</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="921"/>
+        <source>%1 ms</source>
+        <translation>%1 ms</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="928"/>
+        <source>· %1 段</source>
+        <translation>- %1 paragraphs</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="943"/>
+        <source>全部复制</source>
+        <translation>Copy all</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="985"/>
+        <source>清空</source>
+        <translation>Clear</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1012"/>
+        <source>取消</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1013"/>
+        <source>保存到记录</source>
+        <translation>Save to records</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1046"/>
+        <source>最近 %1 条</source>
+        <translation>Latest %1</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1059"/>
+        <source>刷新</source>
+        <translation>Refresh</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1073"/>
+        <source>时间</source>
+        <translation>Time</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1080"/>
+        <source>来源</source>
+        <translation>Source</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1087"/>
+        <source>摘要</source>
+        <translation>Summary</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1179"/>
+        <source>%1 · %2</source>
+        <translation>%1 - %2</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1190"/>
+        <source>关闭</source>
+        <translation>Close</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1221"/>
+        <source>还没有记录。翻译完成会自动存进 mini.db。</source>
+        <translation>No records yet. Finished translations are saved to mini.db automatically.</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1222"/>
+        <source>历史对话是关着的。去「设置 · 缓存」里打开「保存翻译历史」。</source>
+        <translation>History is off. Turn on Save translation history under Settings - Cache.</translation>
     </message>
 </context>
 <context>
     <name>OverlayPage</name>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="77"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="88"/>
         <source>浮层</source>
         <translation>Overlay</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="86"/>
         <source>截屏翻译浮层的外观与操作习惯。不透明度、字号、自动复制这些在「设置 · 截图」里。</source>
-        <translation>How the screenshot overlay looks and behaves. Opacity, font size and auto-copy live in Settings · Capture.</translation>
+        <translation type="vanished">How the screenshot overlay looks and behaves. Opacity, font size and auto-copy live in Settings · Capture.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="99"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="97"/>
+        <source>三个浮层共用的观感在上半页；每个入口各自的开关在下面「按功能设置」里切换。</source>
+        <translation>The shared look for all three overlays is above; each entry&apos;s own switches are under Settings by feature below.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="110"/>
         <source>放大镜</source>
         <translation>Magnifier</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="100"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="111"/>
         <source>拖框时贴在光标旁边，用来对齐和取色；松手就收起。</source>
         <translation>Sits next to the cursor while you drag, for alignment and colour sampling; folds away on release.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="103"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="114"/>
         <source>拖框时显示放大镜</source>
         <translation>Show the magnifier while dragging</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="116"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="127"/>
         <source>关掉就只剩十字光标，对机器压力最小。</source>
         <translation>Turn it off and only the crosshair remains — the least work for the machine.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="126"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="137"/>
         <source>放大镜位置</source>
         <translation>Magnifier position</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="132"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="143"/>
         <source>右下</source>
         <translation>Bottom right</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="133"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="144"/>
         <source>左下</source>
         <translation>Bottom left</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="134"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="145"/>
         <source>右上</source>
         <translation>Top right</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="135"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="146"/>
         <source>左上</source>
         <translation>Top left</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="143"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="154"/>
         <source>贴着光标那一侧放；靠边放不下时会自动翻到对面。</source>
         <translation>Pinned to the side of the cursor; flips to the opposite side when it would run off the screen.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="153"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="164"/>
         <source>放大倍率</source>
         <translation>Zoom level</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="166"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="177"/>
         <source>倍数越高看得越细，视野也越小。</source>
         <translation>Higher zoom shows finer detail with a narrower field of view.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="181"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="192"/>
         <source>遮罩</source>
         <translation>Dimming</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="182"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="193"/>
         <source>选区之外压多暗。</source>
         <translation>How dark everything outside the selection gets.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="185"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="196"/>
         <source>压暗程度</source>
         <translation>Dim strength</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="199"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="210"/>
         <source>越大越暗；框选时只有选区露出来。</source>
         <translation>Higher is darker; while selecting, only the selection stays lit.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="208"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="219"/>
         <source>边框颜色跟随强调色，不单独暴露。</source>
         <translation>The border follows the accent colour and is not configurable.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="221"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="232"/>
         <source>操作</source>
         <translation>Action</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="222"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="233"/>
         <source>框好之后怎么用手，而不是用鼠标继续磨。</source>
         <translation>How to work with the selection from the keyboard instead of chasing pixels with the mouse.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="225"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="236"/>
         <source>方向键微调选区</source>
         <translation>Arrow keys nudge the selection</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="236"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="247"/>
         <source>选中后按方向键微调 1px，按住 Shift 10px。</source>
         <translation>After selecting, the arrow keys move it by 1px; hold Shift for 10px.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="246"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="258"/>
+        <source>截图热键在「快捷键」页；三个入口各自的开关都在下面那张卡里。</source>
+        <translation>The screenshot hotkey lives on the Shortcuts page; each entry&apos;s switches are on the card below.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="273"/>
+        <source>按功能设置</source>
+        <translation>Settings by feature</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="274"/>
+        <source>小窗口、截图翻译、实时翻译各自的开关；和浮层里那颗「设置」是同一份值。</source>
+        <translation>Switches for the mini window, screenshot translation and live translation; the same values the gear inside each overlay opens.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="279"/>
+        <source>小窗口</source>
+        <translation>Mini window</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="280"/>
+        <source>截图翻译</source>
+        <translation>Screenshot translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="295"/>
+        <source>固定在最前</source>
+        <translation>Always on top</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="306"/>
+        <source>关掉就跟随普通窗口，被别的程序盖住。</source>
+        <translation>Off = behaves like a normal window and can be covered by other apps.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="316"/>
+        <source>译文带原文</source>
+        <translation>Show source with translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="327"/>
+        <source>每段译文上方多一行小字原文，方便对照。</source>
+        <translation>Adds a small source line above each paragraph for comparison.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="345"/>
+        <source>选完直接翻译</source>
+        <translation>Translate right after selecting</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="356"/>
+        <source>关掉就是二次确认：框完自己点工具栏上的「翻译」。</source>
+        <translation>Off = confirm first: frame the area, then press Translate on the toolbar.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="366"/>
+        <source>保留原文标注</source>
+        <translation>Keep the original line</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="377"/>
+        <source>译文条上方留一条薄薄的原文，便于核对。</source>
+        <translation>Leaves a thin source line above each plate so you can check it.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="387"/>
+        <source>翻译完自动复制</source>
+        <translation>Copy result automatically</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="398"/>
+        <source>出结果就把整段译文放进剪贴板。</source>
+        <translation>Puts the whole translation on the clipboard once it is done.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="408"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="571"/>
+        <source>译文不透明度</source>
+        <translation>Translation opacity</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="422"/>
+        <source>越低越能看见底下的原图。</source>
+        <translation>Lower values show more of the original image underneath.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="430"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="583"/>
+        <source>译文字号</source>
+        <translation>Translation font size</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="435"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="588"/>
+        <source> px</source>
+        <translation> px</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="444"/>
+        <source>按行高自动收一点，行太窄时不会再缩小到看不清。</source>
+        <translation>Shrinks a bit to fit the line height; very short lines stay readable.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="452"/>
         <source>复制后延迟关闭</source>
         <translation>Delay before closing after copy</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="251"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="457"/>
         <source> 秒</source>
         <translation> s</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="260"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="466"/>
         <source>0 = 复制完立刻收浮层。</source>
         <translation>0 = close the overlay as soon as the copy lands.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="269"/>
+        <location filename="../qml/pages/OverlayPage.qml" line="549"/>
+        <source>区域底色</source>
+        <translation>Area background</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="563"/>
+        <source>整块选区铺一层底色的浓度；0 = 不铺底，只留译文。</source>
+        <translation>How strongly the selected area is filled; 0 = no fill, translation only.</translation>
+    </message>
+    <message>
         <source>截图热键在「快捷键」页；不透明度 / 字号 / 保留原文在「设置 · 截图」。</source>
-        <translation>The capture hotkey lives on the Hotkeys page; opacity / font size / keep-original live in Settings · Capture.</translation>
+        <translation type="vanished">The capture hotkey lives on the Hotkeys page; opacity / font size / keep-original live in Settings · Capture.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="281"/>
+        <source>实时翻译</source>
+        <translation>Live translation</translation>
+    </message>
+    <message>
+        <source>浮层一边看屏幕一边翻时，多久看一次、要不要省掉重复的帧、用哪个引擎跑。</source>
+        <translation type="vanished">How often the overlay looks at the screen, whether to skip unchanged frames, and which engine to run on.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="482"/>
+        <source>刷新间隔</source>
+        <translation>Refresh interval</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="487"/>
+        <source> 毫秒</source>
+        <translation> ms</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="497"/>
+        <source>每帧之间等多久。太小会把引擎压满，太大会看不出是实时的。</source>
+        <translation>How long to wait between frames. Too small saturates the engine; too large stops looking live.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="505"/>
+        <source>只在内容变化时翻译</source>
+        <translation>Only translate when the content changes</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="518"/>
+        <source>画面没变就不重翻。关掉会每帧重发一次请求，只适合验证引擎。</source>
+        <translation>Skip frames whose text is unchanged. Turning this off re-sends a request every frame - useful only for exercising the engine.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="528"/>
+        <source>锁定本地引擎</source>
+        <translation>Lock to the local engine</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="539"/>
+        <source>云端和 Web 单次都在 1 秒以上，做实时没有意义，默认只用本地引擎。</source>
+        <translation>Cloud and Web both take over a second per request, which is pointless for live use. Local engines are used by default.</translation>
+    </message>
+</context>
+<context>
+    <name>QObject</name>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="380"/>
+        <source>抓屏失败。</source>
+        <translation>Screen capture failed.</translation>
     </message>
 </context>
 <context>
@@ -1576,19 +2111,19 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="93"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="940"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="955"/>
         <source>网络</source>
         <translation>Network</translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="94"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1102"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1117"/>
         <source>资产</source>
         <translation>Assets</translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="95"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1342"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1357"/>
         <source>数据</source>
         <translation>Data</translation>
     </message>
@@ -1599,7 +2134,7 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="97"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1616"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1631"/>
         <source>关于</source>
         <translation>About</translation>
     </message>
@@ -1626,7 +2161,7 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="152"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1974"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1993"/>
         <source>已安装</source>
         <translation>Installed</translation>
     </message>
@@ -1779,7 +2314,7 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="715"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2128"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2147"/>
         <source>复制</source>
         <translation>Copy</translation>
     </message>
@@ -1788,7 +2323,7 @@
         <translation type="vanished">The proxy is read from environment variables only; there is no setProxy inside the app.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="944"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="959"/>
         <source>代理</source>
         <translation>Proxy</translation>
     </message>
@@ -1797,12 +2332,12 @@
         <translation type="vanished">Takes effect after restarting the app</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="992"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1007"/>
         <source>超时</source>
         <translation>Timeout</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1073"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1088"/>
         <source>毫秒</source>
         <translation>ms</translation>
     </message>
@@ -1811,100 +2346,100 @@
         <translation type="vanished">Model / runtime management. Categories come from the backend manifest: LLM holds qwen models and the llama.cpp runtime, Local MT holds OPUS-MT language pairs and onnxruntime.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1108"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1123"/>
         <source>全部</source>
         <translation>All</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1110"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1125"/>
         <source>本地 MT</source>
         <translation>Local MT</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1124"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1139"/>
         <source>总占用：%1</source>
         <translation>Total size: %1</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1132"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1147"/>
         <source>（当前分类 %1 项）</source>
         <translation>(%1 in this category)</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1142"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1890"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1157"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1909"/>
         <source>从文件导入</source>
         <translation>Import from file</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1165"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1180"/>
         <source>资产 id</source>
         <translation>Asset id</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1175"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1190"/>
         <source>状态</source>
         <translation>Status</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1184"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1199"/>
         <source>大小</source>
         <translation>Size</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1193"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1208"/>
         <source>路径</source>
         <translation>Path</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1203"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1218"/>
         <source>操作</source>
         <translation>Action</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1227"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1242"/>
         <source>该分类下暂无资产</source>
         <translation>No assets in this category</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1305"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1320"/>
         <source>下载中 %1%</source>
         <translation>Downloading %1%</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1306"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1321"/>
         <source>下载中…</source>
         <translation>Downloading…</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1308"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1323"/>
         <source>暂不支持</source>
         <translation>Not supported yet</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1309"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1854"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1324"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1873"/>
         <source>卸载</source>
         <translation>Uninstall</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1309"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1324"/>
         <source>下载</source>
         <translation>Download</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1343"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1358"/>
         <source>安装根目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。</source>
         <translation>Install root / logs / reset. Reset clears configuration and cache but keeps installed assets.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1356"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1371"/>
         <source>安装根目录</source>
         <translation>Install root</translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="787"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1367"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1382"/>
         <source>打开目录</source>
         <translation>Open folder</translation>
     </message>
@@ -1964,27 +2499,27 @@
         <translation>Summary</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="922"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="937"/>
         <source>还没有记录。翻一屏或译一句就会自动出现在这里。</source>
         <translation>No records yet. Translate a screen or a line and it shows up here automatically.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="923"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="938"/>
         <source>历史关着，不写记录。打开上面的开关后，翻译完成会自动存档。</source>
         <translation>History is off, nothing is recorded. Turn the switch above on and finished translations get archived automatically.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1423"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1438"/>
         <source>日志目录</source>
         <translation>Log directory</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1434"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1449"/>
         <source>打开</source>
         <translation>Open</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1441"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1456"/>
         <source>清理 30 天前</source>
         <translation>Clean up older than 30 days</translation>
     </message>
@@ -1993,104 +2528,104 @@
         <translation type="vanished">Reset clears configuration and cache (installed assets are kept); migrate moves the whole install root to a new location.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1481"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1496"/>
         <source>迁移目录</source>
         <translation>Migrate folder</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1488"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2027"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1503"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2046"/>
         <source>重置应用</source>
         <translation>Reset app</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1617"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1632"/>
         <source>版本 / 第三方组件 / 许可证。</source>
         <translation>Version / third-party components / license.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1638"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1655"/>
         <source>版本 %1 · 提交 %2 · 构建 %3 / Qt %4</source>
         <translation>Version %1 · Commit %2 · Build %3 / Qt %4</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1681"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1700"/>
         <source>第三方组件</source>
         <translation>Third-party components</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1689"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1708"/>
         <source>版本</source>
         <translation>Version</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1697"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1716"/>
         <source>用途</source>
         <translation>Purpose</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1705"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1724"/>
         <source>许可证</source>
         <translation>License</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1721"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1740"/>
         <source>本地 MT 推理运行时</source>
         <translation>Local MT inference runtime</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1722"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1741"/>
         <source>分词</source>
         <translation>Tokenization</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1723"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1742"/>
         <source>清单验签 / 加密</source>
         <translation>Manifest signing / crypto</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1724"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1743"/>
         <source>资产 zip 解压</source>
         <translation>Asset zip extraction</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1779"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1798"/>
         <source>查看许可证</source>
         <translation>View license</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1785"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2195"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1804"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2214"/>
         <source>第三方声明</source>
         <translation>Third-party notices</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1826"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1845"/>
         <source>卸载资产</source>
         <translation>Uninstall asset</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1835"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1854"/>
         <source>确定删除 %1 ？
 文件会被移除，之后可以重新下载。</source>
         <translation>Delete %1?
 The files will be removed; you can download them again later.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1849"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2050"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1868"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2069"/>
         <source>取消</source>
         <translation>Cancel</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2118"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2137"/>
         <source>%1 许可证</source>
         <translation>%1 license</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1900"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2136"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2205"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1919"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2155"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2224"/>
         <source>关闭</source>
         <translation>Close</translation>
     </message>
@@ -2170,17 +2705,17 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">History is only a skeleton for now: the switch and folder are in place, writing and browsing come in a later batch.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="941"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="956"/>
         <source>代理与超时对本程序的外网请求生效。</source>
         <translation>The proxy and timeout apply to the app&apos;s outbound requests.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="984"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="999"/>
         <source>留空 = 跟随系统环境变量（HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）。改完下一次网络请求生效。</source>
         <translation>Empty = follow the system environment variables (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY). Changes apply to the next network request.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1085"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1100"/>
         <source>毫秒。只作用于外网请求，本地 llama-server 探测不受影响。</source>
         <translation>Milliseconds. Only affects outbound requests; probing the local llama-server is unaffected.</translation>
     </message>
@@ -2189,112 +2724,112 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">Model / runtime management. Categories come from the backend manifest: LLM holds qwen models and the llama.cpp runtime, local MT holds OPUS-MT language pairs (ONNX Runtime ships with the app and is not in the download list).</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1103"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1118"/>
         <source>模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对（ONNX Runtime 随应用内置，不在下载清单里），视觉 / OCR 含 PP-OCRv4 的检测模型、识别模型与字符表。</source>
         <translation>Model / runtime management. Categories come from the backend manifest: LLM holds qwen models and the llama.cpp runtime, local MT holds OPUS-MT language pairs (ONNX Runtime ships with the app and is not in the download list), and Vision / OCR holds the PP-OCRv4 detection model, recognition model and character table.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1111"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1126"/>
         <source>视觉 / OCR</source>
         <translation>Vision / OCR</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1151"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1166"/>
         <source>导入的文件会先按资产清单校验 sha256，不匹配直接拒绝。</source>
         <translation>Imported files are verified against the asset manifest&apos;s sha256 first; a mismatch is rejected outright.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1472"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1487"/>
         <source>重置会清掉配置与缓存（保留已装资产）；迁移把整个安装根目录搬到新位置，新目录必须是空目录或不存在，搬完会自动重新扫描资产。</source>
         <translation>Reset clears configuration and cache (installed assets are kept); migrate moves the whole install root to a new location, which must be empty or not exist yet, and assets are rescanned afterwards.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1504"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1519"/>
         <source>截图翻译</source>
         <translation>Screenshot translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1505"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1520"/>
         <source>框选后的行为、浮层外观、放大镜。这些值只在截屏翻译里生效。</source>
         <translation>What happens after a selection, the overlay look, and the magnifier. These only apply to screenshot translation.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1508"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1523"/>
         <source>选完直接翻译</source>
         <translation>Translate right after selecting</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1521"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1536"/>
         <source>关掉时按设计稿的二次确认走：松手先出工具栏，按「翻译」或 Enter 才发请求。</source>
         <translation>When off, the design flow applies: releasing shows the toolbar, and only Translate or Enter sends the request.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1529"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1544"/>
         <source>翻译完自动复制</source>
         <translation>Copy result automatically</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1540"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1555"/>
         <source>复制后自动关闭</source>
         <translation>Close after copying</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1551"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1566"/>
         <source>保留原文标注</source>
         <translation>Keep the original line</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1562"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1577"/>
         <source>浮层不透明度</source>
         <translation>Overlay opacity</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1574"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1589"/>
         <source>浮层字号</source>
         <translation>Overlay font size</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1586"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1601"/>
         <source>放大镜倍率</source>
         <translation>Magnifier zoom</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1600"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1615"/>
         <source>放大镜只在拖框时出现，收起选区后自动隐藏。</source>
         <translation>The magnifier only shows while dragging; it hides once the selection is fixed.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1908"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1927"/>
         <source>先选资产，再挑本地文件。已安装的也可以覆盖重装。</source>
         <translation>Pick an asset first, then the local file. Installed assets can be reinstalled over.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1934"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1953"/>
         <source>当前分类下没有可选资产。</source>
         <translation>No selectable asset in this category.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2002"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2021"/>
         <source>选择资产文件</source>
         <translation>Choose asset file</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2036"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2055"/>
         <source>会清掉全部设置与翻译缓存，已下载的资产保留，随后程序自动重启。</source>
         <translation>Clears all settings and the translation cache; downloaded assets are kept and the app restarts afterwards.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2055"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2074"/>
         <source>确认重置</source>
         <translation>Confirm reset</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2069"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2088"/>
         <source>选择新的安装根目录</source>
         <translation>Choose a new install root</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2234"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2253"/>
         <source>本程序包含以下第三方开源组件，各自遵循其原始许可证：
 
 </source>
@@ -2303,63 +2838,63 @@ The files will be removed; you can download them again later.</translation>
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2236"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2255"/>
         <source>  本地 MT（OPUS-MT / Marian）推理运行时
 </source>
         <translation>  Local MT (OPUS-MT / Marian) inference runtime
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2239"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2258"/>
         <source>  源文本 / 译文分词（SentencePiece 模型）
 </source>
         <translation>  Tokenization of source text / translations (SentencePiece models)
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2242"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2261"/>
         <source>  资产清单的 ed25519 签名校验
 </source>
         <translation>  ed25519 signature verification of asset manifests
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2244"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2263"/>
         <source>miniz 3.0.2 — Rich Geldreich 等 — MIT / Public Domain
 </source>
         <translation>miniz 3.0.2 — Rich Geldreich et al. — MIT / Public Domain
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2245"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2264"/>
         <source>  资产 zip 包解压
 </source>
         <translation>  Asset zip extraction
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2247"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2266"/>
         <source>Qt 6 — The Qt Company — LGPL-3.0（动态链接使用）
 </source>
         <translation>Qt 6 — The Qt Company — LGPL-3.0 (used via dynamic linking)
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2249"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2268"/>
         <source>字体：
 </source>
         <translation>Fonts:
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2250"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2269"/>
         <source>  思源黑体 Source Han Sans SC — Adobe — SIL Open Font License 1.1
 </source>
         <translation>  Source Han Sans SC — Adobe — SIL Open Font License 1.1
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2251"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2270"/>
         <source>  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1
 
 </source>
@@ -2368,7 +2903,7 @@ The files will be removed; you can download them again later.</translation>
 </translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2252"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2271"/>
         <source>以上组件的完整许可证文本随各自的源分发提供。</source>
         <translation>Full license texts for the components above ship with their respective sources.</translation>
     </message>
@@ -2436,103 +2971,107 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">Italian</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="100"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="99"/>
         <source>Web 在线</source>
         <translation>Web online</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="102"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="101"/>
         <source>云端 LLM</source>
         <translation>Cloud LLM</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="104"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="103"/>
         <source>本地 LLM</source>
         <translation>Local LLM</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="106"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="105"/>
         <source>本地 MT</source>
         <translation>Local MT</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="150"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="149"/>
         <source>源语言和目标语言相同，会原样返回。</source>
         <translation>Source and target language are the same, so the text is returned unchanged.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="160"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="159"/>
         <source>选好语言和引擎，再从下面的入口开始。</source>
         <translation>Pick a language and an engine, then choose an entry point below.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="637"/>
-        <location filename="../qml/pages/TranslatePage.qml" line="659"/>
         <source>接口已预留</source>
-        <translation>Interface reserved</translation>
+        <translation type="vanished">Interface reserved</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="327"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="326"/>
         <source>欢迎来到 Studious</source>
         <translation>Welcome to Studious</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="338"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="337"/>
         <source>文字如舟，渡你过语言的河。先选好语言与引擎，再挑一个入口。</source>
         <translation>Words are the boat across the river of language. Set the language pair and engine first, then pick an entry point.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="633"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="608"/>
         <source>小窗口</source>
         <translation>Mini window</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="634"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="609"/>
         <source>一个置顶小窗，随手输入随手出译文，不打断你正在做的事。</source>
         <translation>A small always-on-top window: type away, get the translation, and stay in what you were doing.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="635"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="610"/>
         <source>全局热键&#x3000;·&#x3000;置顶不抢焦点&#x3000;·&#x3000;回车即译</source>
         <translation>Global hotkey · on top without stealing focus · Enter to translate</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="644"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="612"/>
+        <source>点一下打开小窗</source>
+        <translation>Click to open the mini window</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/TranslatePage.qml" line="619"/>
         <source>截图翻译</source>
         <translation>Screenshot translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="645"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="620"/>
         <source>框选屏幕任意区域，识别文字后直接给译文，图片不外传。</source>
         <translation>Select any region of the screen and get its text translated; the image never leaves your machine.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="646"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="621"/>
         <source>框选即译&#x3000;·&#x3000;本地 OCR&#x3000;·&#x3000;自动复制</source>
         <translation>Select and translate · local OCR · auto-copy</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="648"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="623"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="634"/>
         <source>点一下开始框选</source>
         <translation>Click to start selecting</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="655"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="630"/>
         <source>实时翻译</source>
         <translation>Live translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="656"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="631"/>
         <source>盯住一块屏幕，字幕和对话边说边翻，只翻变化的部分。</source>
         <translation>Watch a region of the screen and translate subtitles or chat as they change — only what changed.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="657"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="632"/>
         <source>锁定区域&#x3000;·&#x3000;增量翻译&#x3000;·&#x3000;悬浮字幕</source>
         <translation>Locked region · incremental translation · floating subtitles</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="690"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="665"/>
         <source>取消</source>
         <translation>Cancel</translation>
     </message>
@@ -2541,32 +3080,31 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">Words are a boat that carries you across the river of language. Pick a target language and set off.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="369"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="368"/>
         <source>源语言 · 检测到%1</source>
         <translation>Source · detected %1</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="370"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="369"/>
         <source>源语言</source>
         <translation>Source language</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="480"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="479"/>
         <source>目标语言</source>
         <translation>Target language</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="563"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="562"/>
         <source>引擎</source>
         <translation>Engine</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="610"/>
         <source>原文对照</source>
-        <translation>Show source</translation>
+        <translation type="vanished">Show source</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="596"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="595"/>
         <source>缓存键含引擎</source>
         <translation>Cache key includes engine</translation>
     </message>
@@ -2639,75 +3177,217 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">%1 hits</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="798"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="773"/>
         <source>查看引擎状态</source>
         <translation>View engine status</translation>
     </message>
 </context>
 <context>
-    <name>studious::ui::ScreenFlow</name>
+    <name>studious::ui::LiveSession</name>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="222"/>
-        <source>翻译失败。</source>
-        <translation>Translation failed.</translation>
+        <location filename="../src/LiveSession.cpp" line="209"/>
+        <source>缺少 OCR 模型：%1，去资产页下载。</source>
+        <translation>OCR models are missing: %1. Download them on the Assets page.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="313"/>
-        <source>缺少 OCR 模型：%1</source>
-        <translation>OCR models are missing: %1</translation>
+        <location filename="../src/LiveSession.cpp" line="227"/>
+        <location filename="../src/LiveSession.cpp" line="634"/>
+        <location filename="../src/LiveSession.cpp" line="663"/>
+        <source>当前环境没有可用的抓屏后端。</source>
+        <translation>No screen capture backend is available in this environment.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="394"/>
-        <source>这个平台不支持截屏。</source>
-        <translation>This platform does not support screen capture.</translation>
+        <location filename="../src/LiveSession.cpp" line="234"/>
+        <source>选区为空，先框一块区域。</source>
+        <translation>The selection is empty. Pick an area first.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="401"/>
+        <location filename="../src/LiveSession.cpp" line="240"/>
+        <source>当前环境不能抓屏。</source>
+        <translation>Screen capture is unavailable in this environment.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="247"/>
+        <source>OCR 引擎不可用。</source>
+        <translation>The OCR engine is unavailable.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="271"/>
+        <location filename="../src/LiveSession.cpp" line="318"/>
+        <source>正在识别…</source>
+        <translation>Recognizing…</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="310"/>
+        <source>已暂停 · 已更新 %1 次</source>
+        <translation>Paused · updated %1 times</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="426"/>
         <source>抓屏失败。</source>
         <translation>Screen capture failed.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="415"/>
+        <location filename="../src/LiveSession.cpp" line="448"/>
+        <source>连续 %1 帧没有识别到文字，已停止刷新。</source>
+        <translation>No text found in %1 consecutive frames. Stopped refreshing.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="455"/>
+        <source>这一帧没有文字（%1/%2）</source>
+        <translation>No text in this frame (%1/%2)</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="473"/>
+        <source>画面未变 · 已更新 %1 次</source>
+        <translation>Unchanged · updated %1 times</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="481"/>
+        <source>引擎忙，等下一帧 · 已更新 %1 次</source>
+        <translation>Engine busy, waiting for the next frame · updated %1 times</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="509"/>
+        <source>翻译没发出去：%1</source>
+        <translation>Couldn&apos;t send the translation: %1</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="515"/>
+        <source>正在翻译 %1 行…</source>
+        <translation>Translating %1 lines…</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="535"/>
+        <source>翻译失败：%1</source>
+        <translation>Translation failed: %1</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="573"/>
+        <source>当前引擎每次约 %1 秒，实时效果受限</source>
+        <translation>The current engine takes about %1 s per frame, so live updates are limited</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="578"/>
+        <source>已更新 %1 次 · %2 行 · %3 ms</source>
+        <translation>Updated %1 times · %2 lines · %3 ms</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="609"/>
+        <source>已复制 %1 行</source>
+        <translation>Copied %1 lines</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="630"/>
+        <source>译文浮层窗口无效。</source>
+        <translation>The translation overlay window is invalid.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="645"/>
+        <source>译文浮层不能点击穿透。</source>
+        <translation>The translation overlay cannot be made click-through.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="649"/>
+        <source>译文浮层不能排除在截图之外。</source>
+        <translation>The translation overlay cannot be excluded from screen capture.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="659"/>
+        <source>控制条窗口无效。</source>
+        <translation>The control bar window is invalid.</translation>
+    </message>
+    <message>
+        <source>控制条不能排除在截图之外。</source>
+        <translation type="vanished">The control bar cannot be excluded from screen capture.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="674"/>
+        <source>控制条不能接收点击。</source>
+        <translation>The control bar cannot receive clicks.</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="800"/>
+        <source>译文浮层摆不到选区上。</source>
+        <translation>The translation overlay cannot be placed over the selection.</translation>
+    </message>
+</context>
+<context>
+    <name>studious::ui::MiniSession</name>
+    <message>
+        <location filename="../src/MiniSession.cpp" line="189"/>
+        <source>先输入或粘贴要翻译的文本。</source>
+        <translation>Type or paste some text first.</translation>
+    </message>
+    <message>
+        <location filename="../src/MiniSession.cpp" line="348"/>
+        <source>翻译失败。</source>
+        <translation>Translation failed.</translation>
+    </message>
+</context>
+<context>
+    <name>studious::ui::ScreenFlow</name>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="158"/>
+        <source>翻译失败。</source>
+        <translation>Translation failed.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="268"/>
+        <source>缺少 OCR 模型：%1</source>
+        <translation>OCR models are missing: %1</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="351"/>
+        <source>这个平台不支持截屏。</source>
+        <translation>This platform does not support screen capture.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="358"/>
+        <source>抓屏失败。</source>
+        <translation>Screen capture failed.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="372"/>
         <source>%1 × %2 · 拖拽框选要翻译的区域</source>
         <translation>%1 × %2 · Drag to select the area to translate</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="424"/>
+        <location filename="../src/ScreenFlow.cpp" line="386"/>
         <source>选区宽或高为 0，请重新框选。</source>
         <translation>The selection has zero width or height. Please reselect.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="428"/>
+        <location filename="../src/ScreenFlow.cpp" line="390"/>
         <source>没有抓到屏幕内容，请重新开始。</source>
         <translation>No screen content was captured. Please start again.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="443"/>
+        <location filename="../src/ScreenFlow.cpp" line="405"/>
         <source>选区不在屏幕内。</source>
         <translation>The selection is not on screen.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="454"/>
+        <location filename="../src/ScreenFlow.cpp" line="416"/>
         <source>识别中…</source>
         <translation>Recognizing…</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="482"/>
+        <location filename="../src/ScreenFlow.cpp" line="451"/>
         <source>识别失败：该区域没有检测到文字。</source>
         <translation>Recognition failed: no text found in that area.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="557"/>
+        <location filename="../src/ScreenFlow.cpp" line="525"/>
         <source>翻译中…</source>
         <translation>Translating…</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="587"/>
         <source>翻译没能启动。</source>
-        <translation>Translation could not be started.</translation>
+        <translation type="vanished">Translation could not be started.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="623"/>
+        <location filename="../src/ScreenFlow.cpp" line="601"/>
         <source>已取消。</source>
         <translation>Cancelled.</translation>
     </message>

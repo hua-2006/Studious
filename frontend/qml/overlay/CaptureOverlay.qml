@@ -44,8 +44,17 @@ Window {
     property bool menuOpen: false
     // 点「设置」弹出的浮层设置小窗是否展开。它是本窗口的子窗口（见文件末尾的实例）。
     property bool settingsOpen: false
+    // 语言菜单展开的是哪一个："" = 收起，"src" = 源语言，"dst" = 目标语言。
+    // 两者共用同一块窗内面板（同一时刻只开一个）。
+    property string langMenuFor: ""
     // 小窗里点了「更多设置」：交给 Main 收浮层、回主界面的「浮层」页。
     signal moreSettingsRequested()
+    // 这一次框选是给谁用的："capture"（默认，框完去翻译）还是 "live"（框完开实时翻译）。
+    // 实时模式下工具栏只留「开始实时翻译 / 取消」——设计稿 C1 就两个动作，
+    // 而且实时是持续刷新，没有"译完再复制/显示原文"这些一次性动作。
+    property string purpose: "capture"
+    // 实时模式点了「开始实时翻译」：把选区（逻辑像素）交给 Main，由它启动 LiveSession。
+    signal liveStartRequested(rect region)
     // 松手后的框（还没送去翻译）。ScreenFlow 的 selectionRect 要等 confirmSelection 才有值，
     // 所以「已选、等确认」这个阶段必须自己留一份。
     property rect localRect: Qt.rect(0, 0, 0, 0)
@@ -57,6 +66,51 @@ Window {
 
     readonly property real scale: screenFlow.pixelScale > 0 ? screenFlow.pixelScale : 1.0
     readonly property bool showOriginal: screenFlow.showOriginal
+
+    // 确认选区。截图模式交给 ScreenFlow 去 OCR + 翻译；实时模式只把框交出去，
+    // 浮层立刻退出——实时有自己的贴纸窗口和控制条，两者不该同时待在屏幕上。
+    function confirmCurrent(region) {
+        if (region.width < 3 || region.height < 3)
+            return;
+        if (purpose === "live") {
+            liveStartRequested(region);
+            screenFlow.cancel();
+            return;
+        }
+        screenFlow.confirmSelection(region);
+    }
+
+    // 语言对和主界面是同一份值：backend.srcLang / backend.dstLangs。
+    // 截图翻译一次只出一个目标语言，所以这里写的是单元素列表。
+    function langLabel(code) {
+        const list = backend.languages || []
+        const key = code || "auto"
+        for (let i = 0; i < list.length; ++i) {
+            if (list[i].code === key)
+                return list[i].label
+        }
+        return key
+    }
+
+    function langChoices(includeAuto) {
+        const list = backend.languages || []
+        const out = []
+        for (let i = 0; i < list.length; ++i) {
+            if (!includeAuto && list[i].code === "auto")
+                continue
+            out.push(list[i])
+        }
+        return out
+    }
+
+    function chooseLang(code) {
+        if (langMenuFor === "src") {
+            backend.srcLang = code
+        } else if (langMenuFor === "dst") {
+            backend.dstLangs = [code]
+        }
+        langMenuFor = ""
+    }
 
     // 工具栏上的引擎槽只显示短名：引擎的完整状态在配置页里看。
     function engineShortName() {
@@ -699,24 +753,65 @@ Window {
                 font.pixelSize: Theme.fontSizeTiny
             }
 
+            // 只有出结果那一屏，「信息」和后面那组控件之间才切一条线；
+            // 二次确认那一屏，信息跟引擎/语言是同一组的，不切。
             Rectangle {
                 width: 1
                 height: 18
+                // Row 只摆 x、不管 y：不手动垂直居中就会贴在行顶，看着像"偏上"。
+                anchors.verticalCenter: parent.verticalCenter
+                visible: overlay.showing
                 color: Theme.outlineVariant
             }
 
-            // 引擎槽（设计稿 A2 的「引擎」位置）：三个页面共用同一个 engineId，
-            // 所以这里改的就是翻译页/配置页那个值。
+            // 引擎槽：三个入口共用同一个 engineId，所以这里改的就是翻译页/配置页那个值。
             OverlayButton {
                 id: engineSlot
                 objectName: "engineSlot"
                 text: overlay.engineShortName() + " ▾"
                 primary: false
+                // 实时模式也要能选引擎：框选阶段定的引擎就是这一单开局用的
+                // （四个入口共用 backend.engineId，见「引擎选择统一到一处」）。
                 onClicked: {
                     // 打开前刷一次状态：菜单右边那几个圆点要反映"现在"能不能用
                     // （刚下完资产、刚起停本地服务，都可能在两单之间变）。
                     backend.refreshEngineStatuses()
                     overlay.menuOpen = !overlay.menuOpen
+                }
+            }
+
+            // 语言对：和主界面、实时、小窗共用同一份值（backend.srcLang / dstLangs）。
+            // 样式保持极简的一行「[源] → [目标]」，点哪格开哪个菜单。
+            // 截图翻译一次只出一个目标语言，所以目标那格按单选写。
+            OverlayButton {
+                id: srcSlot
+                objectName: "srcSlot"
+                text: overlay.langLabel(backend.srcLang) + " ▾"
+                primary: false
+                onClicked: {
+                    overlay.menuOpen = false
+                    overlay.settingsOpen = false
+                    overlay.langMenuFor = overlay.langMenuFor === "src" ? "" : "src"
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "→"
+                color: Theme.inkVariant
+                font.pixelSize: Theme.fontSizeTiny
+            }
+
+            OverlayButton {
+                id: dstSlot
+                objectName: "dstSlot"
+                text: overlay.langLabel((backend.dstLangs && backend.dstLangs.length > 0)
+                                        ? backend.dstLangs[0] : "zh") + " ▾"
+                primary: false
+                onClicked: {
+                    overlay.menuOpen = false
+                    overlay.settingsOpen = false
+                    overlay.langMenuFor = overlay.langMenuFor === "dst" ? "" : "dst"
                 }
             }
 
@@ -739,23 +834,8 @@ Window {
                 }
             }
 
-            Rectangle {
-                width: 1
-                height: 18
-                color: Theme.outlineVariant
-            }
-
-
-            OverlayButton {
-                text: qsTr("重新框选")
-                visible: true
-                onClicked: {
-                    overlay.confirmed = false;
-                    overlay.localRect = Qt.rect(0, 0, 0, 0);
-                    screenFlow.cancel();
-                    screenFlow.begin();
-                }
-            }
+            // 出结果之后才有：换原文/译文、整段复制。用户没给它们排位置，
+            // 放在「设置」这一组里（都属"看结果时顺手用"），不打断后半段的操作顺序。
             OverlayButton {
                 text: overlay.showOriginal ? qsTr("显示译文") : qsTr("显示原文")
                 visible: overlay.showing
@@ -766,22 +846,62 @@ Window {
                 visible: overlay.showing
                 onClicked: screenFlow.copyResult()
             }
-            OverlayButton {
-                text: qsTr("关闭 Esc")
-                onClicked: screenFlow.cancel()
+
+            Rectangle {
+                width: 1
+                height: 18
+                // Row 只摆 x、不管 y：不手动垂直居中就会贴在行顶，看着像"偏上"。
+                anchors.verticalCenter: parent.verticalCenter
+                visible: overlay.selecting || overlay.showing || overlay.errored
+                color: Theme.outlineVariant
             }
 
-            // 主操作放最右端（设计稿的「保存」位置）：从左到右看是「次要 → 主操作」的收尾。
             OverlayButton {
-                text: overlay.errored ? qsTr("重新翻译") : qsTr("翻译")
+                text: qsTr("重新框选")
+                // 实时模式只留「开始 / 取消」两件事（设计稿 C1），框歪了按 Esc 重来。
+                visible: overlay.purpose !== "live"
+                onClicked: {
+                    overlay.confirmed = false;
+                    overlay.localRect = Qt.rect(0, 0, 0, 0);
+                    screenFlow.cancel();
+                    screenFlow.begin();
+                }
+            }
+
+            // 翻译之后重跑一遍（比如刚换了目标语言）。
+            // 出错时最右边那颗主按钮本身就是「重新翻译」，这里不再重复一颗。
+            OverlayButton {
+                text: qsTr("重新翻译")
+                visible: overlay.showing
+                onClicked: screenFlow.retranslate()
+            }
+
+            // 主操作：二次确认这一屏的收尾。
+            OverlayButton {
+                text: overlay.purpose === "live" ? qsTr("开始实时翻译")
+                                                 : (overlay.errored ? qsTr("重新翻译") : qsTr("翻译"))
                 primary: true
                 visible: overlay.selecting || overlay.errored
                 onClicked: {
                     if (overlay.errored && screenFlow.phase === "Error")
                         screenFlow.retranslate();
                     else
-                        screenFlow.confirmSelection(overlay.liveRect);
+                        overlay.confirmCurrent(overlay.liveRect);
                 }
+            }
+
+            // 任何一屏的最右边都是「| ✕」，位置固定，手不用找。
+            Rectangle {
+                width: 1
+                height: 18
+                anchors.verticalCenter: parent.verticalCenter
+                visible: overlay.selecting || overlay.showing || overlay.errored
+                color: Theme.outlineVariant
+            }
+
+            CloseButton {
+                visible: overlay.selecting || overlay.showing || overlay.errored
+                onClicked: screenFlow.cancel()
             }
         }
     }
@@ -940,7 +1060,7 @@ Window {
         // 免得下次热键开局先闪一下上一轮的位置）。
         overlay.cursorPos = Qt.point(-1, -1);
         if (backend.captureAutoRun)
-            screenFlow.confirmSelection(r);
+            overlay.confirmCurrent(r);
     }
 
     // ---------------------------------------------------------------- 选择交互
@@ -970,11 +1090,26 @@ Window {
         onReleased: function (mouse) {
             // 拖拽状态先关掉，再拿最终的框 —— 否则 liveRect 还在按 mouseX 算，
             // 松手瞬间鼠标位置已经不可靠了。
-            const r = overlay.dragging
-                          ? Qt.rect(Math.min(overlay.dragX, mouse.x), Math.min(overlay.dragY, mouse.y),
-                                    Math.abs(mouse.x - overlay.dragX), Math.abs(mouse.y - overlay.dragY))
-                          : overlay.liveRect;
+            const dragged = overlay.dragging;
             overlay.dragging = false;
+            // 拖到窗口边界外（邻屏、负坐标）松手时 mouse.x/y 会越界：抓屏底图只有本窗口
+            // 这么大，越界坐标交给 C++ 就是整块取黑边。所以先把**两个角**分别夹回
+            // 窗口内再拼框（夹完再拼，不是拼完再夹 —— 后者会把框往外撑）。
+            const w0 = overlay.width;
+            const h0 = overlay.height;
+            let r = overlay.liveRect;
+            if (dragged) {
+                const ax = Math.max(0, Math.min(overlay.dragX, w0));
+                const ay = Math.max(0, Math.min(overlay.dragY, h0));
+                const bx = Math.max(0, Math.min(mouse.x, w0));
+                const by = Math.max(0, Math.min(mouse.y, h0));
+                // 真拖过就保底 3px：commitSelection 对更小的框是静默丢弃 = 点了没反应。
+                const rx = Math.max(0, Math.min(Math.min(ax, bx), w0 - 3));
+                const ry = Math.max(0, Math.min(Math.min(ay, by), h0 - 3));
+                r = Qt.rect(Math.round(rx), Math.round(ry),
+                            Math.max(3, Math.round(Math.abs(bx - ax))),
+                            Math.max(3, Math.round(Math.abs(by - ay))));
+            }
             overlay.commitSelection(r);
         }
     }
@@ -983,12 +1118,13 @@ Window {
     Item {
         anchors.fill: parent
         focus: overlay.engaged
-        // Esc 分四档：收设置小窗 → 收引擎菜单 → 取消当前这一单（选区留着）→ 整体退出。
+        // Esc 分五档：收语言菜单 → 收设置小窗 → 收引擎菜单 → 取消当前这一单（选区留着）→ 整体退出。
         // 直接整体退出会让"翻到一半发现选错引擎"的人重框一遍，很烦。
-        Keys.onEscapePressed: overlay.settingsOpen ? (overlay.settingsOpen = false)
-                             : (overlay.menuOpen ? (overlay.menuOpen = false)
-                                : (overlay.working ? screenFlow.cancelTranslation() : screenFlow.cancel()))
-        Keys.onReturnPressed: if (overlay.selecting && !overlay.confirmed) screenFlow.confirmSelection(overlay.liveRect)
+        Keys.onEscapePressed: overlay.langMenuFor !== "" ? (overlay.langMenuFor = "")
+                             : (overlay.settingsOpen ? (overlay.settingsOpen = false)
+                                : (overlay.menuOpen ? (overlay.menuOpen = false)
+                                   : (overlay.working ? screenFlow.cancelTranslation() : screenFlow.cancel())))
+        Keys.onReturnPressed: if (overlay.selecting && !overlay.confirmed) overlay.confirmCurrent(overlay.liveRect)
         // 只认方向键，别的键原样放行；开关与修饰键在 handleArrowKey 里判。
         Keys.onPressed: function (event) { overlay.handleArrowKey(event) }
     }
@@ -1018,14 +1154,94 @@ Window {
         }
     }
 
-    // 点空白处收起引擎下拉 / 设置小窗。z 低于工具栏（5）高于内容，所以工具栏按钮照样能点。
+    // 点空白处收起引擎下拉 / 语言菜单 / 设置小窗。z 低于工具栏（5）高于内容，所以工具栏按钮照样能点。
     MouseArea {
         anchors.fill: parent
         z: 4
-        visible: overlay.menuOpen || overlay.settingsOpen
+        visible: overlay.menuOpen || overlay.settingsOpen || overlay.langMenuFor !== ""
         onClicked: {
             overlay.menuOpen = false;
             overlay.settingsOpen = false;
+            overlay.langMenuFor = "";
+        }
+    }
+
+    // 语言菜单：源语言与目标语言共用这一块，跟着被点的那一格走。
+    // 和引擎菜单同理，不用 Popup（独立顶层窗口在这里会抢焦点、也压不到浮层上）。
+    Rectangle {
+        id: langMenu
+        objectName: "langMenu"
+        z: 21
+        visible: overlay.langMenuFor !== ""
+        width: 180
+        height: Math.min(overlay.height - Theme.s4 * 2, langMenuColumn.implicitHeight + Theme.s1 * 2)
+
+        readonly property bool forSource: overlay.langMenuFor === "src"
+        readonly property Item anchorItem: forSource ? srcSlot : dstSlot
+        readonly property point anchorPoint: Qt.point(ovbar.x + barRow.x + anchorItem.x,
+                                                      ovbar.y + barRow.y + anchorItem.y)
+        x: Math.max(Theme.s2, Math.min(anchorPoint.x, overlay.width - width - Theme.s2))
+        y: {
+            const below = anchorPoint.y + anchorItem.height + height + Theme.s2 < overlay.height
+            return below ? anchorPoint.y + anchorItem.height + Theme.s2
+                         : Math.max(Theme.s2, anchorPoint.y - height - Theme.s2)
+        }
+        color: Theme.surfaceHigh
+        radius: Theme.rSm
+        border.width: 1
+        border.color: Theme.outline
+
+        Flickable {
+            id: langMenuFlick
+            anchors.fill: parent
+            anchors.margins: Theme.s1
+            contentHeight: langMenuColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            Column {
+                id: langMenuColumn
+                width: langMenuFlick.width
+                spacing: 2
+
+                Repeater {
+                    model: overlay.langChoices(langMenu.forSource)
+                    delegate: Rectangle {
+                        id: langRow
+                        required property var modelData
+                        readonly property bool picked: (langMenu.forSource
+                                                       ? (backend.srcLang || "auto")
+                                                       : ((backend.dstLangs && backend.dstLangs.length > 0)
+                                                          ? backend.dstLangs[0] : "zh")) === modelData.code
+                        width: parent.width
+                        height: 28
+                        radius: Theme.rXs
+                        color: picked ? Theme.primaryContainer
+                                      : (rowHover.hovered ? Theme.surfaceHighest : "transparent")
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.s2
+                            anchors.right: parent.right
+                            anchors.rightMargin: Theme.s2
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: langRow.modelData.label
+                            elide: Text.ElideRight
+                            color: langRow.picked ? Theme.primaryContainerText : Theme.ink
+                            font.family: Theme.fontUi
+                            font.pixelSize: Theme.fontSizeSmall
+                        }
+
+                        HoverHandler {
+                            id: rowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        TapHandler {
+                            onTapped: overlay.chooseLang(langRow.modelData.code)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1132,12 +1348,36 @@ Window {
     CaptureSettingsPanel {
         id: settingsPanel
         objectName: "captureSettingsPanel"
+        // 实时入口点「设置」时给 live 那一组（刷新间隔、区域底色…），
+        // 截图入口给 capture 那一组。两边是同一份 backend 值，只是露脸的项不同。
+        mode: overlay.purpose === "live" ? "live" : "capture"
         visible: overlay.settingsOpen && overlay.engaged
         onClosed: overlay.settingsOpen = false
         onMoreSettingsRequested: {
             overlay.settingsOpen = false;
             overlay.moreSettingsRequested();
         }
+    }
+
+    // 统一的 ✕：和实时控制条右上角那颗一模一样（22 宽、无边框、悬浮才出台面色、
+    // 字形 ✕ 用 inkVariant）。两处工具栏共用这一个组件，以后只改一处。
+    component CloseButton: Rectangle {
+        id: cb
+        signal clicked()
+        width: 22
+        height: 26
+        radius: Theme.rSm
+        color: cbHover.hovered ? Theme.surfaceHighest : "transparent"
+        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+        Text {
+            anchors.centerIn: parent
+            text: "✕"
+            color: Theme.inkVariant
+            font.family: Theme.fontUi
+            font.pixelSize: Theme.fontSizeSmall
+        }
+        HoverHandler { id: cbHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: cb.clicked() }
     }
 
     component OverlayButton: Rectangle {
@@ -1147,7 +1387,7 @@ Window {
         signal clicked()
         readonly property bool hovered: obHover.hovered
         width: label.implicitWidth + Theme.s4 * 2
-        height: 30
+        height: 26
         radius: Theme.rSm
         color: ob.primary ? (ob.hovered ? Qt.lighter(Theme.primary, 1.08) : Theme.primary)
                           : (ob.hovered ? Theme.surfaceHighest : "transparent")

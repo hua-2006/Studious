@@ -17,6 +17,11 @@
 #    ifndef ERROR_HOTKEY_ALREADY_REGISTERED
 #        define ERROR_HOTKEY_ALREADY_REGISTERED 1409
 #    endif
+
+// Win7 起才有：长按热键时系统不按键盘重复率连发 WM_HOTKEY。值是稳定的 ABI。
+#    ifndef MOD_NOREPEAT
+#        define MOD_NOREPEAT 0x4000
+#    endif
 #endif
 
 namespace studious::platform {
@@ -144,6 +149,15 @@ QString keyNameFromVk(UINT vk)
         hex.prepend(QLatin1Char('0'));
     }
     return QStringLiteral("VK-") + hex;
+}
+
+// 裸键（没有 Ctrl/Alt/Shift/Win）能不能注册？
+// 一般不能：RegisterHotKey 是**全局**抢占，注册一个裸 "S" 等于让全系统再也打不出 s，
+// 裸 F1 则会让所有程序的帮助键失效。唯一放行的是 F13~F24 —— 普通键盘上没有这些键，
+// 只有扩展键盘/宏键盘才发得出来，抢走它们不会误伤正常输入。
+bool bareKeyAllowed(UINT vk)
+{
+    return vk >= VK_F13 && vk <= VK_F24;
 }
 
 // 用户能读的组合键回显，例如 "Ctrl+Alt+S"。冲突提示里用它。
@@ -313,7 +327,14 @@ bool parseComboText(const QString &text, UINT *modifiers, UINT *vk, QString *dis
 
 HotkeyWin *hotkeyOf(HWND window)
 {
-    return reinterpret_cast<HotkeyWin *>(::GetWindowLongPtrW(window, GWLP_USERDATA));
+    // 0 有两种含义：还没设过（初始态）与读取失败。用 LastError 区分，
+    // 别把「读失败」当成「没设过」继续往下走。
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR user = ::GetWindowLongPtrW(window, GWLP_USERDATA);
+    if (user == 0 && ::GetLastError() != ERROR_SUCCESS) {
+        return nullptr;
+    }
+    return reinterpret_cast<HotkeyWin *>(user);
 }
 
 LRESULT CALLBACK hotkeyWndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
@@ -394,7 +415,15 @@ bool HotkeyWin::createMessageWindow()
         return false;
     }
 
-    ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    // SetWindowLongPtrW 返回旧值；GWLP_USERDATA 的旧值本来就是 0，只能靠 LastError 判成败。
+    ::SetLastError(ERROR_SUCCESS);
+    if (::SetWindowLongPtrW(window, GWLP_USERDATA,
+                            reinterpret_cast<LONG_PTR>(this)) == 0
+        && ::GetLastError() != ERROR_SUCCESS) {
+        // 挂不上 this，WM_HOTKEY 就没人接：拆窗口按失败上报，别留个哑句柄。
+        ::DestroyWindow(window);
+        return false;
+    }
     m_hwnd = window;
     return true;
 }
@@ -443,6 +472,17 @@ bool HotkeyWin::registerHotkey(const HotkeySpec &spec, QString *error)
         }
     }
 
+    // 裸键直接拒掉：解析层只保证「认得出这个键」，不保证它适合做全局热键。
+    // 两条入参路径（数值式 Qt::Key / 文本式 "Ctrl+Alt+S"）都在这里收口，
+    // 免得 S 或 F1 这种单键在系统里注册成功、用户从此打不出那个字符。
+    if (modifiers == 0 && !bareKeyAllowed(vk)) {
+        return fail(QCoreApplication::translate(
+                        "HotkeyWin",
+                        "热键 %1 至少要带一个修饰键（Ctrl / Alt / Shift / Win）；"
+                        "单独的字母、数字或功能键会抢走全系统的输入（F13~F24 除外）")
+                        .arg(display));
+    }
+
     const bool hadWindow = (m_hwnd != nullptr);
     if (!createMessageWindow()) {
         return fail(QCoreApplication::translate("HotkeyWin", "无法创建热键消息窗口"));
@@ -463,7 +503,11 @@ bool HotkeyWin::registerHotkey(const HotkeySpec &spec, QString *error)
         }
     }
 
-    if (::RegisterHotKey(static_cast<HWND>(m_hwnd), systemId, modifiers, vk) == FALSE) {
+    // MOD_NOREPEAT：不带它，长按热键时系统按键盘重复率连发 WM_HOTKEY，
+    // 一次长按能触发几十次「截图」。只在注册时加，modifiers 本身保持干净
+    // （comboDisplay 与错误文案用的还是用户写的那个组合键）。
+    const UINT registerModifiers = modifiers | MOD_NOREPEAT;
+    if (::RegisterHotKey(static_cast<HWND>(m_hwnd), systemId, registerModifiers, vk) == FALSE) {
         const DWORD code = ::GetLastError();
         // 失败不留垃圾：窗口是这次才建的、表里也没别人，就一并拆掉。
         if (!hadWindow && m_ids.isEmpty()) {

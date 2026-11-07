@@ -83,7 +83,13 @@ HICON iconFromResource(const QString &path, int size)
     HBITMAP color = ::CreateDIBSection(
         screen, reinterpret_cast<BITMAPINFO *>(&header), DIB_RGB_COLORS, &bits, nullptr, 0);
     ::ReleaseDC(nullptr, screen);
-    if (color == nullptr || bits == nullptr) {
+    // 分开判：先判空是为了拿错误码，再判断 bits —— 只判后者的话 color 已经建出来
+    // 却直接 return，HBITMAP 就漏了（GDI 对象上限 10000，切几次主题就能耗掉一截）。
+    if (color == nullptr) {
+        return nullptr;
+    }
+    if (bits == nullptr) {
+        ::DeleteObject(color);
         return nullptr;
     }
 
@@ -91,7 +97,13 @@ HICON iconFromResource(const QString &path, int size)
     const qsizetype bytes = qsizetype(image.width()) * image.height() * 4;
     std::memcpy(bits, image.constBits(), static_cast<size_t>(bytes));
 
+    // 单色掩码图。建失败就没法 CreateIconIndirect（info.hbmMask 为空会直接失败），
+    // 这里把已经建好的彩色位图回收掉再返回，别把半个图标漏在 GDI 堆里。
     HBITMAP mask = ::CreateBitmap(image.width(), image.height(), 1, 1, nullptr);
+    if (mask == nullptr) {
+        ::DeleteObject(color);
+        return nullptr;
+    }
 
     ICONINFO info{};
     info.fIcon = TRUE;
@@ -100,15 +112,20 @@ HICON iconFromResource(const QString &path, int size)
     HICON icon = ::CreateIconIndirect(&info);
 
     ::DeleteObject(color);
-    if (mask != nullptr) {
-        ::DeleteObject(mask);
-    }
-    return icon;
+    ::DeleteObject(mask);
+    return icon;   // CreateIconIndirect 失败返回 nullptr，句柄此时都已回收
 }
 
 Desktop *desktopOf(HWND window)
 {
-    return reinterpret_cast<Desktop *>(::GetWindowLongPtrW(window, GWLP_USERDATA));
+    // 0 既可能是「没设过」也可能是读取失败；用 LastError 区分，
+    // 免得读失败时让调用方拿着 nullptr 继续走（那样托盘点击就静默失效了）。
+    ::SetLastError(ERROR_SUCCESS);
+    const LONG_PTR user = ::GetWindowLongPtrW(window, GWLP_USERDATA);
+    if (user == 0 && ::GetLastError() != ERROR_SUCCESS) {
+        return nullptr;
+    }
+    return reinterpret_cast<Desktop *>(user);
 }
 
 void showTrayMenu(HWND window, Desktop *desktop)
@@ -143,16 +160,55 @@ void showTrayMenu(HWND window, Desktop *desktop)
     }
 }
 
+// 托盘图标的鼠标消息序列（Windows 判定双击时）：
+//   WM_LBUTTONUP(第 1 下松开) → WM_LBUTTONDBLCLK(第 2 下按下) → WM_LBUTTONUP(第 2 下松开)
+// 三个事件都发 restoreRequested 的话，一次双击会连发两次以上，主窗口在
+// 「显示 / 收起」之间抖。这里用两个时刻去重（进程内只有一个托盘窗口，用静态就够）：
+//   · g_lastRestoreTick —— 上一次真正发过 restoreRequested 的时刻；
+//   · g_swallowUpTick   —— 刚处理过 DBLCLK，紧跟着的那个 UP 要吞掉。
+ULONGLONG g_lastRestoreTick = 0;
+ULONGLONG g_swallowUpTick = 0;
+
+inline ULONGLONG doubleClickMillis()
+{
+    // GetDoubleClickTime() 是控制面板里用户可调的（默认 500ms）。
+    return static_cast<ULONGLONG>(::GetDoubleClickTime());
+}
+
 LRESULT CALLBACK trayWndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     if (message == kTrayCallbackMessage) {
         Desktop *desktop = desktopOf(window);
         const UINT event = LOWORD(lparam);
-        if (event == WM_LBUTTONDBLCLK || event == WM_LBUTTONUP) {
+        const ULONGLONG now = ::GetTickCount64();
+
+        if (event == WM_LBUTTONDBLCLK) {
+            // 第 1 下的 UP 已经发过一次「显示」了；只有当它确实没发（时间戳空或过期）
+            // 才在这里补一次，否则一次双击就是两次 restoreRequested。
+            const bool alreadyRestored =
+                (g_lastRestoreTick != 0) && (now - g_lastRestoreTick <= doubleClickMillis());
+            g_swallowUpTick = now;
+            if (!alreadyRestored && desktop != nullptr) {
+                emit desktop->restoreRequested();
+            }
+            g_lastRestoreTick = now;
+            return 0;
+        }
+
+        if (event == WM_LBUTTONUP) {
+            // 双击尾随的那个 UP：同一次手势里已经恢复过了，吞掉（只吞一次）。
+            if (g_swallowUpTick != 0 && (now - g_swallowUpTick) <= doubleClickMillis()) {
+                g_swallowUpTick = 0;
+                return 0;
+            }
+            g_lastRestoreTick = now;
             if (desktop != nullptr) {
                 emit desktop->restoreRequested();
             }
-        } else if (event == WM_RBUTTONUP || event == WM_CONTEXTMENU) {
+            return 0;
+        }
+
+        if (event == WM_RBUTTONUP || event == WM_CONTEXTMENU) {
             showTrayMenu(window, desktop);
         }
         return 0;
@@ -253,7 +309,16 @@ bool Desktop::createTray()
     if (window == nullptr) {
         return false;
     }
-    ::SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    // SetWindowLongPtrW 返回的是**旧值**，设 GWLP_USERDATA 时旧值本来就是 0，
+    // 所以必须靠 LastError 判成败，不能看返回值。
+    ::SetLastError(ERROR_SUCCESS);
+    if (::SetWindowLongPtrW(window, GWLP_USERDATA,
+                            reinterpret_cast<LONG_PTR>(this)) == 0
+        && ::GetLastError() != ERROR_SUCCESS) {
+        // 挂不上 this，托盘消息就找不到 Desktop：拆掉窗口，别留一个哑的。
+        ::DestroyWindow(window);
+        return false;
+    }
     m_trayWindow = window;
 
     HICON icon = iconFromResource(QStringLiteral(":/qt/qml/Studious/resources/brand.png"),

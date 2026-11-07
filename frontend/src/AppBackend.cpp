@@ -445,6 +445,7 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_proxyUrl = settings.proxyUrl;
     m_httpTimeoutMs = settings.httpTimeoutMs;
     m_minimizeToTray = settings.minimizeToTray;
+    m_miniAlwaysOnTop = settings.miniAlwaysOnTop;
     m_captureAutoRun = settings.captureAutoRun;
     m_captureAutoCopy = settings.captureAutoCopy;
     m_captureAutoHide = settings.captureAutoHide;
@@ -457,6 +458,10 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_overlayDim = settings.overlayDim;
     m_overlayArrowNudge = settings.overlayArrowNudge;
     m_overlayAutoHideDelay = settings.overlayAutoHideDelay;
+    m_overlayBackdrop = settings.overlayBackdrop;
+    m_liveIntervalMs = settings.liveIntervalMs;
+    m_liveOnlyOnChange = settings.liveOnlyOnChange;
+    m_liveEngineLocked = settings.liveEngineLocked;
     m_historyEnabled = settings.historyEnabled;
     m_closeToTray = settings.closeBehavior == QLatin1String("tray");
     m_singleInstance = settings.singleInstance;
@@ -479,6 +484,15 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
         if (!uiId.isEmpty() && uiId != QLatin1String("auto")) {
             m_engineId = uiId;
         }
+    }
+
+    // 启动时就守着「本地 MT 只翻一个目标语言」这条规则：注册表里可能是上一次
+    // 多选留下来的组合（比如 zh,ja），本地 MT 根本翻不了第二个。
+    if (m_engineId == QLatin1String("local-mt") && m_dstLangs.size() > 1) {
+        m_dstLangs = {m_dstLangs.first()};
+        m_activeDst = m_dstLangs.first();
+        settings.dstLang = m_dstLangs.join(QLatin1Char(','));
+        settings.save();
     }
 
     m_statusText = i18n::s().common.ready;
@@ -592,6 +606,11 @@ void AppBackend::setDstLangs(const QStringList &codes)
     if (next.isEmpty()) {
         next = {QStringLiteral("zh")};
     }
+    // 本地 MT 一次只能翻一个目标语言（模型是按语言对装的），多选在这里收成单选。
+    // 界面已经按 dstMultiSupported 禁掉多选，这里兜住其它入口（配置页、设置、脚本）。
+    if (m_engineId == QLatin1String("local-mt") && next.size() > 1) {
+        next = {next.first()};
+    }
     if (m_dstLangs == next) {
         return;
     }
@@ -604,6 +623,41 @@ void AppBackend::setDstLangs(const QStringList &codes)
     saveSettings();
     emit dstLangsChanged();
     emit blocksChanged();
+    refreshEngineStatuses();
+}
+
+void AppBackend::reloadLanguagesFromSettings()
+{
+    // 小窗那侧改语言时直接写 AppSettings（它有自己的 MiniSession），改完由 QML
+    // 通知到这里，把主页/截屏/实时共用的这份内存值同步过来。反向同步在
+    // Main.qml 的 Connections 里：backend 变了就调 miniSession.reloadLanguagesFromSettings()。
+    const AppSettings settings = AppSettings::load();
+    const QString src = settings.srcLang.isEmpty() ? QStringLiteral("auto") : settings.srcLang;
+    QStringList dsts = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (QString &one : dsts) {
+        one = one.trimmed();
+    }
+    dsts.removeAll(QString());
+    if (dsts.isEmpty()) {
+        dsts = {QStringLiteral("zh")};
+    }
+    if (m_engineId == QLatin1String("local-mt") && dsts.size() > 1) {
+        dsts = {dsts.first()};
+    }
+
+    if (m_srcLang != src) {
+        m_srcLang = src;
+        emit srcLangChanged();
+    }
+    if (m_dstLangs != dsts) {
+        m_dstLangs = dsts;
+        if (!m_dstLangs.contains(m_activeDst)) {
+            m_activeDst = m_dstLangs.value(0, QStringLiteral("zh"));
+            emit activeDstChanged();
+        }
+        emit dstLangsChanged();
+        emit blocksChanged();
+    }
     refreshEngineStatuses();
 }
 
@@ -620,6 +674,16 @@ void AppBackend::setEngineId(const QString &id)
     m_engineId = next;
     saveSettings();
     emit engineIdChanged();
+    // 换到本地 MT 时把多选的目标语言收成一个 —— 否则下一次翻译会因为
+    // "某个目标语言没有对应模型"整单失败，界面上还会留着几个用不上的标签。
+    if (next == QLatin1String("local-mt") && m_dstLangs.size() > 1) {
+        m_dstLangs = {m_dstLangs.first()};
+        m_activeDst = m_dstLangs.first();
+        saveSettings();
+        emit dstLangsChanged();
+        emit activeDstChanged();
+        emit blocksChanged();
+    }
     // 「切走就停」：用户选的，默认关 —— 关着就保留 llama-server 热着，下次切回来直接翻。
     if (m_localStopOnSwitch && next != QLatin1String("llm-local") && m_localEngine.isRunning()) {
         shutdownLocalEngine(QString());
@@ -690,6 +754,8 @@ QString AppBackend::dstLabel() const
 
 void AppBackend::setShowSource(bool on)
 {
+    // 主界面已经没有这个开关了，但小窗口/实时翻译贴纸要不要带原文还得看它，
+    // 所以 API 留着（只做状态与通知）。
     if (m_showSource == on) {
         return;
     }
@@ -698,8 +764,7 @@ void AppBackend::setShowSource(bool on)
 }
 
 QVariantList AppBackend::blocks() const
-{
-    QVariantList list;
+{    QVariantList list;
     const QStringList translated = m_byLang.value(m_activeDst);
     const int count = m_lastParagraphs.isEmpty() ? translated.size() : m_lastParagraphs.size();
     list.reserve(count);
@@ -947,6 +1012,20 @@ void AppBackend::setMinimizeToTray(bool on)
     emit prefsChanged();
 }
 
+void AppBackend::setMiniAlwaysOnTop(bool on)
+{
+    if (m_miniAlwaysOnTop == on) {
+        return;
+    }
+    m_miniAlwaysOnTop = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.miniAlwaysOnTop = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
 // ---- 截屏翻译（A 页）：三个开关 + 浮层两个滑块 ----
 // 这一组只存不改行为，行为在 QML 的浮层与 ScreenFlow 里读它。
 void AppBackend::setCaptureAutoRun(bool on)
@@ -1121,6 +1200,64 @@ void AppBackend::setOverlayAutoHideDelay(int seconds)
 
     AppSettings settings = AppSettings::load();
     settings.overlayAutoHideDelay = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayBackdrop(int percent)
+{
+    const int next = std::clamp(percent, 0, 100);
+    if (m_overlayBackdrop == next) {
+        return;
+    }
+    m_overlayBackdrop = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayBackdrop = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setLiveIntervalMs(int ms)
+{
+    const int next = std::clamp(ms, 400, 1500);
+    if (m_liveIntervalMs == next) {
+        return;
+    }
+    m_liveIntervalMs = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.liveIntervalMs = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setLiveOnlyOnChange(bool on)
+{
+    if (m_liveOnlyOnChange == on) {
+        return;
+    }
+    m_liveOnlyOnChange = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.liveOnlyOnChange = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setLiveEngineLocked(bool on)
+{
+    if (m_liveEngineLocked == on) {
+        return;
+    }
+    m_liveEngineLocked = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.liveEngineLocked = on;
     settings.save();
 
     emit prefsChanged();
@@ -1539,6 +1676,9 @@ void AppBackend::translate()
     emit runningChanged();
     setWarning(QString());
     setStatus(i18n::s().translate.running, false);
+    // 结果回来时按这一份快照拼装，别用届时的 m_dstLangs（用户可能已经改过）。
+    m_inflightDstLangs = req.dstLangs;
+    m_inflightSrcLang = req.srcLang;
     // 有请求在跑的时候绝不能被"空闲"回收，所以要重置一次计时；
     // 翻译结束还会再重置一次（见 onTranslationFinished）。
     touchLocalIdle();
@@ -1587,15 +1727,21 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
     if (!result.outcome.ok) {
         m_translatedText.clear();
         emit translatedTextChanged();
+        // 失败时把结构化结果一并清掉：否则译文栏会继续按旧块渲染，
+        // 用户以为「新原文配新译文」，其实是上一单的残影。
+        m_byLang.clear();
+        m_lastPassthrough = false;
+        emit blocksChanged();
         setStatus(result.outcome.error, true);
         refreshEngineStatuses();
         refreshLocalState();
         return;
     }
 
+    const QStringList dstLangs = m_inflightDstLangs.isEmpty() ? m_dstLangs : m_inflightDstLangs;
     QStringList sections;
-    sections.reserve(m_dstLangs.size());
-    for (const QString &dst : m_dstLangs) {
+    sections.reserve(dstLangs.size());
+    for (const QString &dst : dstLangs) {
         const QStringList paragraphs = result.outcome.byLang.value(dst);
         const int count = paragraphs.isEmpty() ? m_lastParagraphs.size() : paragraphs.size();
         QStringList blocks;
@@ -1604,7 +1750,7 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
             blocks << paragraphs.value(i);
         }
         const QString block = blocks.join(QStringLiteral("\n\n"));
-        if (m_dstLangs.size() > 1) {
+        if (dstLangs.size() > 1) {
             sections << QStringLiteral("━━ %1 ━━\n%2")
                             .arg(studious::core::LanguageRegistry::displayName(dst), block);
         } else {
@@ -1617,8 +1763,8 @@ void AppBackend::onTranslationFinished(const TranslateJobResult &result, qint64 
     // 保住结构化结果：译文栏的 tab 与逐段徽标都从这里重新切片。
     m_byLang = result.outcome.byLang;
     m_lastPassthrough = result.outcome.passthrough;
-    if (!m_dstLangs.contains(m_activeDst)) {
-        m_activeDst = m_dstLangs.value(0, QStringLiteral("zh"));
+    if (!dstLangs.contains(m_activeDst)) {
+        m_activeDst = dstLangs.value(0, QStringLiteral("zh"));
         emit activeDstChanged();
     }
     emit blocksChanged();
@@ -1883,6 +2029,19 @@ void AppBackend::resetCacheStats()
 }
 
 void AppBackend::startLocalServer()
+{
+    // 「启动」按钮先给一句反馈再干活：真正的 ensureStarted() 是同步阻塞
+    // （等 /v1 就绪，最长 120 秒，模型大的时候十几秒很正常），如果直接调，
+    // 这一帧根本画不出来，用户看到的就是「点了没反应，然后整窗卡住」。
+    // 用 singleShot(0) 把阻塞挪到下一轮事件循环：状态先上屏，按钮随即变灰。
+    setStatus(studious::i18n::s("正在启动本地引擎……模型越大启动越久，期间界面会短暂无响应。",
+                                "Starting the local engine… larger models take longer; "
+                                "the window stays unresponsive until it's ready."),
+              false);
+    QTimer::singleShot(0, this, [this] { runLocalServerStart(); });
+}
+
+void AppBackend::runLocalServerStart()
 {
     // 没装运行时 / 没模型就别去拉进程：那种失败只会给出一条看不懂的日志尾巴。
     // 界面上「启动」按钮同样会禁用，这里再兜一层（CLI、快捷键、预热都走这个函数）。
@@ -2725,8 +2884,13 @@ bool AppBackend::persistRecord(const QString &kind,
 
     TranslationRecord rec;
     rec.source = kind.isEmpty() ? QStringLiteral("capture") : kind;
-    rec.srcLang = settings.srcLang;
-    rec.dstLangs = settings.dstLang;
+    // 截屏这条链的语言要取"发起这一单时的"快照：翻译跑完用户可能已经
+    // 改了语言，用全局 settings 会把记录标成另一种语言对。
+    const bool captureFlow = rec.source == QStringLiteral("capture");
+    rec.srcLang = (captureFlow && !m_inflightSrcLang.isEmpty()) ? m_inflightSrcLang : settings.srcLang;
+    rec.dstLangs = (captureFlow && !m_inflightDstLangs.isEmpty())
+                       ? m_inflightDstLangs.join(QLatin1Char(','))
+                       : settings.dstLang;
     rec.engine = engineLabel.isEmpty() ? m_lastEngineLabel : engineLabel;
     rec.imagePath = imagePath;
     rec.region = region;
@@ -2772,6 +2936,13 @@ bool AppBackend::saveMiniRecord(const QVariantList &originals,
                                 const QString &engineLabel)
 {
     return persistRecord(QStringLiteral("mini"), QString(), QRect(), originals, blocks, engineLabel);
+}
+
+bool AppBackend::saveLiveRecord(const QVariantList &originals,
+                                const QVariantList &blocks,
+                                const QString &engineLabel)
+{
+    return persistRecord(QStringLiteral("live"), QString(), QRect(), originals, blocks, engineLabel);
 }
 
 void AppBackend::beginLiveSession()

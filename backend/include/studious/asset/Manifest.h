@@ -79,6 +79,31 @@ struct ManifestLoadResult {
 // 解析 + 验签 + 结构校验。envelope 格式见下方说明。
 ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerifyOptions &opts);
 
+// ---------------- 路径安全原语（AssetRegistry / Downloader / parseManifest 共用） ----------------
+
+// 资产 id 白名单：只允许 [A-Za-z0-9._-]，长度 1..kMaxAssetIdLength，
+// 不以 '.' 开头、不以 '.' 结尾、不含 ".."，也不能是 Windows 保留设备名（CON / NUL / COM1 …）。
+//
+// 为什么必须卡死：id 会被拼成 <root>/models/<id> 与 <root>/runtime/<id>，
+// uninstall() 还会对该路径 removeRecursively()。清单里写 "../../.." 就能写到/删到根外。
+// 通过 = 可以安全拼进路径；不通过时（error 非空）写入中文原因。
+inline constexpr int kMaxAssetIdLength = 64;
+bool isSafeAssetId(const QString &id, QString *error = nullptr);
+
+// 相对路径白名单（zip 条目名、清单 files 里的相对路径都要过这道闸）：
+//   * 非空、不得是绝对路径、不得带盘符；
+//   * 任意位置不得含 ':'（NTFS 备用数据流 a.txt:evil，以及被 Windows 当盘符的写法）；
+//   * 不得含 ".." 段（zip-slip）；
+//   * 每段去掉扩展名后不得是 Windows 保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）；
+//   * 每段不得以 '.' 或 ' ' 结尾（Windows 会静默吃掉，落盘名与校验名不一致）；
+//   * 不得含控制字符。
+// 只做字符串判断，不碰磁盘。不通过时（error 非空）写入中文原因。
+bool isSafeRelativeEntryPath(const QString &raw, QString *error = nullptr);
+
+// path 是否落在 dir 里面（自身不算）：两边都会先 QDir::cleanPath。
+// 拼完路径后的最后一道断言——白名单漏了什么都还有它兜底。
+bool isPathInside(const QString &path, const QString &dir);
+
 // 工具函数
 QString sha256File(const QString &path, QString *error = nullptr);   // 分块计算，大文件友好
 bool    verifyFileSha256(const QString &path, const QString &expectedHex, QString *error = nullptr);
@@ -111,10 +136,15 @@ QString     bytesToHex(const QByteArray &bytes);
 //   2. requireSignature 为真时 sig 必填，且用 trustedPublicKey（32 字节）验签
 //   3. schema 必须是 "studious-manifest/1"
 //   4. payload.schemaVersion 必须 > 0 且 <= maxSchemaVersion（超限提示"客户端版本过旧"）
-//   5. 每条资产：id 非空且全局唯一；type 必须是 runtime / model
+//   5. 每条资产：id 非空、过白名单（isSafeAssetId）且全局唯一；type 必须是 runtime / model；
+//      files 里每条相对路径都要过 isSafeRelativeEntryPath
 //   6. 有 urls 的资产，sha256 必须是 64 位小写 hex；无 urls 视为占位，sha256 可为空
 //   7. urls 里出现非 https:// 开头的一律拒绝（不接受明文 http）
 //   8. size 不得为负
+//
+// 验签密钥的默认值：opts.requireSignature 为真且调用方没传 trustedPublicKey 时，退回
+// TrustKeys.h 里编译进二进制的 kManifestPublicKeyHex；两者都没有才报"未提供验签公钥"。
+// 反过来，requireSignature 为假（开发期/示例清单）时不会静默通过——一定打 qWarning 留痕。
 //
 // 注：仓库里的 backend/asset/manifest.json 是**给人看的示例清单**，未签名，且 sha256 是发布前
 // 才填的占位空串 —— 解析它时必须 opts.requireSignature = false，并且要让"有 urls 但 sha256 为空"

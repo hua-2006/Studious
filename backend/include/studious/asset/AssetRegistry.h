@@ -49,12 +49,21 @@ public:
     // 重新扫描磁盘，更新内部状态缓存。
     void refresh();
 
-    // 删除资产（递归删目录或删单个文件）。幂等：不存在也算成功。
+    // 删除资产（递归删目录或删单个文件）。幂等：清单外 id 也返回 true。
+    // id 不合规（不在白名单内）时返回 false ——绝不拿一个可疑 id 去递归删路径。
     bool uninstall(const QString &id, QString *error = nullptr);
 
     // Downloader / 手动导入完成后登记。会重新算一次状态，
     // 登记后仍不完整（缺关键文件）就返回 false 并把原因写进 error。
     bool markInstalled(const QString &id, QString *error = nullptr);
+
+    // 安装后校验：状态缓存只判"存在且非空"，这里按清单做内容校验。
+    //   单文件资产  → 整份文件 sha256 必须等于清单里的 sha256；
+    //   目录型资产  → 清单点名的每个关键文件都要存在、非空、且落在安装目录内，
+    //                 运行时资产额外要求至少点名了一个原生可执行文件（.exe/.dll/.so/.dylib）。
+    // 目录型资产的整包 sha256 覆盖的是压缩包，解压后无法逐字节复原，故只能做上面这些检查。
+    // 注意：调用方（如 LocalEngine 的启动路径）需要自己调一次；本类不拦启动。
+    bool verifyInstalled(const QString &id, QString *error = nullptr) const;
 
     // 所有 Installed 资产的体积之和（字节）。
     qint64 totalInstalledBytes() const;
@@ -62,6 +71,10 @@ public:
 private:
     AssetStatus computeStatus(const AssetEntry &entry) const;
     void ensureFresh() const;
+
+    // targetPath 的实现：清单查找 + id 白名单 + cleanPath 前缀断言，任何一道不过都返回空串，
+    // 并把中文原因写进 *error（可空）。
+    QString resolveTarget(const QString &id, QString *error) const;
 
     QString m_root;
     Manifest m_manifest;

@@ -41,6 +41,9 @@ class AppBackend : public QObject {
     Q_PROPERTY(QString srcLang READ srcLang WRITE setSrcLang NOTIFY srcLangChanged)
     Q_PROPERTY(QStringList dstLangs READ dstLangs WRITE setDstLangs NOTIFY dstLangsChanged)
     Q_PROPERTY(QString engineId READ engineId WRITE setEngineId NOTIFY engineIdChanged)
+    // 当前引擎能不能一次翻多个目标语言。本地 MT 是按语言对装的模型，
+    // 多目标要么缺模型、要么得多绕几跳，界面据此把「多选」收成单选。
+    Q_PROPERTY(bool dstMultiSupported READ dstMultiSupported NOTIFY engineIdChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool statusIsError READ statusIsError NOTIFY statusTextChanged)
@@ -75,13 +78,14 @@ class AppBackend : public QObject {
     Q_PROPERTY(int paragraphCount READ paragraphCount NOTIFY sourceTextChanged)
     Q_PROPERTY(int charCount READ charCount NOTIFY sourceTextChanged)
     Q_PROPERTY(QString dstLabel READ dstLabel NOTIFY dstLangsChanged)
-    Q_PROPERTY(bool showSource READ showSource WRITE setShowSource NOTIFY showSourceChanged)
 
     // ---- 译文分块（供 QML 逐段渲染：tab 切换 + passthrough 徽标）----
     // 每项：{ index:int, source:QString, text:QString, passthrough:bool, empty:bool }
     Q_PROPERTY(QVariantList blocks READ blocks NOTIFY blocksChanged)
     // 当前译文栏正在看的那个目标语言（多目标时对应 tab）
     Q_PROPERTY(QString activeDst READ activeDst WRITE setActiveDst NOTIFY activeDstChanged)
+    // 译文要不要带上原文（主界面已不用它；小窗口与实时翻译贴纸还要用）
+    Q_PROPERTY(bool showSource READ showSource WRITE setShowSource NOTIFY showSourceChanged)
 
     // ---- 主题："system" / "light" / "dark"，落 QSettings ----
     Q_PROPERTY(QString themeMode READ themeMode WRITE setThemeMode NOTIFY themeModeChanged)
@@ -174,6 +178,8 @@ class AppBackend : public QObject {
     Q_PROPERTY(int httpTimeoutMs READ httpTimeoutMs WRITE setHttpTimeoutMs NOTIFY prefsChanged)
     Q_PROPERTY(bool autoStart READ autoStart WRITE setAutoStart NOTIFY prefsChanged)
     Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY prefsChanged)
+    // 小窗翻译是否置顶（键 settings/mini/alwaysOnTop）。窗口的 flags 直接绑这个属性。
+    Q_PROPERTY(bool miniAlwaysOnTop READ miniAlwaysOnTop WRITE setMiniAlwaysOnTop NOTIFY prefsChanged)
     Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY prefsChanged)
     Q_PROPERTY(bool singleInstance READ singleInstance WRITE setSingleInstance NOTIFY prefsChanged)
     // 托盘是否真的装上了（没 shell 的会话 / 非 Windows 为 false），界面据此置灰。
@@ -196,6 +202,16 @@ class AppBackend : public QObject {
     Q_PROPERTY(int overlayDim READ overlayDim WRITE setOverlayDim NOTIFY prefsChanged)
     Q_PROPERTY(bool overlayArrowNudge READ overlayArrowNudge WRITE setOverlayArrowNudge NOTIFY prefsChanged)
     Q_PROPERTY(int overlayAutoHideDelay READ overlayAutoHideDelay WRITE setOverlayAutoHideDelay NOTIFY prefsChanged)
+    // 实时翻译选区的背景底色强度（0~100）。0 = 不铺底。
+    Q_PROPERTY(int overlayBackdrop READ overlayBackdrop WRITE setOverlayBackdrop NOTIFY prefsChanged)
+
+    // ---- 实时翻译（C 页）----
+    // 轮询间隔（400~1500 ms）。太小会把引擎压满，太大会看不出"实时"。
+    Q_PROPERTY(int liveIntervalMs READ liveIntervalMs WRITE setLiveIntervalMs NOTIFY prefsChanged)
+    // 画面没变就不重翻：省一次引擎调用，也让"已更新 N 次"这个数字有意义。
+    Q_PROPERTY(bool liveOnlyOnChange READ liveOnlyOnChange WRITE setLiveOnlyOnChange NOTIFY prefsChanged)
+    // 锁本地引擎：云端 / Web 单次都在 1 秒以上，做实时没有意义。
+    Q_PROPERTY(bool liveEngineLocked READ liveEngineLocked WRITE setLiveEngineLocked NOTIFY prefsChanged)
 
     // 翻译历史目前只有框架：开关 + 目录。写入与浏览界面在后面批次接上。
     Q_PROPERTY(bool historyEnabled READ historyEnabled WRITE setHistoryEnabled NOTIFY prefsChanged)
@@ -214,7 +230,11 @@ public:
     void setSrcLang(const QString &code);
 
     QStringList dstLangs() const { return m_dstLangs; }
+    bool dstMultiSupported() const { return m_engineId != QLatin1String("local-mt"); }
     void setDstLangs(const QStringList &codes);
+
+    // 别处（小窗的 MiniSession）直接写了 settings/lang/*，改完调这个把共用值拉回来。
+    Q_INVOKABLE void reloadLanguagesFromSettings();
 
     QString engineId() const { return m_engineId; }
     void setEngineId(const QString &id);
@@ -244,10 +264,10 @@ public:
     int paragraphCount() const;
     int charCount() const;
     QString dstLabel() const;
-    bool showSource() const { return m_showSource; }
-    void setShowSource(bool on);
 
     QVariantList blocks() const;
+    bool showSource() const { return m_showSource; }
+    void setShowSource(bool on);
     QString activeDst() const { return m_activeDst; }
     void setActiveDst(const QString &code);
 
@@ -362,6 +382,15 @@ public:
     void setOverlayArrowNudge(bool on);
     int overlayAutoHideDelay() const { return m_overlayAutoHideDelay; }
     void setOverlayAutoHideDelay(int seconds);
+    int overlayBackdrop() const { return m_overlayBackdrop; }
+    void setOverlayBackdrop(int percent);
+
+    int liveIntervalMs() const { return m_liveIntervalMs; }
+    void setLiveIntervalMs(int ms);
+    bool liveOnlyOnChange() const { return m_liveOnlyOnChange; }
+    void setLiveOnlyOnChange(bool on);
+    bool liveEngineLocked() const { return m_liveEngineLocked; }
+    void setLiveEngineLocked(bool on);
 
     bool historyEnabled() const { return m_historyEnabled; }
     void setHistoryEnabled(bool on);
@@ -370,6 +399,8 @@ public:
     QString historyDir() const;
     bool minimizeToTray() const { return m_minimizeToTray; }
     void setMinimizeToTray(bool on);
+    bool miniAlwaysOnTop() const { return m_miniAlwaysOnTop; }
+    void setMiniAlwaysOnTop(bool on);
     bool closeToTray() const { return m_closeToTray; }
     void setCloseToTray(bool on);
     bool singleInstance() const { return m_singleInstance; }
@@ -435,6 +466,13 @@ public slots:
 
     // 小窗翻译一条一存（跟截屏同一套字段，只是落进 mini.db）。
     Q_INVOKABLE bool saveMiniRecord(const QVariantList &originals,
+                                    const QVariantList &blocks,
+                                    const QString &engineLabel = QString());
+
+    // 实时翻译一次会话一条（浮层关掉时由 LiveSession 的 sessionFinished 调）。
+    // 和上面的 begin/append/finish 三件套是两条路：那条给"逐轮刷新"用，这条给
+    // "会话结束时已经有完整结果"的场合留的入口。
+    Q_INVOKABLE bool saveLiveRecord(const QVariantList &originals,
                                     const QVariantList &blocks,
                                     const QString &engineLabel = QString());
 
@@ -520,8 +558,8 @@ signals:
     void assetProgressChanged();
     // 工作线程 → 主线程的进度回传（不要直接改成员，跨线程不安全）
     void assetProgressTick(const QString &id, int percent);
-    void showSourceChanged();
     void blocksChanged();
+    void showSourceChanged();
     void activeDstChanged();
     void themeModeChanged();
     void fontScaleChanged();
@@ -547,6 +585,9 @@ signals:
 
 private:
     void onTranslationFinished(const TranslateJobResult &result, qint64 elapsedMs);
+    // startLocalServer() 只是「打个招呼 + 下一轮事件循环再真起」；
+    // 阻塞式的 ensureStarted() 都在这里，状态文案才来得及上屏。
+    void runLocalServerStart();
     void setStatus(const QString &text, bool isError);
     void setWarning(const QString &warning);
     void saveSettings();
@@ -579,11 +620,15 @@ private:
     QStringList m_lastParagraphs;
     QString m_lastEngineLabel;
     bool m_lastCacheEnabled = false;
-    bool m_showSource = true;
+    // 发起这一单时的语言快照：结果回来时用户可能已经改了目标语言，
+    // 用当前 m_dstLangs 拼装会把旧译文贴到新语言的栏位上。
+    QStringList m_inflightDstLangs;
+    QString m_inflightSrcLang;
 
     // 上一次翻译的原始结果，供 blocks() 按 tab 重新切片。
     QHash<QString, QStringList> m_byLang;
     bool m_lastPassthrough = false;
+    bool m_showSource = true;
     QString m_activeDst;
     QString m_themeMode = QStringLiteral("system");
     int m_fontScale = 100;
@@ -628,8 +673,13 @@ private:
     int m_overlayDim = 45;
     bool m_overlayArrowNudge = true;
     int m_overlayAutoHideDelay = 0;
+    int m_overlayBackdrop = 70;
+    int m_liveIntervalMs = 600;
+    bool m_liveOnlyOnChange = true;
+    bool m_liveEngineLocked = true;
     bool m_historyEnabled = false;
     bool m_minimizeToTray = false;
+    bool m_miniAlwaysOnTop = true;
     bool m_closeToTray = false;
     bool m_singleInstance = true;
     bool m_duplicateInstance = false;

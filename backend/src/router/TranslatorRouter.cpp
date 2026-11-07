@@ -4,6 +4,7 @@
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
 #include "i18n/LanguageDetector.h"
+#include "translators/ICancelControl.h"
 
 #include <QMutex>
 #include <QMutexLocker>
@@ -42,6 +43,60 @@ bool containsAny(const QString &text, std::initializer_list<QLatin1String> needl
         }
     }
     return false;
+}
+
+// 只保留"非空白"字符并折成小写，用于判断译文是不是原文照抄。
+// 比较时忽略大小写与所有空白（含换行/全角空格），但不忽略标点 ——
+// "Hello." 与 "Hello" 算两回事，避免把正常译文误判成照抄。
+QString normalizeForEchoCompare(const QString &text)
+{
+    QString out;
+    out.reserve(text.size());
+    for (const QChar ch : text) {
+        if (ch.isSpace()) {
+            continue;
+        }
+        out.append(ch);
+    }
+    return out.toLower();
+}
+
+// 译文 == 原文（大小写/空白归一后比较）？
+// 这种"假成功"必须挡在缓存外面：实测 8000 个 'a' 被后端原样吐回，
+// 旧代码照样 store，于是第二次起直接命中缓存 7ms 返回那串 'a'，
+// 而且缓存里永久留着一条"正确译文"，用户再怎么重试也还是它。
+bool isSameTextIgnoringCaseAndSpace(const QString &translated, const QString &source)
+{
+    const QString norm = normalizeForEchoCompare(translated);
+    return !norm.isEmpty() && norm == normalizeForEchoCompare(source);
+}
+
+// 段落里是否含字母（汉字/假名也算字母）。
+// 纯数字/符号段（"3.14"、"-->"、"2026-11-04"）的"译文"本来就等于原文，
+// 这类段落照抄是正确的，不该按缺陷 1 拒收，也不该因为拒收而每次都重翻。
+bool hasLetters(const QString &text)
+{
+    for (const QChar ch : text) {
+        if (ch.isLetter()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 命中里出现"原文照抄"行只提示一次：老版本（以及第三方适配器）已经把这种行写进库了，
+// 库没有按 key 删除的接口，所以只能"不采信"，让用户自己清缓存回收空间。
+void warnCachedEchoOnce()
+{
+    static QMutex mutex;
+    static bool warned = false;
+    QMutexLocker locker(&mutex);
+    if (warned) {
+        return;
+    }
+    warned = true;
+    qWarning("cache: ignoring cached entries whose translation equals the source text; "
+             "clear the translation cache to reclaim their space");
 }
 
 // 引擎这一次失败属于"可用性类"（换下一个引擎还有救）还是"语义类"（换谁都一样）？
@@ -153,6 +208,21 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
 
     // 每次调用都重新统计：缓存没开时它就是全零（与旧行为一致，旧代码每条返回路径都会重置）。
     m_lastCacheReport = CacheReport{};
+
+    // 取消标志整单只清一次，就在这里 —— "一次 Router::translate() == 一次用户请求"。
+    //
+    // 以前是各引擎在自己的 translate() 入口清。降级链上这会吞取消：
+    // 引擎 A 失败 → 用户此刻点取消 → Router 换引擎 B → B 在入口把标志清掉继续翻，
+    // 用户明明点了取消却还要等一次完整往返。清零权收归 Router 后，
+    // 引擎只读不写标志，降级边界上到达的取消一定能被下一个引擎看到。
+    for (const auto &t : m_translators) {
+        if (!t) {
+            continue;
+        }
+        if (auto *ctl = dynamic_cast<translate::ICancelControl *>(t.get())) {
+            ctl->resetCancel();
+        }
+    }
 
     const QString src = core::LanguageRegistry::normalize(
         req.srcLang.trimmed().isEmpty() ? QStringLiteral("auto") : req.srcLang);
@@ -399,10 +469,19 @@ core::TranslateOutcome TranslatorRouter::runEngine(core::ITranslator *engine,
             }
 
             const QString key = cache::TranslationCache::makeKey(cacheTag, src, dst, text);
-            if (const std::optional<QString> hit = m_cache->lookup(key)) {
+            const std::optional<QString> hit = m_cache->lookup(key);
+            // 库里存着"原文照抄"（旧版本写进去的污染行，实测 8000 个 'a'）时不能当命中：
+            // 一命中就等于把错译永久化。这种行按未命中处理，重新翻一次（本次也不会再写回去）。
+            // 纯数字/符号段不在此列 —— 它们本来就该原样返回。
+            const bool echoedHit = hit.has_value() && hasLetters(text)
+                                   && isSameTextIgnoringCaseAndSpace(*hit, text);
+            if (hit.has_value() && !echoedHit) {
                 merged[i] = *hit;
                 ++m_lastCacheReport.hits;
             } else {
+                if (echoedHit) {
+                    warnCachedEchoOnce();
+                }
                 missIndex.append(i);
                 missTexts << text;
                 missKeys << key;
@@ -419,14 +498,30 @@ core::TranslateOutcome TranslatorRouter::runEngine(core::ITranslator *engine,
                                ? i18n::s("未知错误", "unknown error")
                                : sub.error);
             }
+            // 写缓存用的 tag 必须是"这次实际是谁产出的" —— WebTranslator 的 tag 记录
+            // 本次成功的适配器，调用前根本不知道，只能在调用后再问一次。
+            // 与上面查缓存用的 tag 不同不影响正确性：下一次请求查缓存时会拿到新的 tag。
+            const QString storeTag = engine->cacheTag();
             const QStringList got = sub.byLang.value(dst);
             for (int k = 0; k < missTexts.size(); ++k) {
                 const QString translated = k < got.size() ? got.at(k) : QString();
                 merged[missIndex.at(k)] = translated;
-                if (!translated.trimmed().isEmpty()) {
-                    m_cache->store(missKeys.at(k), missTexts.at(k), translated,
-                                   cacheTag, src, dst);
+
+                // 三道闸，缺一条缓存就会被污染（都实测踩过）：
+                //   1. 整段失败（sub.ok == false）时 byLang 里的东西不可信；
+                //   2. 空译文等于没翻，存进去下次就再也不发了；
+                //   3. 译文 == 原文是"假成功"，存进去等于永久固化一条错译。
+                // 例外：纯数字/符号段（"3.14"）照抄就是正确结果，放行入库，
+                // 否则每次请求都要为同一串数字再发一次网络/模型请求。
+                if (!sub.ok || translated.trimmed().isEmpty()) {
+                    continue;
                 }
+                if (hasLetters(missTexts.at(k))
+                    && isSameTextIgnoringCaseAndSpace(translated, missTexts.at(k))) {
+                    continue;
+                }
+                m_cache->store(missKeys.at(k), missTexts.at(k), translated,
+                               storeTag, src, dst);
             }
         }
 

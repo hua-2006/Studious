@@ -56,6 +56,11 @@ public:
     // 同一个 QuickTranslate 上并发调用 → 返回 false 并设置 error（不排队）。
     bool translate(const QString &text, const QString &srcLang, const QStringList &dstLangs);
 
+    // 这一次调用用哪个引擎（界面 id：web / llm-cloud / llm-local / local-mt），
+    // 空串 = 跟设置走。实时翻译的引擎下拉用它 —— 只影响这一处，不动全局设置。
+    void setEngineOverride(const QString &uiEngineId);
+    void clearEngineOverride();
+
     // 主动取消：立刻 emit 一个 ok=false /「已取消」的 finished，并把 isBusy() 放开。
     // 同时给 TranslateJob 发取消信号 —— 后端 translator 的段落循环会在下一个检查点
     // 退出（已经在飞的那一次 HTTP 请求没法硬打断，最多等它超时/返回）。
@@ -81,6 +86,10 @@ private:
     QString m_pendingEngineLabel;   // 下发前就拼好，避免回来时设置已变
     QStringList m_pendingDstLangs;
     QStringList m_pendingParagraphs;
+
+    // 引擎覆盖：实时翻译下拉选的界面 id。hasEngineOverride=false 时完全跟设置走。
+    bool m_hasEngineOverride = false;
+    QString m_engineOverride;
 };
 
 } // namespace studious::ui

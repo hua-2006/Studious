@@ -344,6 +344,20 @@ bool QuickTranslate::isBusy() const
     return m_busy;
 }
 
+void QuickTranslate::setEngineOverride(const QString &uiEngineId)
+{
+    // 存空串也算"覆盖"，语义是「自动」：实时翻译里选「自动/跟随设置」是两件事，
+    // 调用方用 clearEngineOverride() 表达后者。
+    m_hasEngineOverride = true;
+    m_engineOverride = toUiEngineId(uiEngineId);
+}
+
+void QuickTranslate::clearEngineOverride()
+{
+    m_hasEngineOverride = false;
+    m_engineOverride.clear();
+}
+
 QString QuickTranslate::lastError() const
 {
     return m_lastError;
@@ -385,7 +399,9 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
     const AppSettings settings = AppSettings::load();
 
     const QString src = srcLang.trimmed().isEmpty() ? QStringLiteral("auto") : srcLang.trimmed();
-    const QString uiEngine = toUiEngineId(settings.engineId);   // 空 = 自动
+    // 优先用调用方指定的引擎（实时翻译工具栏的下拉），否则回到全局设置。
+    const QString uiEngine = m_hasEngineOverride ? toUiEngineId(m_engineOverride)
+                                                 : toUiEngineId(settings.engineId);   // 空 = 自动
     const bool wantLocal = uiEngine == QLatin1String("llm-local");
 
     TranslateJobRequest req;
@@ -413,21 +429,19 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
 
     QString label;
     if (wantLocal) {
-        // 本地 LLM 走 LocalEngine 懒启动（主线程阻塞到 /v1 就绪），与 AppBackend 同一套参数。
-        LocalEngineConfig cfg;
-        cfg.modelPath = localModelPathFrom(settings.localModelFileName);
-        cfg.preferGpu = settings.localUseGpu;
-        cfg.contextSize = settings.localContextSize;
-        cfg.threads = settings.localThreads;
-        cfg.gpuLayers = settings.localGpuLayers;
-        cfg.extraArgs = settings.localExtraArgs;
-
+        // 本地 LLM 必须**已经起来**才走这条分支。
+        //
+        // 以前这里直接 ensureStarted()：那是同步阻塞（等 /v1 就绪，最长 120 秒），
+        // 而且是在 GUI 线程上跑的 —— 实时翻译时切到本地 LLM，界面会整段卡死；
+        // 同时 llama-server 正在把 1.5B 模型按 -ngl 99 往显存里塞，机器跟着一起僵。
+        // 现在改成「没起就报错」，启动只留在配置页那个显式按钮里做。
         LocalEngine &local = sharedLocalEngine();
-        QString error;
-        if (!local.ensureStarted(cfg, &error)) {
-            m_lastError = error.isEmpty()
-                              ? l10n::s("本地引擎启动失败", "Failed to start the local engine")
-                              : error;
+        if (!local.isRunning()) {
+            m_lastError = l10n::s(
+                "本地 LLM 还没启动：先在「配置」页的「本地 LLM」里点「启动」，"
+                "或者换成云端 LLM / 本地 MT。",
+                "Local LLM is not running yet: start it on the Configuration page "
+                "(Local LLM card), or switch to Cloud LLM / Local MT.");
             emit errorOccurred(m_lastError);
             return false;
         }

@@ -12,10 +12,16 @@ class QWindow;
 namespace studious::platform {
 
 // 把已有窗口变成浮层。w 必须已经 show() 过（有原生句柄：w->winId() 会强制创建）。
-// clickThrough = true → WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE，
-//                      鼠标事件穿透到下面的程序（实时翻译硬约束）。
+// clickThrough = true → 只加/减 WS_EX_LAYERED | WS_EX_TRANSPARENT（外加恒定的
+//                      TOOLWINDOW / NOACTIVATE），鼠标事件穿透到下面的程序（实时翻译硬约束）。
 // excludeFromCapture = true → SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)，
 //                      让抓屏拍不到浮层自己（Win10 2004+；老系统返回 false 但不报错）。
+//
+// **两项互不干扰**：excludeFromCapture == false 时只改扩展样式，窗口原有的
+// display affinity 先读回、改完样式再回填 —— 改 GWL_EXSTYLE 有可能把 affinity
+// 顺手清掉，以前就是这样：锁定选区时设了排除，解锁时 setClickThrough(false)
+// 一改样式，浮层立刻又进了录屏。反过来，excludeFromCapture == true 也不碰穿透位。
+//
 // 返回 false 表示至少一步失败，error 给人话中文（可为 nullptr）。
 bool winApplyOverlayFlags(QWindow *w, bool clickThrough, bool excludeFromCapture, QString *error);
 

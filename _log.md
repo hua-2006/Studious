@@ -1250,3 +1250,134 @@ Qt 6.12 可用；手工跟随只作为兜底。
   另用 python `sqlite3` 往 mini/live 各塞 2/1 条模拟记录，列表合并显示「最近 4 条」并按时间倒序，
   来源列正确区分「实时翻译 / 小窗翻译 / 截屏翻译」（`docs/ui-shots-qml/settings_history_multi.png`）。测试数据已清空、`history/enabled` 复位 0。
 - 遗留：`saveMiniRecord` 与三个 live 接口尚无调用点（B/C 页未做），未做运行期验证；`%APPDATA%\studious\records.db` 单库遗留文件待迁移时清理。
+## 实时翻译（C 页）主链路打通（2026-11-07）
+
+**做了什么**
+- 新建 `frontend/src/LiveSession.{h,cpp}`（约 780 行）与 `frontend/src/OcrLines.{h,cpp}`：单 QTimer 轮询「抓选区 → OCR → 翻译 → 每行贴回原位」。一帧没回来就整帧丢弃，绝不排队（排队会让译文越追越旧）。行用 `\n\n` 拼给 `QuickTranslate` 再按空行切回，段与行 1:1。
+- `frontend/qml/overlay/LiveOverlay.qml`（透明、点击穿透、排除截图）与 `LiveControlBar.qml`（运行 / 暂停 / 出错三态、可拖动、Esc 停止）。
+- `CaptureOverlay.purpose = "live"`：同一个框选浮层复用，工具栏只留「开始实时翻译 / 取消」。
+- `AppSettings` / `AppBackend` 新增 `liveIntervalMs` / `liveOnlyOnChange` / `liveEngineLocked`；「浮层」页可改刷新间隔。
+- 收单时 `sessionFinished` → `AppBackend::saveLiveRecord()` 写 `live.db`，一次会话一条（重复行会跳过）。
+- `--ui-shot` 钩子扩展：`STUDIOUS_UI_TARGET=liveSession` 时 `STUDIOUS_UI_RECT` 走 `start(QRect)`，`STUDIOUS_UI_CALL` 也认 `liveSession`（这样才能 `stop()`）。
+
+**踩的坑**
+- `LiveOverlay` 根节点写死 `visible: false`，而 C++ 的 `placeWindows()` 只摆位置不管显隐 → 浮层永远不出现，截图里 `liveOverlay visible=0`。改成 `visible: liveSession.phase !== "Idle"` 才对（暂停/出错要留在屏上）。
+- `LiveSession.h` 声明 `void placeWindows()` 而定义返回 `bool` → `void value not ignored`；声明跟着改成 `bool`。
+- 分层窗口（`WDA_EXCLUDEFROMCAPTURE`）本身就拍不到，`Graphics.CopyFromScreen` 里没有译文，验证只能「先抓屏、再把浮层 grab 叠回去」。
+
+**验证**
+- 记事本 5 行英文，逻辑选区 `546,420,560,280` → `phase=Running blocks=6 updates=3`；贴纸窗口 `560x280 at (546,420)`，pixel 统计 plate=108686 / ink=9798（8.27%），是真中文不是空框。
+- 叠图 `docs/ui-shots-qml/live_composite.png`；控制条 `619x50`（`live_bar.png`）。
+- 优雅停止后 `live.db` 恰好 1 条：`engine=云端 LLM · deepseek-v4.1-flash`、原文 76 字符 / 译文 202 字符。
+- `studious_en.ts` 491 条、`unfinished = 0`。
+
+**已知取舍**
+- `ocrModelsDir()` 在 `LiveSession.cpp` 里抄了一份（共用要动 `ScreenFlow.h`），将来合并到 `OcrLines` 旁边。
+- `liveEngineLocked` 只是默认值，没有在 `LiveSession` 里强制（换引擎仍走 `QuickTranslate` 的自动选路）。
+## 小窗翻译（B 页）主链路打通（2026-11-08）
+
+**做了什么**
+- 读 `docs/TempUI/flows.html` 的 B 页（25676 字节）：`.miniwin` = `min(560px, 93%)` 宽、`max-height 558`、圆角 20；8 个状态 B1–B8，共用外壳：顶栏「翻译 / 记录」两个页签 + 设置 + 置顶，语言行（源语言 / 目标语言带「多选」）、输入区（`手动输入` / `划词获取` 标签）、`N 字 · M 段`、操作行（清空 / 翻译 / 取消 / 保存到记录）、结果区（目标语言标签页 + 引擎名 + 逐段编号 + 单段复制 + 全部复制）。
+- 新增 `frontend/src/MiniSession.{h,cpp}`：持一个独立 `QuickTranslate`，状态机 `Empty / Editing / Translating / Done / Failed`；`srcLang` 空串 = 自动；`dstLangs` 多选；`blocks` 按当前 `activeDst` 切片（带 `passthrough` 标记）；`copyAll / copyBlock / saveRecord / grabClipboard / clearAll` 全是 `Q_INVOKABLE`。
+- 新增 `frontend/qml/overlay/MiniWindow.qml`（560×558、圆角 20、无边框可拖、`transientParent: null`）：翻译页 + 记录页 + 窗内语言菜单（不用 `Popup`，理由同实时控制条）+ 设置小窗（`CaptureSettingsPanel { mode: "mini" }`）。
+- `AppBackend` 加 `miniAlwaysOnTop`（读写 `settings/mini/alwaysOnTop`）；窗口 `flags` 直接绑它，标题栏「置顶」按钮与设置小窗都能切。
+- `CaptureSettingsPanel` 拆出第三段 `mode="mini"`：固定在最前 + 译文带原文（`backend.showSource`），截图组改成只在 `mode="capture"` 显示。
+- `frontend/CMakeLists.txt` 加 `MiniSession.{h,cpp}` 与 `qml/overlay/MiniWindow.qml`；`main.cpp` 注入 `miniSession` 上下文属性，`--ui-shot` 的 `STUDIOUS_UI_TARGET` 也认它。
+- `Main.qml` 实例化 `MiniWindow { transientParent: null }`，`launch("mini")` 改成 `show/raise/requestActivate`；入口卡的脚注从「接口已预留」改成「点一下打开小窗」「点一下开始框选」。
+- 保存走 `saveMiniRecord` → `mini.db`；历史没开时按钮下方直接回一句「没存进去：历史对话是关着的…」，不装作保存成功。
+
+**踩的坑**
+- `backend.languages` 每项是 `{code, label}`，不是 `{code, name}` —— 我按 `name` 写，QML 报了一屏 `Unable to assign [undefined] to QString`（`langName()` 与菜单项都中招）。
+- QML 函数的形参在元对象里是 `QVariant`，`QMetaObject::invokeMethod(..., Q_ARG(QString, ...))` 匹配不上，返回 false 且静默；取证钩子补了零参的 `showTranslateTab() / showRecordsTab()`。
+- 占位文本被输入框左上角的「手动输入」标签压住：`anchors.topMargin` 从 26 提到 `26 + Theme.s2` 并加左右内边距。
+- `mini.db` 时间戳不动时先别怀疑代码：`persistRecord()` 会读 `settings/history/enabled`，关着就直接 `return false`。
+
+**验证**
+- 空态 `docs/ui-shots-qml/mini_empty.png`、结果态 `mini_result2.png`（三段原文+译文、`本地 MT`、`6 ms · 3 段`）、保存态 `mini_saved.png`、记录页签 `mini_records.png`（`最近 2 条`，小窗 + 实时两条按时间倒序）。
+- `mini.db` 新增一条 `source=mini`（原文 2 段、译文 2 段）；`studious_en.ts` 541 条 / unfinished = 0；构建 `[5/5] Linking`。
+- 热键链路已通：`main.cpp` 注册 `mini` → `screenFlow->launchRequested("mini")` → `Main.launch("mini")` → `miniWindow.show()`。
+
+---
+
+## 代码审计与六路修复（2026-11-08）
+
+**起因**：用户「测试,查询现在代码漏洞,开子代里」。先起 5 个只读审计子代理（后端翻译链 / 运行网络 MT OCR / 前端 C++ / QML 平台 / 安全面）出清单，用 CLI 实测交叉验证，再按用户「可以,修复吧」分 6 路并行修（文件范围互斥，禁构建、禁用 PowerShell 写源码），主代理负责 `AppBackend`、`QtHttpClient`、`LiveSession` 与统一构建验证。
+
+**实测出来的问题（修前）**
+- 缓存污染：`--smoke <"a"×8000>` 第一次命中 0/1 输出原文照抄，第二次 `命中=1/1`、7 ms 返回那串 `a` —— 译文等于原文也被写进缓存。
+- 重复文本被静默截断：`"hello world. "×62`（806 字）只剩「你好，世界。你好，世界。」
+- `--from xx` 不校验、未知参数 `--whatever` 静默忽略。
+
+**修了什么（按文件）**
+- `backend/src/router/TranslatorRouter.cpp` + 四个引擎：新增 `ICancelControl`（`resetCancel()`），入口清标志收敛到 Router 一处；缓存三道闸（不 ok / 空译文 / 译文==原文且源串含字母都不写），tag 改用 `engine->cacheTag()`，命中值等于原文按未命中处理。
+- `backend/src/translators/WebTranslator.cpp` + `MyMemoryAdapter.cpp`：`webLooksLikeServiceNotice()`（11 条 needle）与 `webLooksLikeSourceEcho()` 双闸，配额警告不再被当译文缓存；`m_activeSources` 让 `cacheTag()` 反映真正产出者。
+- `backend/src/translators/LlmTranslator.cpp`：`translateBatch()` 四处查取消、`translateOne()` 加 `maxAttempts`（批量补救传 1，8 段最坏 40→9 次）、语种启发式重写（无字母/≤4 字符放行，ja 接受汉字，拉丁目标只要求无 CJK）。
+- `backend/src/runtime/LlamaServer.cpp`：`parseExtraArguments()` 改 `QProcess::splitCommand()` 分词并拒受管 flag（`--host` 等），extra 拼最前；`maskedCommandLine()` 给 key 类参数打星；`stop()` 先 kill 再 `waitForFinished(3000)`。
+- `backend/src/ocr/OcrEngine.cpp`：Session 加互斥与 `ready` 原子位，线程数不一致只警告不再重建会话（UAF 根因），`isAvailable()` 用 `try_to_lock`，rec 尺寸改用模型 `recShape`，det 加 4MP 上限。
+- `backend/src/net/QtHttpClient.cpp`：`isLoopbackHost()` 改真解析（`127.attacker.tld` 不再被当回环）、32 MB 响应体上限、跨站跳回本机直接拒绝。
+- `frontend/src/ScreenFlow.cpp`：`m_ocr` 改 `shared_ptr` + 自定义析构等 watcher、`m_recognizing` 防重入、失败不再双发、`cancel()` 先置 `m_cancelling`。
+- `frontend/src/MiniSession.cpp`：请求代号（编辑后旧结果不再覆盖）、`activeDst` 回退首个语言。
+- `frontend/src/AppBackend.cpp`：`m_inflightSrcLang/m_inflightDstLangs` 快照（迟到结果用发起时的语言拼装；截屏记录不再拿全局 settings 当语言）；失败分支清 `m_byLang` 并 `blocksChanged`。
+- `frontend/src/LiveSession.cpp`：`m_engineSwitching` 让自己的 cancel 不刷红字。
+- `frontend/src/platform/*`：`winApplyOverlayFlags()` 快照并回填 `WDA_EXCLUDEFROMCAPTURE`（切穿透不再把浮层从录屏里放出来）、`SWP_SHOWWINDOW` 去掉、`MOD_NOREPEAT`、托盘双击去重、`m_clickThrough` 默认 false 且随窗口销毁清理。
+- `frontend/qml/overlay/*`：`LiveOverlay` 拖动/手柄改屏幕坐标算增量（原先是窗口内坐标回写窗口 x/y 的反馈环，拖起来只有半速且漂）、`MiniWindow` 的 `flags` 只依赖本地 pin 状态（不再每次绑定变化重建原生窗口）、`TextEdit` 改单向灌入避免绑定被首个按键打断。
+- `backend/asset/*`：`isSafeAssetId()`/`isSafeRelativeEntryPath()`/`isPathInside()` 白名单（拒 ADS `:`、保留设备名、`..`）；`verifyInstalled()`；解包条目/体积上限、边写边算哈希、staging 随机后缀、失败清临时文件。
+
+**验证**
+- 构建 `[74/74] Linking`（先杀掉占着 exe 的进程）；`backend_selftest.exe` → `ALL CORE TESTS PASSED`。
+- 缓存污染修复：同一个 8000 × `a` 连跑两次，`命中=0/1`、`命中=0/1` —— 不再把原文照抄那次写进缓存。
+- `--assets-cli backend/asset/manifest.json` 正常，16 条（占位 1）、已安装 2.6 GB，说明 `computeStatus()` 的白名单没有误杀现有资产。
+- 截图：主界面 `after_fix_main.png`、控制条手柄 `after_fix_handles.png`（八颗点贴内侧）、截屏翻译 `after_fix_capture_ok.png`（`phase=Showing words=7 blocks=7`，本地 MT 2984 ms）。
+
+**还没做**
+- 清单验签仍是 `requireSignature=false`（唯一信任根是 qrc 里的清单）；`LocalEngine` 启动前没调 `verifyInstalled()`；目录型资产无法整包验哈希。
+- API Key 仍明文存注册表、内置默认值 `12345678`（要改得动加密与迁移，属独立一批）。
+- `looksDegenerate()` 对合法重复文本仍会截断（806 字那例）。
+
+---
+
+## 引擎选择统一到一处（2026-11-08）
+
+**起因**：用户问「实时翻译的引擎选择是独立的代码????为什么没有跟随主页的引擎选择????」，随后要求「1 给小窗翻译左下角也加一个切换引擎，使用和截图翻译、实时翻译同款；2 让他们的使用统一的值也就是主页面的那个」。
+
+**口径**：`settings/engine/id`（`backend.engineId`）是唯一真值，四个入口（主页 / 截图翻译 / 实时翻译 / 小窗）都只读写它，不再有任何"本窗口覆盖"。
+
+**实时翻译原来的两个坑**
+1. `LiveControlBar.qml` 把空值显示成「自动」，看着像独立设置；一旦点过别的引擎就没有回到跟随的入口。
+2. 跟随态下，「只在内容变化时翻译」会在主页换引擎后把那一帧整帧跳过 —— 新引擎要等画面变了才生效。
+
+**改了什么**
+- `frontend/qml/overlay/LiveControlBar.qml`：选项回到 `自动 / Web 在线 / 云端 LLM / 本地 LLM / 本地 MT`；`engineShortName()` 与菜单当前项都读 `backend.engineId`；`selectEngine()` 先 `liveSession.engineId = ""`（清掉会话覆盖）再 `backend.engineId = id`，运行中先暂停再恢复；按钮 `text` 里显式读一次 `backend.engineId`（JS 函数体里的属性读取不建依赖）。
+- `frontend/src/LiveSession.cpp/.h`：新增 `m_lastSettingsEngineId`，每帧比对 `settings.engineId`；跟随态发现主页换引擎就清 `m_lastText`，强制用新引擎重翻一帧，不受「内容变化」闸影响。
+- `frontend/qml/overlay/MiniWindow.qml`：左下角加引擎槽（`objectName: "miniEngineButton"`）+ 窗内上弹菜单（`miniEngineMenu`，五项带状态点，当前项高亮加粗），`selectEngine()` 直接写 `backend.engineId`；Esc / 点空白都会收菜单。
+
+**踩的坑**
+- 菜单定位别用 `mapToItem(card)`：窗口刚 show 出来时 `card` 还是 `0x0`、按钮还贴在行首，算出来的锚点是错的，而且布局后来动了绑定也不会重算（菜单会僵在窗口中间）。改成用窗口高度倒推：`y = card.height - height - 26 - s4 - 4`，`x = s4`。
+- `--ui-shot` 的 `STUDIOUS_UI_CALL` 只认**零参**方法，取值参数得另加一个 `toggleXxx()` 包装。
+
+**验证**
+- 主页引擎设为「云端 LLM」→ 实时控制条显示 `跟随主界面（云端 LLM）`（`docs/ui-shots-qml/live_bar_follow.png`，此截图是上一版语义）。
+- 统一后的版本：主页设为「本地 MT」→ 小窗左下角显示「本地 MT」（`mini_engine_sync.png`），菜单五项在按钮正上方弹出（`mini_engine_menu.png`）。
+- `studious_en.ts` 545 条 / unfinished = 0；构建 `[9/9] Linking`、`[5/5] Linking`。
+## 浮层「更多设置」跳转 + 截屏/实时加语言对 + 语言规则（2026-11-08）
+
+**用户要求**：① 小窗和实时翻译的设置面板里「更多设置」没反应，要跳到「浮层」页；② 截屏翻译和实时翻译也要能选语言，样式极简 `[源] → [目标]`；③ 语言选择统一走一份值（以主页为准），并加规则：Web / 云端 LLM / 本地 LLM 支持多目标，切到本地 MT 就收成单一。
+
+**改动**：
+- `Main.qml`：新增 `function openFloatingSettings()`（show/raise/requestActivate + `currentPage = 2`）；`CaptureOverlay` / `LiveControlBar` / `MiniWindow` 的 `moreSettingsRequested` 都接到它。实时那一路**不暂停**会话（用户只是去看设置）。
+- `MiniWindow.qml`：新增 `signal moreSettingsRequested()`，面板页脚转发出去；`toggleDst()` 在 `!backend.dstMultiSupported` 时改成单选替换；多选小标签按 `backend.dstMultiSupported` 显示「多选 / 单选」。
+- `AppBackend`：新增 `Q_PROPERTY(bool dstMultiSupported)`（`engineId != "local-mt"`）；`setEngineId()` 切到 local-mt 时把 `m_dstLangs` 收成第一个并落盘；`setDstLangs()` 在 local-mt 下自身也截断；构造函数里补同样的启动期归一（注册表里可能留着 `zh,ja`）。
+- `MiniSession`：`setSrcLang` / `setDstLangs` 现在会写 `settings/lang/src|dst`（四个窗口共用一份值）；`setDstLangs` 与 `translate()` 在引擎是 local-mt 时收成单选。
+- `CaptureOverlay.qml`：工具栏加 `[源] → [目标]` 两个 `OverlayButton` + 窗内 `langMenu`（源含「自动」，目标不含）；Esc 从四档变五档（先收语言菜单）；点空白处连同语言菜单一起收。
+- `LiveControlBar.qml`：`mainRow` 里加同样的语言对（`liveSrcLangButton` / `liveDstLangButton`）+ 窗内 `langMenu`；窗口高度把语言菜单也算进去；Esc 顺序为 语言菜单 → 引擎菜单 → 设置 → 停止。
+
+**验证**：
+- 截屏工具栏：`已选 600 × 200 | 英语 ▾ → 日语 ▾ | 云端 ▾ | 设置 | 重新框选 | 关闭 Esc | 翻译`（`docs/ui-shots-qml/cap_lang.png` / `cap_lang_crop.png`）。
+- 实时控制条：`准备中 | 已更新 0 次 | 英语 ▾ → 日语 ▾ | 云端 LLM | 译文/原文 | 暂停 | 停止 | 锁定选区 | 设置 | ✕`（`live_lang.png`，窗口从 704 变 879 宽）。
+- 设置跳转：`STUDIOUS_UI_EMIT=miniWindow:moreSettingsRequested:x` → 主窗口回到最前并切到「浮层」页（`settings_jump.png`）。
+- 规则：注册表 `settings/lang/dst = zh,ja` + 引擎 `local-mt` 启动 → 落盘变 `zh`；小窗界面显示「单选」、目标只剩一项（`mini_single.png` / `rule_single.png`）。
+- `studious_en.ts` 546 条 / unfinished = 0（新增 `单选 / Single`）。
+
+**坑**：
+- 语言的注册表键是 `settings/lang/src` 与 `settings/lang/dst`，不是 `ui/dstLang` —— 一开始读错键，以为归一没生效。
+- `AppBackend::setEngineId` 是属性 WRITE 访问器、不是槽，`--ui-shot` 的 `invokeMethod` 调不到（返回 0），所以规则验证改成「先写注册表多选 + 启动看是否被收成单选」。

@@ -11,14 +11,19 @@
 #include "i18n/L10n.h"
 #include "monocypher-ed25519.h"
 
+#include <studious/asset/TrustKeys.h>
+
 #include <QByteArrayView>
 #include <QCryptographicHash>
+#include <QDebug>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QStringList>
 
 namespace studious::asset {
 namespace {
@@ -69,6 +74,46 @@ QStringList stringList(const QJsonValue &value)
     return out;
 }
 
+// Windows 保留设备名：CON / PRN / AUX / NUL / COM1-9 / LPT1-9。
+// 判断时去掉扩展名（Win32 解析路径会忽略扩展名，CON.txt 依然落到设备上）并去掉尾随空格。
+bool isReservedDeviceStem(const QString &segment)
+{
+    QString stem = segment;
+    const int dot = stem.indexOf(QLatin1Char('.'));
+    if (dot > 0) {
+        stem.truncate(dot);
+    }
+    while (stem.endsWith(QLatin1Char(' '))) {
+        stem.chop(1);
+    }
+    if (stem.isEmpty()) {
+        return false;
+    }
+
+    const QString upper = stem.toUpper();
+    if (upper == QLatin1String("CON") || upper == QLatin1String("PRN")
+        || upper == QLatin1String("AUX") || upper == QLatin1String("NUL")
+        || upper == QLatin1String("CONIN$") || upper == QLatin1String("CONOUT$")) {
+        return true;
+    }
+    if (upper.size() == 4) {
+        const QString prefix = upper.left(3);
+        const QChar last = upper.at(3);
+        if ((prefix == QLatin1String("COM") || prefix == QLatin1String("LPT"))
+            && last >= QLatin1Char('0') && last <= QLatin1Char('9')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 编译进二进制的默认验签公钥（TrustKeys.h）。返回空 = 这个构建没配公钥。
+QByteArray builtinTrustedKey()
+{
+    const QByteArray raw = QByteArray::fromHex(QByteArray(kManifestPublicKeyHex));
+    return raw.size() == 32 ? raw : QByteArray();
+}
+
 // 单条资产解析。失败时写 *error 并返回 false。
 bool parseEntry(const QJsonObject &obj, AssetEntry *entry, QString *error)
 {
@@ -76,6 +121,15 @@ bool parseEntry(const QJsonObject &obj, AssetEntry *entry, QString *error)
     if (entry->id.isEmpty()) {
         *error = i18n::s("资产缺少 id（id 不能为空）",
                          "The asset is missing its id (id must not be empty)");
+        return false;
+    }
+
+    // id 会被拼成 <root>/models/<id> 或 <root>/runtime/<id>，卸载时还会对该路径递归删除，
+    // 所以这里必须白名单化：不合规的 id 一律在解析阶段就拒绝，绝不带进任何路径拼接。
+    QString idError;
+    if (!isSafeAssetId(entry->id, &idError)) {
+        *error = i18n::sf("资产 id \"%1\" 非法：%2", "Unsafe asset id \"%1\": %2",
+                          {entry->id, idError});
         return false;
     }
 
@@ -137,6 +191,17 @@ bool parseEntry(const QJsonObject &obj, AssetEntry *entry, QString *error)
 // 结构与哈希校验（验签之后跑）。
 QString validateEntry(const AssetEntry &entry, const ManifestVerifyOptions &opts)
 {
+    // files 是"安装后逐个检查存在性"的清单：里面的相对路径同样不允许穿越/ADS/保留名，
+    // 否则恶意清单能靠 "files": ["../../../etc/passwd"] 把校验点挪到安装目录外。
+    for (const QString &relative : entry.files) {
+        QString pathError;
+        if (!isSafeRelativeEntryPath(relative, &pathError)) {
+            return i18n::sf("资产 %1 的 files 条目 \"%2\" 非法：%3",
+                            "Asset %1 has an unsafe files entry \"%2\": %3",
+                            {entry.id, relative, pathError});
+        }
+    }
+
     if (entry.urls.isEmpty()) {
         // 占位条目：不下载，sha256 可以为空。
         return QString();
@@ -269,20 +334,35 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
         }
     }
 
+    // 验签密钥来源：调用方显式给的优先；没给但要求验签时，退回编译进二进制的
+    // TrustKeys 公钥——"忘记传公钥"不应该退化成"根本不验签"。
+    QByteArray trustKey = opts.trustedPublicKey;
+    if (trustKey.isEmpty() && opts.requireSignature) {
+        trustKey = builtinTrustedKey();
+    }
+
     if (sigHex.isEmpty()) {
         if (opts.requireSignature) {
             return failResult(i18n::s("清单缺少 sig 签名，拒绝加载未签名的资产清单",
                                       "The manifest has no sig; refusing to load an unsigned asset "
                                       "manifest"));
         }
-    } else if (opts.trustedPublicKey.size() == 32) {
+        // 走到这里说明调用方主动关了验签（开发期 qrc 清单 / 手工构造的清单）。
+        // 不能静默：日志里必须能看出"这份清单没被密码学校验过"。
+        const QString warning =
+            i18n::s("清单未验签：调用方关闭了 requireSignature，清单内容未经密码学校验，"
+                    "请勿在生产环境使用",
+                    "Manifest is NOT signature-verified: the caller disabled requireSignature, so "
+                    "the manifest content is unauthenticated; do not use this in production");
+        qWarning("%s", qUtf8Printable(warning));
+    } else if (trustKey.size() == 32) {
         // 签名覆盖字节：payload 的 Compact 序列化（QJsonObject 按 key 排序，确定性可保证）。
         const QByteArray signedBytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);
         const QByteArray sigBytes = hexToBytes(sigHex);
         const uint8_t *message = reinterpret_cast<const uint8_t *>(signedBytes.constData());
         const int checked = crypto_ed25519_check(
             reinterpret_cast<const uint8_t *>(sigBytes.constData()),
-            reinterpret_cast<const uint8_t *>(opts.trustedPublicKey.constData()),
+            reinterpret_cast<const uint8_t *>(trustKey.constData()),
             message,
             static_cast<size_t>(signedBytes.size()));
         if (checked != 0) {
@@ -293,10 +373,19 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
                 {root.value(QStringLiteral("keyId")).toString()}));
         }
     } else if (opts.requireSignature) {
-        // requireSignature 为真但没给公钥：配置错误，必须显式失败，不能静默跳过。
+        // requireSignature 为真但没给公钥（调用方没传、TrustKeys 也没配）：配置错误，
+        // 必须显式失败，不能静默跳过。
         return failResult(i18n::s("未提供清单验签公钥（trustedPublicKey 必须为 32 字节）",
                                   "No manifest verification key was provided (trustedPublicKey must "
                                   "be 32 bytes)"));
+    } else {
+        // 有签名、没公钥、调用方又不要求验签：同样留痕，别让它悄悄变成"看起来验过了"。
+        const QString warning = i18n::sf(
+            "清单未验签：清单带 sig 但没有可用的验签公钥（keyId=%1），签名未被校验",
+            "Manifest is NOT signature-verified: it carries a sig but no usable public key is "
+            "configured (keyId=%1), so the signature was never checked",
+            {root.value(QStringLiteral("keyId")).toString()});
+        qWarning("%s", qUtf8Printable(warning));
     }
 
     // (4) schemaVersion 范围。落后于清单 = 客户端太旧，要明确提示。
@@ -460,6 +549,158 @@ QByteArray hexToBytes(const QString &hex)
 QString bytesToHex(const QByteArray &bytes)
 {
     return QString::fromLatin1(bytes.toHex());
+}
+
+// ---------------- 路径安全原语 ----------------
+
+bool isSafeAssetId(const QString &id, QString *error)
+{
+    const auto fail = [error](const QString &why) {
+        if (error != nullptr) {
+            *error = why;
+        }
+        return false;
+    };
+
+    if (id.isEmpty()) {
+        return fail(i18n::s("资产 id 为空", "The asset id is empty"));
+    }
+    if (id.size() > kMaxAssetIdLength) {
+        return fail(i18n::sf("资产 id 过长：%1 字符（上限 %2）",
+                             "The asset id is too long: %1 characters (limit %2)",
+                             {id.size(), kMaxAssetIdLength}));
+    }
+
+    // 字符白名单：'/'、':'、'\'、控制字符全部在这里被挡掉，路径穿越与 ADS 无从下手。
+    for (const QChar &c : id) {
+        const ushort u = c.unicode();
+        const bool allowed = (u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z')
+            || (u >= '0' && u <= '9') || u == '.' || u == '_' || u == '-';
+        if (!allowed) {
+            return fail(i18n::sf("资产 id 含非法字符 \"%1\"（只允许 A-Z a-z 0-9 . _ -）",
+                                 "The asset id contains an illegal character \"%1\" (only A-Z a-z "
+                                 "0-9 . _ - are allowed)",
+                                 {QString(c)}));
+        }
+    }
+    if (id.startsWith(QLatin1Char('.'))) {
+        return fail(i18n::s("资产 id 不能以 '.' 开头（隐藏文件 / 相对路径）",
+                            "The asset id must not start with '.' (hidden file or relative path)"));
+    }
+    if (id.endsWith(QLatin1Char('.'))) {
+        return fail(i18n::s("资产 id 不能以 '.' 结尾（Windows 会静默去掉尾点）",
+                            "The asset id must not end with '.' (Windows strips trailing dots)"));
+    }
+    if (id.contains(QLatin1String(".."))) {
+        return fail(i18n::s("资产 id 不能包含 \"..\"（可能造成目录穿越）",
+                            "The asset id must not contain \"..\" (directory traversal)"));
+    }
+    if (isReservedDeviceStem(id)) {
+        return fail(i18n::sf("资产 id 是 Windows 保留设备名：%1",
+                             "The asset id is a reserved Windows device name: %1", {id}));
+    }
+    return true;
+}
+
+bool isSafeRelativeEntryPath(const QString &raw, QString *error)
+{
+    const auto fail = [error](const QString &why) {
+        if (error != nullptr) {
+            *error = why;
+        }
+        return false;
+    };
+
+    if (raw.isEmpty()) {
+        return fail(i18n::s("路径为空", "The path is empty"));
+    }
+
+    // 统一分隔符：Windows 上打的 zip 常带反斜杠，先归一，免得漏判每一种检查。
+    QString name = raw;
+    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    // 去掉 "./" 前缀与目录条目尾部的 '/'（打包工具会带）。
+    while (name.startsWith(QLatin1String("./"))) {
+        name.remove(0, 2);
+    }
+    while (name.endsWith(QLatin1Char('/'))) {
+        name.chop(1);
+    }
+    if (name.isEmpty() || name == QLatin1String(".")) {
+        return fail(i18n::s("路径为空（只有 ./ 或 /）", "The path is empty (only ./ or /)"));
+    }
+
+    for (const QChar &c : name) {
+        if (c.unicode() < 0x20 || c.unicode() == 0x7f) {
+            return fail(i18n::sf("路径含控制字符，拒绝：%1",
+                                 "The path contains a control character; refusing: %1", {raw}));
+        }
+    }
+
+    if (name.startsWith(QLatin1Char('/'))) {
+        return fail(i18n::sf("路径是绝对路径（或 UNC 路径），拒绝：%1",
+                             "The path is absolute (or a UNC path); refusing: %1", {raw}));
+    }
+    // 盘符：C:/x 以及 C:x 这种"驱动器相对路径"（Windows 会解析到该盘的当前目录）。
+    if (name.size() >= 2 && name.at(1) == QLatin1Char(':')) {
+        return fail(i18n::sf("路径带盘符，拒绝：%1",
+                             "The path carries a drive letter; refusing: %1", {raw}));
+    }
+    // NTFS 备用数据流（a.txt:evil）：写进流里，主文件仍是干净的原内容——
+    // 校验看的是主流，运行的却可能是别的，所以任意位置的 ':' 一律拒绝。
+    if (name.contains(QLatin1Char(':'))) {
+        return fail(i18n::sf("路径含 ':'（NTFS 备用数据流），拒绝：%1",
+                             "The path contains ':' (NTFS alternate data stream); refusing: %1",
+                             {raw}));
+    }
+
+    const QStringList segments = name.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &segment : segments) {
+        if (segment == QLatin1String(".")) {
+            continue;
+        }
+        if (segment == QLatin1String("..")) {
+            return fail(i18n::sf("路径包含 \"..\" 段，可能造成目录穿越（zip-slip），拒绝：%1",
+                                 "The path contains a \"..\" segment (zip-slip); refusing: %1",
+                                 {raw}));
+        }
+        if (segment.endsWith(QLatin1Char('.')) || segment.endsWith(QLatin1Char(' '))) {
+            return fail(i18n::sf("路径段以 '.' 或空格结尾（Windows 会静默去掉，落盘名与校验名不一致），"
+                                 "拒绝：%1",
+                                 "A path segment ends with '.' or a space (Windows silently strips "
+                                 "it, so the on-disk name would differ from the checked name); "
+                                 "refusing: %1",
+                                 {raw}));
+        }
+        if (isReservedDeviceStem(segment)) {
+            return fail(i18n::sf("路径段 \"%1\" 是 Windows 保留设备名，拒绝：%2",
+                                 "The path segment \"%1\" is a reserved Windows device name; "
+                                 "refusing: %2",
+                                 {segment, raw}));
+        }
+    }
+    return true;
+}
+
+bool isPathInside(const QString &path, const QString &dir)
+{
+    if (path.isEmpty() || dir.isEmpty()) {
+        return false;
+    }
+    const QString cleanDir = QDir::cleanPath(dir);
+    const QString cleanPath = QDir::cleanPath(path);
+    if (cleanDir.isEmpty() || cleanPath.isEmpty() || cleanPath == cleanDir) {
+        return false;   // 自身不算"在里面"
+    }
+
+    QString prefix = cleanDir;
+    if (!prefix.endsWith(QLatin1Char('/'))) {
+        prefix += QLatin1Char('/');
+    }
+#if defined(Q_OS_WIN)
+    return cleanPath.startsWith(prefix, Qt::CaseInsensitive);
+#else
+    return cleanPath.startsWith(prefix);
+#endif
 }
 
 } // namespace studious::asset

@@ -2,6 +2,8 @@
 
 #include "AppSettings.h"
 #include "LocalEngine.h"
+// 「词 → 行」的规则搬到了 OcrLines，实时翻译（LiveSession）用同一份。
+#include "OcrLines.h"
 #include "QuickTranslate.h"
 
 #include "platform/PlatformFactory.h"
@@ -131,73 +133,7 @@ QVariantMap lineToMap(const QRect &box, const QString &text, qreal confidence)
     return m;
 }
 
-struct TextLine
-{
-    QRect box;
-    QVector<studious::platform::OcrWord> words;
-};
-
-// 把词按「垂直重叠超过较矮者一半」归到同一行；行内按 x 排序，词间距超过字高
-// 三分之一就补空格（OCR 的分片本身已经补过空格，这里兜住跨分片的情况）。
-QVector<TextLine> groupWordsIntoLines(const QVector<studious::platform::OcrWord> &words)
-{
-    QVector<studious::platform::OcrWord> sorted = words;
-    std::sort(sorted.begin(), sorted.end(),
-              [](const studious::platform::OcrWord &a, const studious::platform::OcrWord &b) {
-                  if (a.box.center().y() != b.box.center().y())
-                      return a.box.center().y() < b.box.center().y();
-                  return a.box.x() < b.box.x();
-              });
-
-    QVector<TextLine> lines;
-    for (const studious::platform::OcrWord &w : std::as_const(sorted)) {
-        int target = -1;
-        for (int i = 0; i < lines.size(); ++i) {
-            const QRect box = lines.at(i).box;
-            const int overlap = qMin(box.bottom(), w.box.bottom()) - qMax(box.top(), w.box.top());
-            const int shorter = qMin(box.height(), w.box.height());
-            if (shorter > 0 && overlap * 2 >= shorter) {
-                target = i;
-                break;
-            }
-        }
-        if (target < 0) {
-            TextLine line;
-            line.box = w.box;
-            line.words.append(w);
-            lines.append(line);
-        } else {
-            lines[target].box = lines.at(target).box.united(w.box);
-            lines[target].words.append(w);
-        }
-    }
-    return lines;
-}
-
-QString lineText(const TextLine &line)
-{
-    QVector<studious::platform::OcrWord> ws = line.words;
-    std::sort(ws.begin(), ws.end(),
-              [](const studious::platform::OcrWord &a, const studious::platform::OcrWord &b) {
-                  return a.box.x() < b.box.x();
-              });
-    QString text;
-    int prevRight = 0;
-    int prevHeight = 0;
-    for (int i = 0; i < ws.size(); ++i) {
-        const studious::platform::OcrWord &w = ws.at(i);
-        if (i > 0) {
-            const int gap = w.box.left() - prevRight;
-            const int height = qMax(1, qMax(prevHeight, w.box.height()));
-            if (gap > height / 3)
-                text += QLatin1Char(' ');
-        }
-        text += w.text.trimmed();
-        prevRight = w.box.right();
-        prevHeight = w.box.height();
-    }
-    return text;
-}
+// 归行 / 行内拼接在 OcrLines.h（groupWordsIntoLines），实时翻译共用同一份规则。
 
 } // namespace
 
@@ -269,7 +205,26 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
     });
 }
 
-ScreenFlow::~ScreenFlow() = default;
+ScreenFlow::~ScreenFlow()
+{
+    // 先断引擎回调再 cancel：cancel() 会同步 emit 一个 finished，
+    // 那时候本对象已经在拆了，不该再跑一遍「应用译文」（照 LiveSession 的做法）。
+    if (m_qt) {
+        disconnect(m_qt, nullptr, this, nullptr);
+        if (m_qt->isBusy())
+            m_qt->cancel();
+    }
+    // 再把在飞的识别等回来：OCR 是工作线程里的 ONNX 推理，
+    // 放着不管直接析构 QObject，回调会写已释放的 this。
+    if (m_ocrWatcher) {
+        m_ocrWatcher->waitForFinished();
+        // 之后这个 watcher 随 QObject 析构一起没了，排队中的 finished 事件也随之作废。
+        m_ocrWatcher = nullptr;
+    }
+    m_recognizing = false;   // 已等回来了，不再有线程在跑
+    // 引擎由 shared_ptr 持有：这里只是放掉自己那一份，线程里那份撑到 recognize() 返回。
+    m_ocr.reset();
+}
 
 studious::platform::IPlatform *ScreenFlow::platform() const
 {
@@ -298,7 +253,7 @@ bool ScreenFlow::ocrAvailable() const
 {
     auto *self = const_cast<ScreenFlow *>(this);
     if (!self->m_ocr)
-        self->m_ocr = std::make_unique<studious::ocr::OcrEngine>(ocrModelsDir());
+        self->m_ocr = std::make_shared<studious::ocr::OcrEngine>(ocrModelsDir());
     return self->m_ocr->isAvailable();
 }
 
@@ -306,7 +261,7 @@ QString ScreenFlow::ocrMissingText() const
 {
     auto *self = const_cast<ScreenFlow *>(this);
     if (!self->m_ocr)
-        self->m_ocr = std::make_unique<studious::ocr::OcrEngine>(ocrModelsDir());
+        self->m_ocr = std::make_shared<studious::ocr::OcrEngine>(ocrModelsDir());
     const QStringList missing = self->m_ocr->missingFiles();
     if (missing.isEmpty())
         return self->m_ocr->lastError();
@@ -377,7 +332,9 @@ void ScreenFlow::fail(const QString &message)
 
 bool ScreenFlow::begin()
 {
-    if (m_busy)
+    // m_recognizing 单独挡：识别阶段 m_busy 还是 false，
+    // 这时再按热键就会和同一份无锁 OcrEngine 撞车。
+    if (m_busy || m_recognizing)
         return false;
 
     m_errorText.clear();
@@ -420,6 +377,11 @@ bool ScreenFlow::begin()
 
 void ScreenFlow::confirmSelection(const QRect &region)
 {
+    // 上一次识别还在飞（Esc 取消过也一样：线程收不回来）：这一次直接不收，
+    // 免得同一份无锁 OcrEngine 被两个工作线程同时喂。
+    if (m_recognizing)
+        return;
+
     if (region.width() < 2 || region.height() < 2) {
         fail(tr("选区宽或高为 0，请重新框选。"));
         return;
@@ -458,7 +420,14 @@ void ScreenFlow::confirmSelection(const QRect &region)
     // recognize() 的实际签名是 QVector<OcrWord>：空 vector 既可能是"没文字"也可能是
     // "模型没就绪"，靠 lastError() 区分（模型问题在进来之前已经拦过一次，这里是兜底）。
     auto *watcher = new QFutureWatcher<QVector<studious::platform::OcrWord>>(this);
+    m_ocrWatcher = watcher;
+    m_recognizing = true;
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, token]() {
+        // 线程已经收工，之后才允许下一次识别（无论这一单是否已被取消）。
+        m_recognizing = false;
+        if (m_ocrWatcher == watcher)
+            m_ocrWatcher = nullptr;
+
         const QVector<studious::platform::OcrWord> raw = watcher->result();
         watcher->deleteLater();
         if (token != m_shotToken || m_phase == QLatin1String("Idle"))
@@ -487,23 +456,22 @@ void ScreenFlow::confirmSelection(const QRect &region)
         m_blocks.clear();
         // 一个词一块会把"一句话"拆成十几个翻译单元：云端 LLM 要发十几次请求，
         // 本地 MT 更会被碎片弄崩。所以先并成行，再按行贴。
-        const QVector<TextLine> lines = groupWordsIntoLines(words);
-        for (const TextLine &line : lines) {
-            const QString text = lineText(line);
-            if (text.isEmpty())
+        // text / confidence 现在都由 OcrLines 一起给出（confidence 取行内最小值，
+        // 口径没变，只是从这里的循环挪进了 OcrLines）。
+        const QVector<OcrLine> lines = groupWordsIntoLines(words);
+        for (const OcrLine &line : lines) {
+            if (line.text.isEmpty())
                 continue;
-            qreal confidence = 1.0;
-            for (const studious::platform::OcrWord &w : line.words)
-                confidence = qMin(confidence, w.confidence);
-            m_blocks.append(lineToMap(line.box, text, confidence));
-            m_lastWords.append(text);
+            m_blocks.append(lineToMap(line.box, line.text, line.confidence));
+            m_lastWords.append(line.text);
         }
         emit blocksChanged();
         startTranslation();
     });
 
     // OCR 是同步阻塞的重活，必须在工作线程：engine 自己不带锁，按实例独占即可。
-    auto *engine = m_ocr.get();
+    // 捕获 shared_ptr 而不是裸指针：本对象即使在识别途中被析构，引擎也不会提前释放。
+    const std::shared_ptr<studious::ocr::OcrEngine> engine = m_ocr;
     const studious::ocr::OcrOptions options = [&] {
         studious::ocr::OcrOptions o;
         const AppSettings settings = AppSettings::load();
@@ -583,17 +551,25 @@ void ScreenFlow::startTranslation()
 
     m_busy = true;
     if (!m_qt->translate(text, settings.srcLang.isEmpty() ? QStringLiteral("auto") : settings.srcLang, dst)) {
+        // 同步拒绝只有一条路径：QuickTranslate 在返回 false 之前已经 emit 过
+        // errorOccurred，那个连接里做了 fail()。这里再 fail 一次会让
+        // finished() / errorTextChanged 双发（浮层会闪两下、记录会落两条）。
         m_busy = false;
-        fail(m_qt->lastError().isEmpty() ? tr("翻译没能启动。") : m_qt->lastError());
+        return;
     }
 }
 
 void ScreenFlow::cancel()
 {
-    if (m_busy)
+    // 和 cancelTranslation() 同一套：先在 cancel() 之前置标志，
+    // 这样 QuickTranslate 同步回来的那次「已取消」finished 会被守卫吃掉，
+    // 不会先 fail 到 Error 再回 Idle。取消永远不弹错误。
+    if (m_qt->isBusy()) {
+        m_cancelling = true;
         m_qt->cancel();
+    }
     m_busy = false;
-    ++m_shotToken;   // 作废在途的 OCR 结果
+    ++m_shotToken;   // 作废在途的 OCR 结果（识别线程本身收不回来，靠代号丢弃）
     m_selectionLogical = QRect();
     m_blocks.clear();
     m_lastWords.clear();
@@ -607,7 +583,9 @@ void ScreenFlow::cancel()
 
 void ScreenFlow::cancelTranslation()
 {
-    const bool wasWorking = m_busy || m_qt->isBusy();
+    // m_recognizing 也算「在干活」：识别阶段取消以前会被当成没事发生，
+    // 代号不推，OCR 回来照样往下翻译。
+    const bool wasWorking = m_busy || m_recognizing || m_qt->isBusy();
     if (m_qt->isBusy()) {
         m_cancelling = true;
         m_qt->cancel();     // 会同步发一个「已取消」的 finished，被上面的守卫吃掉

@@ -59,6 +59,12 @@ qt_add_executable(studious
     src/LocalEngine.h
     src/ScreenFlow.cpp
     src/ScreenFlow.h
+    src/OcrLines.cpp
+    src/OcrLines.h
+    src/LiveSession.cpp
+    src/LiveSession.h
+    src/MiniSession.cpp
+    src/MiniSession.h
     src/TranslateJob.cpp
     src/TranslateJob.h
     src/QuickTranslate.cpp
@@ -86,6 +92,9 @@ qt_add_qml_module(studious
         qml/Theme.qml
         qml/overlay/CaptureOverlay.qml
         qml/overlay/CaptureSettingsPanel.qml
+        qml/overlay/LiveOverlay.qml
+    qml/overlay/MiniWindow.qml
+        qml/overlay/LiveControlBar.qml
         qml/components/SectionCard.qml
         qml/components/FieldRow.qml
         qml/components/AppChip.qml

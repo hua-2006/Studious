@@ -364,6 +364,12 @@ bool MtModel::Impl::readConfig(const QString &configPath, QString *error)
     eosId = obj.value(QStringLiteral("eos_token_id")).toInt(eosId);
     padId = obj.value(QStringLiteral("pad_token_id")).toInt(padId);
     maxLength = obj.value(QStringLiteral("max_length")).toInt(maxLength);
+    // maxLength 必须落在 1..512，否则两种坏情况都没有任何报错：
+    //   max_length <= 0  → translate() 里 limit = min(maxLength, 512) - 1 变成 -1，
+    //                      源串被 resize 到 1 个 token，模型只看到半句话，译文是垃圾；
+    //   max_length > 512 → 超出位置编码范围（kMaxPositionEmbeddings），推理越界。
+    // 配置文件是手工可改的，所以这里一次性收口，不让坏值流到推理里。
+    maxLength = qBound(1, maxLength, kMaxPositionEmbeddings);
     dModel = obj.value(QStringLiteral("d_model")).toInt(dModel);
     numBeams = obj.value(QStringLiteral("num_beams")).toInt(numBeams);
     lengthPenalty = obj.value(QStringLiteral("length_penalty")).toDouble(lengthPenalty);

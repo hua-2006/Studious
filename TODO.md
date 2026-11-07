@@ -36,22 +36,37 @@
 | 二次调整最小尺寸 | 未开始 | 写死 12px | 一般不需要暴露 |
 | 方向键微调 | 已完成 | `AppSettings::overlayArrowNudge`，键 `settings/overlay/arrowNudge`，默认开；「浮层」页 → 方向键微调选区。`CaptureOverlay` 在 `Keys.onPressed` 里判开关（不用 `Keys.enabled`，否则同一 Item 的 Esc / Enter 会被一起关掉），1px / Shift 10px，只在「已框好、未开始翻译」时生效 | 无 |
 
-## 4. 小窗翻译（B 页，未开工）
+## 4. 小窗翻译（B 页，主链路已通）
 
 | 项 | 状态 | 现状 | 要做的 |
 | --- | --- | --- | --- |
-| 窗口尺寸 | 未开始 | 设计稿 `min(560px, 93%)`、`max-height 558` | `AppSettings` 存 `miniWidth/miniHeight` |
-| 置顶 | 已实现 | `AppSettings::miniAlwaysOnTop`，默认 true | 小窗做好后接线 |
-| 目标语言多选 | 已实现（后端） | `dstLangs` 本身是数组；`QuickTranslate::translate(text, src, dsts)` 支持多目标 | 小窗里做带复选框的菜单 |
+| 窗口 | 已完成 | `frontend/qml/overlay/MiniWindow.qml`，560×558、圆角 20、无边框可拖、`transientParent: null`（主窗口最小化不带走它） | 记住窗口位置与尺寸（`settings/mini/x/y/w/h`） |
+| 引擎 | 已完成 | `frontend/src/MiniSession.{h,cpp}` 持一个独立 `QuickTranslate`（自带 `TranslateJob`），配置每次现读 `AppSettings` | 加就地引擎切换（现在是跟设置走） |
+| 输入 | 已完成 | `TextEdit` 双向绑 `miniSession.sourceText`；`Ctrl+Enter` 直接翻；「清空」复位 | 真·划词：选好文字按热键后自动带进来 |
+| 划词获取 | 部分完成 | 现在读系统剪贴板（`MiniSession::grabClipboard()`） | 模拟 `Ctrl+C` 抓前台选区（要进 `platform/` 加能力，别把 Win32 写进 `MiniSession`） |
+| 目标语言多选 | 已完成 | 带勾选框的窗内菜单，标签页按 `dstLangs` 顺序排；至少留一个 | 「更多语言…」折叠（现在一次列出全部 13 种） |
+| 置顶 | 已完成 | `AppSettings::miniAlwaysOnTop` → `AppBackend::miniAlwaysOnTop` → 窗口 `flags`；标题栏按钮与设置小窗都能切 | — |
+| 译文带原文 | 已完成 | `backend.showSource`（开关放进设置小窗的 `mode="mini"` 段）；打开时每段译文上方多一行原文 | — |
+| 结果与复制 | 已完成 | 逐段 `01/02/03` + 复制单段、「全部复制」、引擎名、耗时 | 段落跳转/高亮 |
+| 保存到记录 | 已完成 | 「保存到记录」→ `miniSession.saveRecordRequested` → `backend.saveMiniRecord` 写 `mini.db`；历史没开时按钮下方直接说明原因 | 自动存档（跟截屏一致，翻完就存） |
+| 记录页签 | 已完成 | 合并三库列表（时间/来源/摘要），点一行在下方看全文；空态区分「历史没开」与「还没有记录」 | 详情里加复制与跳转原文 |
 | 注音（ruby） | 未开始 | 设计稿 B4 的「显示注音」 | 需要后端判断语言（日语注音）；先留开关位 |
 
-## 5. 实时翻译（C 页，未开工）
+## 5. 实时翻译（C 页，主链路已通）
 
 | 项 | 状态 | 现状 | 要做的 |
 | --- | --- | --- | --- |
-| 刷新间隔 | 已实现 | `AppSettings::liveIntervalMs`，400–1500，默认 600 | 设置页滑杆 |
-| 锁定本地引擎 | 已实现 | `AppSettings::liveEngineLocked`，默认 true | 设置页开关 |
-| 控制条位置 | 未开始 | 设计稿里可拖动 | 记住最后一次位置到 `settings/live/ctrlPos` |
+| 抓屏 → OCR → 翻译 → 贴回 | 已完成 | `frontend/src/LiveSession.{h,cpp}` 单 QTimer 轮询，帧排不上就丢，绝不排队；行用 `\n\n` 拼给 `QuickTranslate` 再 1:1 贴回 | — |
+| 选区入口 | 已完成 | `CaptureOverlay.purpose = "live"`：工具栏只留「开始实时翻译 / 取消」，引擎槽与「设置」隐藏；松手不直接开跑 | — |
+| 贴纸窗口 | 已完成 | `frontend/qml/overlay/LiveOverlay.qml`，`visible: liveSession.phase !== "Idle"`（**不能写死 false**，C++ 只摆位置不管显隐）；点击穿透 + 排除截图由 `attachPlateWindow()` 打 | — |
+| 控制条 | 已完成 | `frontend/qml/overlay/LiveControlBar.qml`，619×50，贴着选区右下，运行/暂停/出错三态，可拖动，Esc 停止 | 记住位置 |
+| 刷新间隔 | 已完成 | `AppSettings::liveIntervalMs`，400–1500，默认 600；「浮层」页 `NumStepper` 可改，改完下一拍生效 | — |
+| 只在内容变化时翻译 | 已完成 | `AppSettings::liveOnlyOnChange`，默认开；指纹是原文本身 | — |
+| 锁定本地引擎 | 已完成 | `AppSettings::liveEngineLocked`，默认 true（云端/Web 单次 1 s 以上，实时没意义） | 允许强制云端 |
+| 慢引擎提示 | 已完成 | `elapsedMs > 1000` → `slowHint`「当前引擎每次约 %1 秒，实时效果受限」 | — |
+| 连续无字中断 | 已完成 | 连续 3 帧 OCR 无文字 → `phase=Error` + 停表 + 收单；抓屏失败同路 | — |
+| 会话记录 | 已完成 | 收单发 `sessionFinished(originals, blocks)` → `backend.saveLiveRecord(..., liveSession.engineLabel)` 写 `live.db`，一次会话一条 | — |
+| 控制条位置 | 未开始 | 现在每次按选区摆 | 记住位置到 `settings/live/ctrlPos` |
 | 译文行数上限 | 未开始 | 设计稿 C8「译文过长」内滚 | 加 `liveMaxLines` |
 
 ## 6. 记录（B7）

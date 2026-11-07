@@ -32,7 +32,9 @@ struct DownloadResult {
 // 关键设计：
 //   * 多源 failover：按 AssetEntry.urls 顺序试，某源失败换下一个，全失败才报错（带上每个源的原因）；
 //   * 断点续传：先写 <root>/downloads/<id>.part，下次用 Range 续上；服务端不支持 Range（200）就从头重写；
-//   * 校验后安装：算 sha256 与清单比对，一致才原子落盘（zip 解压到 <target>.tmp 再 rename）；
+//   * 边写边算 sha256：校验值与落盘是同一遍 I/O，写完整即校验，不存在"算完哈希再 rename"的窗口；
+//   * 原子安装：staging 名带随机后缀（<target>.tmp-<hex>），全部成功才 rename 到最终位置；
+//   * 解压上限：条目数 ≤ 20000，累计/单条目解压后大小 ≤ max(200 MiB, 清单 size×1.5)；
 //   * 同步执行：调用方必须在工作线程调用（内部会起局部事件循环等网络）。
 class Downloader {
 public:
@@ -50,10 +52,12 @@ public:
 
 private:
     // 把已校验的源文件安装到目标位置。moveSource=true 表示源文件可以搬走（下载的 .part），
-    // false 表示是用户文件，必须复制。成功返回安装绝对路径，失败返回空串并写 *error。
+    // false 表示是用户文件，必须复制。sourceSha256 是刚算出的整包哈希：跨盘拷贝时会边拷边比对，
+    // 保证交给 rename 的字节就是校验过的那一批。成功返回安装绝对路径，失败返回空串并写 *error。
     QString finalizeInstall(const AssetEntry &entry,
                             const QString &sourcePath,
                             bool moveSource,
+                            const QString &sourceSha256,
                             QString *error);
 
     net::IHttpClient &m_http;

@@ -3,6 +3,7 @@
 #include "i18n/L10n.h"
 
 #include <QEventLoop>
+#include <QHostAddress>
 #include <QList>
 #include <QNetworkProxy>
 #include <QNetworkProxyFactory>
@@ -33,14 +34,23 @@ int statusOf(const QNetworkReply *reply)
 bool isLoopbackHost(QString host)
 {
     host = host.trimmed().toLower();
+    if (host.startsWith(QLatin1Char('[')) && host.endsWith(QLatin1Char(']'))) {
+        host = host.mid(1, host.size() - 2);
+    }
     if (host.isEmpty()) {
         return false;
     }
-    if (host == QLatin1String("localhost") || host == QLatin1String("::1")
-        || host == QLatin1String("0:0:0:0:0:0:0:1") || host == QLatin1String("[::1]")) {
+    if (host == QLatin1String("localhost") || host.endsWith(QLatin1String(".localhost"))) {
         return true;
     }
-    return host.startsWith(QLatin1String("127."));
+
+    // 用 QHostAddress 判，而不是 startsWith("127.")：后者会把 "127.attacker.tld"
+    // 也算成回环，配合系统代理豁免就把请求直连到外部主机了。
+    QHostAddress addr;
+    if (addr.setAddress(host)) {
+        return addr.isLoopback();
+    }
+    return false;
 }
 
 // 全局请求超时**下限**（环境变量 STUDIOUS_HTTP_TIMEOUT，毫秒）。
@@ -234,6 +244,19 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
 
     QEventLoop loop;
     bool timedOut = false;
+    bool tooLarge = false;
+    // 响应体上限：防住"无限 chunked"把进程吃干。翻译接口正常响应都在几百 KB 内。
+    constexpr qint64 kMaxBodyBytes = 32LL * 1024 * 1024;
+
+    // 边收边看，超限立刻掐断，不等到 readAll 才后悔。
+    QObject::connect(reply, &QNetworkReply::downloadProgress, &loop,
+                     [&loop, &tooLarge, reply](qint64 received, qint64) {
+                         if (received > kMaxBodyBytes) {
+                             tooLarge = true;
+                             reply->abort();
+                             loop.quit();
+                         }
+                     });
 
     QTimer timer;
     timer.setSingleShot(true);
@@ -270,6 +293,13 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
         res.error = i18n::sf("请求超时（%1 ms）：%2",
                              "Request timed out after %1 ms: %2",
                              {timeoutMs, req.url.toString()});
+    } else if (tooLarge) {
+        res.ok = false;
+        res.error = i18n::s("响应体过大，已中止", "Response body too large, aborted");
+    } else if (!isLoopbackHost(req.url.host()) && isLoopbackHost(reply->url().host())) {
+        // 跳转把请求导回本机：本机的 llama-server 没有鉴权，外部跳转能借这条链读它。
+        res.ok = false;
+        res.error = i18n::s("跳转目标指向本机，已拒绝", "Redirect pointed at a loopback host, refused");
     } else if (netError != QNetworkReply::NoError) {
         res.ok = false;
         res.error = i18n::sf("网络错误(%1)：%2",

@@ -13,9 +13,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -30,10 +32,17 @@ constexpr const char *kDictFile = "ppocr_keys_v1.txt";
 // DBNet 主干有 5 次 stride=2 下采样，输入边长必须是 32 的倍数，否则特征图对不齐。
 constexpr int kSizeMultiple = 32;
 
-// 识别网络输入：高固定 48，宽按比例、上限 320（PP-OCRv4 rec 的标准输入 3×48×320）。
+// 识别网络输入：默认高 48、宽按比例、上限 320（PP-OCRv4 rec 的标准输入 3×48×320）。
 // 宽高比更极端的框改成"宽 320 + 高度反算"，右侧 / 下侧补 0。
+// 模型若在导出时把 H/W 烧死了（recShape 里是正数），以模型声明为准 —— 在
+// recognizeCrop() 里解析，这两个常量只做模型没声明时的兜底。
 constexpr int kRecHeight = 48;
 constexpr int kRecWidth = 320;
+
+// 检测输入 / 概率图的像素上限（4M ≈ 2048×2048）。
+// 超了就要么按比例缩小、要么直接报错：extractComponents() 会按 w*h 分配 uint8 的 seen
+// 加同规模的 int 栈，一张 8000×8000 的截图就是 64 MB + 256 MB，直接把进程吃掉。
+constexpr qint64 kMaxDetPixels = 4'000'000;
 
 // 自动线程数上限：OCR 是交互式路径（截完图等结果），把核占满只会拖慢 UI。
 constexpr int kMaxAutoThreads = 8;
@@ -539,15 +548,30 @@ struct OcrEngine::Session {
 
     std::vector<QString> dict;       // ppocr_keys_v1.txt：每行一个字符，不含 blank
 
+    // ---- 并发保护 ----
+    // 界面线程会调 isAvailable()（threads=min(8,核数)），工作线程会调 recognize()（opts.threads）。
+    // 以前线程数一不同就 det.reset()/rec.reset()：正在 Run() 的 Ort::Session 被析构 = 野指针，
+    // 崩在 onnxruntime 内部。现在：
+    //   * mutex 把 load() / detect() / recognizeCrop() 串成一条线（调用方负责持有）；
+    //   * 会话只建一次，线程数取**首次** load 的值，之后不同只 warning；
+    //   * ready 是会话已就绪的无锁快照，给 isAvailable() 的快路径看。
+    mutable std::mutex mutex;
+    std::atomic<bool> ready{false};
+    // lastError 单独一把锁：读错误信息不该排在整轮识别后面。
+    mutable std::mutex errorMutex;
+
     bool loaded = false;
-    int threads = 0;                 // 建会话时用的线程数（和请求不一致就重建）
-    bool loadFailed = false;         // 文件齐但加载失败：同线程数下不再反复重试
+    int threads = 0;                 // 建会话时用的线程数（首次 load 固定，之后不再变）
+    int warnedThreads = -1;          // 已经 warning 过的"不同线程数"请求，避免每帧刷日志
+    bool loadFailed = false;         // 文件齐但加载失败：不再反复重试
     QString loadError;               // 最近一次加载失败的原因
     QString lastError;               // 最近一次操作（isAvailable / recognize）的错误
 
     QStringList missingFilesNow() const;
+    // 调用方必须持有 mutex。
     bool load(int wantThreads);
     bool loadDict(QString *error);
+    void setLastError(const QString &text);
 
     bool detect(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
                 QString *error);
@@ -571,6 +595,14 @@ QStringList OcrEngine::Session::missingFilesNow() const
         missing << QString::fromLatin1(kDictFile);
     }
     return missing;
+}
+
+// 写 lastError 一律走这里：读它的可能是另一个线程（界面查错误原因），
+// 单独一把锁，不让它排在整轮识别后面。
+void OcrEngine::Session::setLastError(const QString &text)
+{
+    std::lock_guard<std::mutex> lock(errorMutex);
+    lastError = text;
 }
 
 bool OcrEngine::Session::loadDict(QString *error)
@@ -610,12 +642,14 @@ bool OcrEngine::Session::loadDict(QString *error)
 
 bool OcrEngine::Session::load(int wantThreads)
 {
+    // 前置条件：调用方持有 mutex（见 OcrEngine::isAvailable / recognize）。
     // 1) 文件检查放最前面：缺文件是最常见的情形（资产还没下），别为它建会话。
     const QStringList missing = missingFilesNow();
     if (!missing.isEmpty()) {
         det.reset();
         rec.reset();
         loaded = false;
+        ready = false;
         loadFailed = false;   // 文件又缺了：等补装之后再试
         loadError = i18n::sf("OCR 模型缺失：%1（目录 %2）",
                              "OCR models are missing: %1 (directory %2)",
@@ -623,19 +657,32 @@ bool OcrEngine::Session::load(int wantThreads)
         return false;
     }
 
-    if (loaded && threads == wantThreads) {
+    if (loaded) {
+        // 线程数只在建会话时生效，这里**不重建**：
+        // 重建要先析构正在被另一线程 Run() 的 Ort::Session（UAF），
+        // 而且一次重建就是几百毫秒。差异只记一条 warning。
+        if (threads != wantThreads && warnedThreads != wantThreads) {
+            warnedThreads = wantThreads;
+            qWarning().noquote()
+                << QStringLiteral("[ocr] 请求线程数 %1 与建会话时的 %2 不同："
+                                  "会话只建一次（线程数在首次加载时固定），本次请求被忽略")
+                       .arg(wantThreads)
+                       .arg(threads);
+        }
         return true;
     }
-    // 文件齐、会话却建不起来：同一线程数下不反复烧几百毫秒；换线程数才重试。
-    if (loadFailed && threads == wantThreads) {
+    // 文件齐、会话却建不起来：不再重试 —— 线程数不再是重试的理由，
+    // 反复建只会在每次 isAvailable() 上白烧几百毫秒。
+    if (loadFailed) {
         return false;
     }
 
-    loaded = false;
     loadFailed = false;
     loadError.clear();
+    ready = false;
     det.reset();
     rec.reset();
+    // 首次加载即定型：之后所有请求都用这个线程数。
     threads = wantThreads;
 
     try {
@@ -712,6 +759,7 @@ bool OcrEngine::Session::load(int wantThreads)
     }
 
     loaded = true;
+    ready = true;
 
     qInfo().noquote() << QStringLiteral("[ocr] 已加载：det=%1 %2 rec=%3 %4 字典=%5 行 threads=%6")
                              .arg(QString::fromStdString(detIn.front()),
@@ -733,7 +781,8 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
     // 动态维度才按 maxSideLen 缩放，并就近取整到 32 的倍数。
     int detW = 0;
     int detH = 0;
-    if (detShape.size() == 4 && detShape[2] > 0 && detShape[3] > 0) {
+    const bool fixedSize = detShape.size() == 4 && detShape[2] > 0 && detShape[3] > 0;
+    if (fixedSize) {
         detH = static_cast<int>(detShape[2]);
         detW = static_cast<int>(detShape[3]);
     } else {
@@ -749,6 +798,39 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
     if (detW <= 0 || detH <= 0) {
         *error = i18n::s("OCR 检测：输入尺寸算出来是 0", "OCR detection: the input size resolved to 0");
         return false;
+    }
+
+    // 尺寸上限：下面的连通域会按 detW*detH 分配 seen（uint8）和等规模的栈，
+    // 一张超大图能把内存吃光。动态尺寸就按比例缩回去；模型烧死的尺寸改不了，直接报错。
+    if (static_cast<qint64>(detW) * static_cast<qint64>(detH) > kMaxDetPixels) {
+        if (fixedSize) {
+            *error = i18n::sf("OCR 检测输入过大：模型固定要求 %1×%2（%3 像素），超过上限 %4。\n"
+                              "请先裁剪截图再识别。",
+                              "The OCR detection input is too large: the model requires %1×%2 "
+                              "(%3 pixels), above the limit of %4.\n"
+                              "Crop the screenshot before running OCR.",
+                              {QString::number(detW), QString::number(detH),
+                               QString::number(static_cast<qint64>(detW) * detH),
+                               QString::number(kMaxDetPixels)});
+            return false;
+        }
+        const double shrink = std::sqrt(static_cast<double>(kMaxDetPixels)
+                                        / (static_cast<double>(detW) * static_cast<double>(detH)));
+        detW = std::max(kSizeMultiple,
+                        roundToMultiple(static_cast<int>(std::lround(detW * shrink)), kSizeMultiple));
+        detH = std::max(kSizeMultiple,
+                        roundToMultiple(static_cast<int>(std::lround(detH * shrink)), kSizeMultiple));
+        // roundToMultiple 可能往上取（例如 31 -> 32），再压一次，保证硬上限。
+        while (static_cast<qint64>(detW) * static_cast<qint64>(detH) > kMaxDetPixels
+               && (detW > kSizeMultiple || detH > kSizeMultiple)) {
+            if (detW >= detH && detW > kSizeMultiple) {
+                detW -= kSizeMultiple;
+            } else if (detH > kSizeMultiple) {
+                detH -= kSizeMultiple;
+            } else {
+                break;
+            }
+        }
     }
 
     std::vector<float> chw = toChwFloat(img, detW, detH, kDetMean, kDetStd);
@@ -806,6 +888,17 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
         }
 
         const float *prob = out.GetTensorData<float>();
+        // 概率图尺寸同样要设上限：模型若把输出上采样到比输入还大（少见但合法），
+        // extractComponents 的 seen/栈就按这张图的 w*h 分配，一样能把内存吃光。
+        if (static_cast<qint64>(probW) * static_cast<qint64>(probH) > kMaxDetPixels) {
+            *error = i18n::sf("OCR 检测概率图过大：%1×%2（%3 像素），超过上限 %4。",
+                              "The OCR probability map is too large: %1×%2 (%3 pixels), above the "
+                              "limit of %4.",
+                              {QString::number(probW), QString::number(probH),
+                               QString::number(static_cast<qint64>(probW) * probH),
+                               QString::number(kMaxDetPixels)});
+            return false;
+        }
         const std::vector<Component> comps = extractComponents(prob, probW, probH, boxThreshold);
 
         // 概率图 -> 原图：模型输出可能比输入小（下采样后没上采样回来），用比例换算而不是假设 1:1。
@@ -925,23 +1018,34 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
         return true;   // 空裁剪不算失败，只是这一段没字
     }
 
-    // 高**必须**是 48：PP-OCR 的 rec 是「高度固定 48、宽度按比例裁到 320」训出来的，
-    // 宽度超过 320 时横向压缩（训练里有这类增广），纵向永远不缩。
+    // 输入尺寸以模型声明为准：recShape = [N,C,H,W]，静态导出时 H/W 是正数
+    // （PP-OCRv4 是 [1,3,48,320]）。只有模型把 H/W 留成动态轴（-1）时才回落到常量。
+    // 上限 4096 只是防呆：形状读出来是天文数字时宁可按默认走，也不要分配一块离谱的 buffer。
+    int recH = kRecHeight;
+    int recW = kRecWidth;
+    if (recShape.size() == 4 && recShape[2] > 0 && recShape[3] > 0 && recShape[2] <= 4096
+        && recShape[3] <= 4096) {
+        recH = static_cast<int>(recShape[2]);
+        recW = static_cast<int>(recShape[3]);
+    }
+
+    // 高**保持模型的固定值**（默认 48）：PP-OCR 的 rec 是「高度固定、宽度按比例裁到上限」
+    // 训出来的，宽度超过上限时横向压缩（训练里有这类增广），纵向永远不缩。
     // 早先我们按宽高比反算高度（320/ratio），等于把整行字缩小成十几个像素，
     // 实测「they say their income is so low...」会被识成「woud pitfn teln」。
     const double ratio =
         static_cast<double>(crop.width()) / static_cast<double>(std::max(1, crop.height()));
-    const int drawH = kRecHeight;
-    const int drawW = std::clamp(static_cast<int>(std::lround(kRecHeight * ratio)), 1, kRecWidth);
+    const int drawH = recH;
+    const int drawW = std::clamp(static_cast<int>(std::lround(recH * ratio)), 1, recW);
 
     const QImage scaled = crop.scaled(drawW, drawH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                               .convertToFormat(QImage::Format_RGB888);
 
-    const size_t plane = static_cast<size_t>(kRecWidth) * static_cast<size_t>(kRecHeight);
+    const size_t plane = static_cast<size_t>(recW) * static_cast<size_t>(recH);
     std::vector<float> chw(plane * 3, 0.0f);
     for (int y = 0; y < drawH; ++y) {
         const uchar *line = scaled.constScanLine(y);
-        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(kRecWidth);
+        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(recW);
         for (int x = 0; x < drawW; ++x) {
             const size_t dst = rowOffset + static_cast<size_t>(x);
             for (int c = 0; c < 3; ++c) {
@@ -952,7 +1056,7 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
         }
     }
 
-    const std::vector<int64_t> inShape{1, 3, kRecHeight, kRecWidth};
+    const std::vector<int64_t> inShape{1, 3, recH, recW};
 
     try {
         Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
@@ -1075,29 +1179,45 @@ OcrEngine::~OcrEngine() = default;
 bool OcrEngine::isAvailable() const
 {
     Session &s = *m_impl;
-    if (s.loaded) {
-        s.lastError.clear();
+
+    // 快路径：会话已就绪就看一眼原子标志，不碰锁 —— 识别可能正占着锁跑几百毫秒，
+    // 界面按钮的可用性检查不该卡在这上面。
+    if (s.ready.load(std::memory_order_acquire)) {
+        s.setLastError(QString());
         return true;
     }
+
+    // 首次加载仍然由这里触发（界面在识别之前就要知道能不能用）。
+    // 用 try_lock：拿不到锁说明工作线程正在加载 / 正在识别，别插队也别阻塞 GUI，
+    // 报当前状态即可（下一次刷新就会看到 true）。
+    // 注意：这里**永远不做"重建"**，线程数与建会话时不同也不重建（见 Session::load）。
+    std::unique_lock<std::mutex> lock(s.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return s.ready.load(std::memory_order_acquire);
+    }
+
     const bool ok = s.load(resolveThreads(0));
-    s.lastError = ok ? QString() : s.loadError;
+    s.setLastError(ok ? QString() : s.loadError);
     return ok;
 }
 
 QStringList OcrEngine::missingFiles() const
 {
+    // 只碰路径字符串，不碰会话：不需要加锁。
     return m_impl->missingFilesNow();
 }
 
 QString OcrEngine::lastError() const
 {
-    return m_impl->lastError;
+    Session &s = *m_impl;
+    std::lock_guard<std::mutex> lock(s.errorMutex);
+    return s.lastError;
 }
 
 QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, const OcrOptions &opts)
 {
     Session &s = *m_impl;
-    s.lastError.clear();
+    s.setLastError(QString());
 
     QVector<studious::platform::OcrWord> words;
 
@@ -1106,9 +1226,15 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
         return words;
     }
 
+    // 串行化：det/rec 会话、字典、loadError 全是共享可变状态。
+    // 两个识别（或界面线程的 isAvailable 撞上首次加载）同时进来会撕裂状态；
+    // 更要命的是旧代码会在"线程数不同"时 reset() 掉正在 Run() 的 Ort::Session（UAF）。
+    // 锁住整轮识别，同一时刻只有一个推理在跑。
+    std::lock_guard<std::mutex> lock(s.mutex);
+
     const int threads = resolveThreads(opts.threads);
     if (!s.load(threads)) {
-        s.lastError = s.loadError;
+        s.setLastError(s.loadError);
         return words;
     }
 
@@ -1121,7 +1247,7 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
     std::vector<DetBox> boxes;
     QString error;
     if (!s.detect(rgb, opts, boxes, &error)) {
-        s.lastError = error;
+        s.setLastError(error);
         return words;
     }
     const qint64 detMs = timer.elapsed();
@@ -1138,7 +1264,7 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
         QString text;
         qreal confidence = 0.0;
         if (!s.recognizeBox(rgb, box.rect, &text, &confidence, &error)) {
-            s.lastError = error;
+            s.setLastError(error);
             return {};   // 模型坏了：与其返回半截结果，不如整体报错
         }
         if (text.isEmpty()) {
@@ -1158,7 +1284,7 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
                                  .arg(timer.elapsed())
                                  .arg(boxes.size())
                                  .arg(words.size())
-                                 .arg(threads);
+                                 .arg(s.threads);
     }
     return words;
 }

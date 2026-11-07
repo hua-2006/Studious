@@ -8,6 +8,7 @@
 #include "platform/IPlatform.h"
 #include "platform/HotkeyWin.h"
 
+#include <QHash>
 #include <QObject>
 #include <memory>
 
@@ -50,6 +51,18 @@ signals:
 private:
     HotkeyWin m_hotkeys;
     HotkeyHandler m_hotkeyHandler;
+
+    // 记下「本平台最后一次成功设下的穿透态」，setExcludeFromCapture 回填时用：
+    // winApplyOverlayFlags 一次改两项，而排除截图不该顺手把穿透改掉（实时浮层解锁后
+    // 是**不穿透**的，被它改回穿透，八个手柄就全点不动了）。
+    // 默认 false（= 不穿透）：没设过时按「不穿透」兜底，比默认 true 安全 ——
+    // 猜成穿透会让浮层接不到鼠标，猜成不穿透最多是浮层不该接的时候可点。
+    // 窗口销毁时必须擦掉条目（见 rememberClickThrough），否则裸指针键会悬空，
+    // 同一个地址被新窗口复用时，状态就套到别人的窗口上了。
+    QHash<QWindow *, bool> m_clickThrough;
+
+    // 记一次穿透态；第一次见到这个窗口时顺手接上它的 destroyed，销毁即擦除。
+    void rememberClickThrough(QWindow *w, bool on);
 };
 
 } // namespace studious::platform
