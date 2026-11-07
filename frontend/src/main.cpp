@@ -2,9 +2,11 @@
 #include "AppSettings.h"
 #include "AssetFormat.h"
 #include "LocalEngine.h"
+#include "ScreenFlow.h"
 #include "TranslateJob.h"
 #include "i18n/Strings.h"
 #include "platform/IPlatform.h"
+#include "platform/PlatformFactory.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -20,6 +22,7 @@
 #include <QPalette>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QStandardPaths>
@@ -1320,6 +1323,46 @@ int main(int argc, char *argv[])
 
     engine.rootContext()->setContextProperty(QStringLiteral("backend"), backend);
 
+    // ---- 截屏翻译 / 小窗 / 实时的平台底座 ----
+    // 平台实例全进程一份：热键消息窗口只能有一个，抓屏也不必每次重建 GDI 句柄。
+    auto platform = studious::platform::createPlatform();
+    auto *screenFlow = new studious::ui::ScreenFlow(platform.get(), &app);
+    engine.rootContext()->setContextProperty(QStringLiteral("screenFlow"), screenFlow);
+
+    // 热键：文本写在设置里（"Ctrl+Alt+S"），这里翻译成 HotkeySpec 注册。
+    // 注册失败（被别的程序占用）只发通知，不改设置、不阻断启动。
+    const studious::platform::CapabilityReport platformCaps = platform->capabilities();
+    if (platformCaps.hotkey.available) {
+        const AppSettings settings = AppSettings::load();
+        const auto registerOne = [platform = platform.get()](const QString &id,
+                                                                    const QString &text) {
+            if (text.trimmed().isEmpty())
+                return;
+            studious::platform::HotkeySpec spec;
+            spec.id = id;
+            spec.description = text;   // key == 0 时平台层把 description 当组合键文本解析
+            QString error;
+            if (!platform->registerHotkey(spec))
+                qWarning("[hotkey] %s: %s", qUtf8Printable(text), qUtf8Printable(error));
+        };
+        registerOne(QStringLiteral("capture"), settings.hotkeyCapture);
+        registerOne(QStringLiteral("mini"), settings.hotkeyMini);
+        registerOne(QStringLiteral("live"), settings.hotkeyLive);
+        platform->setHotkeyHandler([screenFlow](const QString &id) {
+            // 三个热键的落地：capture 直接开框选；小窗与实时由 QML 侧接信号。
+            if (id == QLatin1String("capture"))
+                screenFlow->begin();
+            else
+                emit screenFlow->launchRequested(id);
+        });
+    }
+    engine.rootContext()->setContextProperty(QStringLiteral("platformName"),
+                                             platformCaps.backendName);
+    engine.rootContext()->setContextProperty(QStringLiteral("platformCanCapture"),
+                                             platformCaps.capture.available);
+    engine.rootContext()->setContextProperty(QStringLiteral("platformCanHotkey"),
+                                             platformCaps.hotkey.available);
+
     // 字体：必须在 QML 加载前注册好，否则首帧会用系统默认字体渲染再跳变。
     const FontSet fonts = loadBundledFonts();
     engine.rootContext()->setContextProperty(QStringLiteral("bundledFontUi"), fonts.ui);
@@ -1374,6 +1417,15 @@ int main(int argc, char *argv[])
                          });
     }
 
+    // 开发用：STUDIOUS_DEV_CAPTURE=1 时启动后自动进截屏流程（方便手动走查拖框）。
+    // 放在 screenshot 分支之外：这两件事互斥，截图分支会自己调 begin()。
+    if (!uiShotMode && qEnvironmentVariableIsSet("STUDIOUS_DEV_CAPTURE"))
+        QTimer::singleShot(1200, screenFlow, [screenFlow] {
+            if (!screenFlow->begin())
+                qWarning("[dev-capture] begin() refused, phase=%s",
+                         qUtf8Printable(screenFlow->property("phase").toString()));
+        });
+
     // ---- 开发用截图：studious.exe --ui-shot out.png [--ui-page N] [--ui-size WxH] ----
     // 拍完就退出，不进事件循环。给 UI 走查 / 与设计稿比对用。
     if (uiShotMode) {
@@ -1418,6 +1470,7 @@ int main(int argc, char *argv[])
 
         window->show();
 
+
         // 不能只 processEvents：那样不推进动画驱动，带 `Behavior on color` 的控件
         // 会永远停在动画第一帧（截图里就是浅色）。真跑一段事件循环等动画收敛。
         QEventLoop loop;
@@ -1432,17 +1485,29 @@ int main(int argc, char *argv[])
             QEventLoop callLoop;
             // 有的 Q_INVOKABLE 是零参数的（startLocalServer / stopLocalServer），
             // 硬塞一个 QString 会匹配不到方法、静默什么都不做。
-            const QMetaObject *mo = backend->metaObject();
-            const QMetaMethod method = mo->method(mo->indexOfMethod(
-                QByteArray(uiCall + "()").constData()));
-            const bool zeroArg = method.isValid() && method.parameterCount() == 0;
-            if (zeroArg) {
-                QMetaObject::invokeMethod(backend, uiCall.constData(), Qt::DirectConnection);
-            } else {
-                QMetaObject::invokeMethod(backend,
-                                          uiCall.constData(),
-                                          Qt::DirectConnection,
-                                          Q_ARG(QString, uiArg));
+            // STUDIOUS_UI_TARGET=screenFlow 时把调用打到截屏流程上（截图取证要它）。
+            QObject *uiTarget = backend;
+            if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("screenFlow"))
+                uiTarget = screenFlow;
+            // 一次要按顺序触发好几个动作（先 begin() 再 debugSampleBlocks()）时用 `|` 分隔。
+            const QList<QByteArray> calls = uiCall.split('|');
+            for (const QByteArray &one : calls) {
+                if (one.isEmpty())
+                    continue;
+                const QMetaObject *mo = uiTarget->metaObject();
+                const QMetaMethod method = mo->method(mo->indexOfMethod(
+                    QByteArray(one + "()").constData()));
+                const bool zeroArg = method.isValid() && method.parameterCount() == 0;
+                if (zeroArg) {
+                    QMetaObject::invokeMethod(uiTarget, one.constData(), Qt::DirectConnection);
+                } else {
+                    QMetaObject::invokeMethod(uiTarget,
+                                              one.constData(),
+                                              Qt::DirectConnection,
+                                              Q_ARG(QString, uiArg));
+                }
+                QTimer::singleShot(400, &callLoop, &QEventLoop::quit);
+                callLoop.exec();
             }
             QTimer::singleShot(qEnvironmentVariableIntValue("STUDIOUS_UI_WAIT_MS") > 0
                                    ? qEnvironmentVariableIntValue("STUDIOUS_UI_WAIT_MS")
@@ -1452,15 +1517,197 @@ int main(int argc, char *argv[])
             callLoop.exec();
         }
 
-        const QImage shot = window->grabWindow();
+        // STUDIOUS_UI_RECT="x,y,w,h"：直接给选区，省掉真拖鼠标（只用于截图取证）。
+        const QByteArray uiRect = qgetenv("STUDIOUS_UI_RECT");
+        if (!uiRect.isEmpty()) {
+            const QList<QByteArray> parts = uiRect.split(',');
+            if (parts.size() == 4) {
+                const QRect rect(parts[0].toInt(), parts[1].toInt(),
+                                 parts[2].toInt(), parts[3].toInt());
+                QEventLoop rectLoop;
+                QMetaObject::invokeMethod(screenFlow, "confirmSelection",
+                                          Qt::DirectConnection, Q_ARG(QRect, rect));
+                QTimer::singleShot(4000, &rectLoop, &QEventLoop::quit);
+                rectLoop.exec();
+            }
+        }
+
+        // STUDIOUS_UI_CURSOR="x,y"：给浮层摆一个假光标位置，用来拍放大镜
+        // （真光标在自动截图里动不了）。排在 SELECT 之前：放大镜只在框选阶段可见。
+        const QByteArray uiCursor = qgetenv("STUDIOUS_UI_CURSOR");
+        if (!uiCursor.isEmpty()) {
+            const QList<QByteArray> parts = uiCursor.split(',');
+            if (parts.size() == 2) {
+                for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                    if (w->objectName() != QStringLiteral("captureOverlay"))
+                        continue;
+                    w->setProperty("cursorPos",
+                                   QPointF(parts[0].toDouble(), parts[1].toDouble()));
+                    // 放大镜只在拖框时出现，截图要假一份「正在拖」的状态。
+                    if (qEnvironmentVariableIsSet("STUDIOUS_UI_DRAGGING"))
+                        w->setProperty("dragging", true);
+                    break;
+                }
+                QEventLoop cursorLoop;
+                QTimer::singleShot(400, &cursorLoop, &QEventLoop::quit);
+                cursorLoop.exec();
+            }
+        }
+
+        // STUDIOUS_UI_SELECT="x,y,w,h"：把浮层摆到「已框选、等确认」那一步，
+        // 拍 A2 用的。直接改 QML 根对象的属性（Window 就是根对象）。
+        const QByteArray uiSelect = qgetenv("STUDIOUS_UI_SELECT");
+        if (!uiSelect.isEmpty()) {
+            const QList<QByteArray> parts = uiSelect.split(',');
+            if (parts.size() == 4) {
+                for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                    if (w->objectName() != QStringLiteral("captureOverlay"))
+                        continue;
+                    w->setProperty("localRect",
+                                   QRectF(parts[0].toDouble(), parts[1].toDouble(),
+                                          parts[2].toDouble(), parts[3].toDouble()));
+                    w->setProperty("confirmed", true);
+                    break;
+                }
+                QEventLoop selectLoop;
+                QTimer::singleShot(600, &selectLoop, &QEventLoop::quit);
+                selectLoop.exec();
+            }
+        }
+
+        // STUDIOUS_UI_COMMIT="x,y,w,h"：直接调 QML 的 commitSelection（模拟"松手"），
+        // 用来区分「松手链路没触发」还是「工具栏可见条件不满足」。
+        const QByteArray uiCommit = qgetenv("STUDIOUS_UI_COMMIT");
+        if (!uiCommit.isEmpty()) {
+            const QList<QByteArray> parts = uiCommit.split(',');
+            for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                if (w->objectName() != QStringLiteral("captureOverlay"))
+                    continue;
+                if (parts.size() != 4)
+                    break;
+                const QRect rect(parts[0].toInt(), parts[1].toInt(),
+                                 parts[2].toInt(), parts[3].toInt());
+                QEventLoop commitLoop;
+                QMetaObject::invokeMethod(w, "commitSelection",
+                                          Qt::DirectConnection,
+                                          Q_ARG(QVariant, QVariant::fromValue(rect)));
+                QTimer::singleShot(800, &commitLoop, &QEventLoop::quit);
+                commitLoop.exec();
+            }
+        }
+
+        // STUDIOUS_UI_RESIZE="e,120,0" / STUDIOUS_UI_MOVE="80,40"：直接驱动浮层的
+        // 二次调整与整块搬家，用来验「拖手柄 / 拖框内」这套几何算法（真实拖拽在自动截图里做不了）。
+        const auto driveOverlay = [](const char *envName, const char *qmlMethod, bool needsEdge) {
+            const QByteArray raw = qgetenv(envName);
+            if (raw.isEmpty())
+                return;
+            const QList<QByteArray> parts = raw.split(',');
+            for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                if (w->objectName() != QStringLiteral("captureOverlay"))
+                    continue;
+                if (needsEdge) {
+                    if (parts.size() != 3)
+                        return;
+                    w->setProperty("resizeEdge", QString::fromUtf8(parts[0]));
+                    w->setProperty("resizeRect", w->property("localRect"));
+                    QMetaObject::invokeMethod(w, qmlMethod, Qt::DirectConnection,
+                                              Q_ARG(QVariant, QVariant(parts[1].toDouble())),
+                                              Q_ARG(QVariant, QVariant(parts[2].toDouble())));
+                } else {
+                    if (parts.size() != 2)
+                        return;
+                    w->setProperty("moveRect", w->property("localRect"));
+                    QMetaObject::invokeMethod(w, qmlMethod, Qt::DirectConnection,
+                                              Q_ARG(QVariant, QVariant(parts[0].toDouble())),
+                                              Q_ARG(QVariant, QVariant(parts[1].toDouble())));
+                }
+                qWarning("[ui-shot] %s -> localRect=%s", envName,
+                         qUtf8Printable(w->property("localRect").toString()));
+                break;
+            }
+        };
+        driveOverlay("STUDIOUS_UI_RESIZE", "applyResize", true);
+        driveOverlay("STUDIOUS_UI_MOVE", "applyMove", false);
+
+        // STUDIOUS_UI_EMIT="objectName:signal:arg"：直接触发某个 QML 信号，
+        // 用来验"点了控件之后到底有没有反应"这条链路（只在这个截图分支生效）。
+        // 排在 SELECT/COMMIT 之后：先让工具栏按最终布局摆好，再去点它。
+        const QByteArray uiEmit = qgetenv("STUDIOUS_UI_EMIT");
+        if (!uiEmit.isEmpty()) {
+            const QList<QByteArray> parts = uiEmit.split(':');
+            if (parts.size() == 3) {
+                // QQuickWindow 的 QObject 子树包含 QML 根对象与全部子项；contentItem
+                // 那棵子树只到可视根，页面级的 objectName 未必在里面（踩过）。
+                // 另外目标可能在浮层这个独立顶层窗口里，主窗口里找不到要接着找别的窗口。
+                const QString name = QString::fromUtf8(parts[0]);
+                QObject *target = window->findChild<QObject *>(name);
+                if (!target) {
+                    for (QWindow *w : QGuiApplication::topLevelWindows()) {
+                        target = w->findChild<QObject *>(name);
+                        if (target)
+                            break;
+                    }
+                }
+                if (target) {
+                    QEventLoop emitLoop;
+                    // 信号可能不带参数（clicked）也可能带一个 QString（launchRequested），
+                    // 先按带参试，失败再按零参。
+                    const QMetaObject *tmo = target->metaObject();
+                    const QByteArray sigWithArg = parts[1] + "(QString)";
+                    const QByteArray sigBare = parts[1] + "()";
+                    bool emitted = false;
+                    if (tmo->indexOfSignal(sigWithArg.constData()) >= 0) {
+                        emitted = QMetaObject::invokeMethod(
+                            target, parts[1].constData(), Qt::DirectConnection,
+                            Q_ARG(QString, QString::fromUtf8(parts[2])));
+                    } else if (tmo->indexOfSignal(sigBare.constData()) >= 0) {
+                        emitted = QMetaObject::invokeMethod(target, parts[1].constData(),
+                                                            Qt::DirectConnection);
+                    }
+                    if (!emitted)
+                        qWarning("[ui-shot] emit '%s' on '%s' failed",
+                                 parts[1].constData(), parts[0].constData());
+                    QTimer::singleShot(1500, &emitLoop, &QEventLoop::quit);
+                    emitLoop.exec();
+                    qWarning("[ui-shot] after emit: phase=%s error='%s'",
+                             qUtf8Printable(screenFlow->property("phase").toString()),
+                             qUtf8Printable(screenFlow->property("errorText").toString()));
+                } else {
+                    qWarning("[ui-shot] emit target '%s' not found", parts[0].constData());
+                }
+            }
+        }
+
+        // 浮层是独立顶层窗口：STUDIOUS_UI_SHOT=overlay 时改抓它，主窗口那份不参与。
+        QQuickWindow *shotWindow = window;
+        if (qgetenv("STUDIOUS_UI_SHOT") == QByteArray("overlay")) {
+            const auto tops = QGuiApplication::topLevelWindows();
+            for (QWindow *w : tops) {
+                qWarning("[ui-shot] window '%s' %dx%d visible=%d",
+                         qUtf8Printable(w->objectName()), w->width(), w->height(),
+                         int(w->isVisible()));
+                if (w->objectName() == QStringLiteral("captureOverlay") && w->isVisible()) {
+                    shotWindow = qobject_cast<QQuickWindow *>(w);
+                    break;
+                }
+            }
+        }
+
+        const QImage shot = shotWindow ? shotWindow->grabWindow() : QImage();
         const bool saved = !shot.isNull() && shot.save(outPath);
         // 两个尺寸都要打：--ui-size 给的是逻辑像素，grabWindow() 出的是物理像素。
         // 高 DPI 下二者不等（DPR 1.5 时 --ui-size 1280x800 存出来的是 1920x1200），
         // 以前只打后者，看起来就像 --ui-size 被忽略了。
-        const qreal dpr = window->devicePixelRatio();
-        // 没给 --ui-size 时按窗口实际逻辑尺寸报，别打 0。
-        const int logicalWidth = width > 0 ? width : window->width();
-        const int logicalHeight = height > 0 ? height : window->height();
+        // 抓的是浮层时，逻辑尺寸要按浮层算 —— 否则日志说 1120x720、图却是整屏。
+        const qreal dpr = shotWindow ? shotWindow->devicePixelRatio() : 1.0;
+        const bool shootingOverlay = shotWindow != window;
+        const int logicalWidth =
+            shootingOverlay ? (shotWindow ? shotWindow->width() : 0)
+                            : (width > 0 ? width : window->width());
+        const int logicalHeight =
+            shootingOverlay ? (shotWindow ? shotWindow->height() : 0)
+                            : (height > 0 ? height : window->height());
         const int pixelWidth =
             shot.isNull() ? static_cast<int>(logicalWidth * dpr + 0.5) : shot.width();
         const int pixelHeight =

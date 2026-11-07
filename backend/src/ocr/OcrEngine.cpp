@@ -1,0 +1,913 @@
+#include "ocr/OcrEngine.h"
+
+#include "i18n/L10n.h"
+
+#include <onnxruntime_cxx_api.h>
+
+#include <QDebug>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
+#include <QThread>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <vector>
+
+namespace studious::ocr {
+namespace {
+
+// 资产清单（backend/asset/manifest.json）里 OCR 三条的文件名，顺序与 OcrEngine 的期望一致。
+constexpr const char *kDetFile = "det.onnx";
+constexpr const char *kRecFile = "rec.onnx";
+constexpr const char *kDictFile = "ppocr_keys_v1.txt";
+
+// DBNet 主干有 5 次 stride=2 下采样，输入边长必须是 32 的倍数，否则特征图对不齐。
+constexpr int kSizeMultiple = 32;
+
+// 识别网络输入：高固定 48，宽按比例、上限 320（PP-OCRv4 rec 的标准输入 3×48×320）。
+// 宽高比更极端的框改成"宽 320 + 高度反算"，右侧 / 下侧补 0。
+constexpr int kRecHeight = 48;
+constexpr int kRecWidth = 320;
+
+// 自动线程数上限：OCR 是交互式路径（截完图等结果），把核占满只会拖慢 UI。
+constexpr int kMaxAutoThreads = 8;
+
+// 检测归一化：ImageNet 均值 / 方差，与 PaddleOCR 的 NormalizeImage(scale=1/255) 一致。
+constexpr std::array<float, 3> kDetMean{0.485f, 0.456f, 0.406f};
+constexpr std::array<float, 3> kDetStd{0.229f, 0.224f, 0.225f};
+
+// 识别归一化：mean=0.5 std=0.5，等价于 (px/255 - 0.5) / 0.5。
+constexpr float kRecMean = 0.5f;
+constexpr float kRecStd = 0.5f;
+
+// 连通域过滤：面积 / 最小边都太小的块当噪声扔掉（都在概率图坐标系里，单位=概率图像素）。
+constexpr int kMinComponentArea = 4;
+constexpr int kMinComponentSide = 2;
+
+bool debugEnabled()
+{
+    return qEnvironmentVariableIsSet("STUDIOUS_OCR_DEBUG");
+}
+
+QString shapeText(const std::vector<int64_t> &shape)
+{
+    QStringList parts;
+    parts.reserve(static_cast<int>(shape.size()));
+    for (const int64_t dim : shape) {
+        parts << QString::number(dim);
+    }
+    return QLatin1Char('[') + parts.join(QLatin1Char(',')) + QLatin1Char(']');
+}
+
+// 0 = 自动（min(8, 核数)）；正数原样用（上限 32，防止把核数写成几百把机器拖死）。
+int resolveThreads(int requested)
+{
+    if (requested > 0) {
+        return std::clamp(requested, 1, 32);
+    }
+    const int cores = QThread::idealThreadCount();
+    return std::clamp(cores > 0 ? cores : 1, 1, kMaxAutoThreads);
+}
+
+std::vector<std::string> collectNames(Ort::Session &session, bool wantInputs)
+{
+    Ort::AllocatorWithDefaultOptions allocator;
+    const size_t count = wantInputs ? session.GetInputCount() : session.GetOutputCount();
+
+    std::vector<std::string> names;
+    names.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        Ort::AllocatedStringPtr name = wantInputs ? session.GetInputNameAllocated(i, allocator)
+                                                  : session.GetOutputNameAllocated(i, allocator);
+        names.emplace_back(name.get());
+    }
+    return names;
+}
+
+std::vector<int64_t> ioShape(Ort::Session &session, bool wantInput, size_t index)
+{
+    const Ort::TypeInfo info =
+        wantInput ? session.GetInputTypeInfo(index) : session.GetOutputTypeInfo(index);
+    return info.GetTensorTypeAndShapeInfo().GetShape();
+}
+
+void makePtrs(const std::vector<std::string> &names, std::vector<const char *> &out)
+{
+    out.clear();
+    out.reserve(names.size());
+    for (const std::string &name : names) {
+        out.push_back(name.c_str());
+    }
+}
+
+std::unique_ptr<Ort::Session> createSession(Ort::Env &env, const QString &onnxPath, int threads)
+{
+    Ort::SessionOptions options;
+    options.SetIntraOpNumThreads(threads);
+    // 整张图是线性的（Conv → BN → ReLU 一路走到底），跨算子并行只会互相等待。
+    options.SetInterOpNumThreads(1);
+    options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+#if defined(_WIN32)
+    // Windows 下 ORTCHAR_T 是 wchar_t：路径走宽字符，中文用户名 / 中文目录才能打开。
+    const std::wstring widePath = QDir::toNativeSeparators(onnxPath).toStdWString();
+    return std::make_unique<Ort::Session>(env, widePath.c_str(), options);
+#else
+    const QByteArray localPath = QDir::toNativeSeparators(onnxPath).toLocal8Bit();
+    return std::make_unique<Ort::Session>(env, localPath.constData(), options);
+#endif
+}
+
+int roundToMultiple(int value, int multiple)
+{
+    if (value <= 0) {
+        return multiple;
+    }
+    const int rounded =
+        static_cast<int>(std::lround(static_cast<double>(value) / static_cast<double>(multiple)))
+        * multiple;
+    return std::max(multiple, rounded);
+}
+
+// 缩放到 (w,h) + CHW(float) + 按 (px/255 - mean) / std 归一化。
+std::vector<float> toChwFloat(const QImage &src, int w, int h, const std::array<float, 3> &mean,
+                              const std::array<float, 3> &stdv)
+{
+    const QImage rgb = src.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                           .convertToFormat(QImage::Format_RGB888);
+    const size_t plane = static_cast<size_t>(w) * static_cast<size_t>(h);
+    std::vector<float> out(plane * 3, 0.0f);
+
+    float *rp = out.data();
+    float *gp = rp + plane;
+    float *bp = rp + 2 * plane;
+
+    for (int y = 0; y < h; ++y) {
+        const uchar *line = rgb.constScanLine(y);
+        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(w);
+        for (int x = 0; x < w; ++x) {
+            const size_t dst = rowOffset + static_cast<size_t>(x);
+            const float r = static_cast<float>(line[x * 3 + 0]) / 255.0f;
+            const float g = static_cast<float>(line[x * 3 + 1]) / 255.0f;
+            const float b = static_cast<float>(line[x * 3 + 2]) / 255.0f;
+            rp[dst] = (r - mean[0]) / stdv[0];
+            gp[dst] = (g - mean[1]) / stdv[1];
+            bp[dst] = (b - mean[2]) / stdv[2];
+        }
+    }
+    return out;
+}
+
+// 概率图里的一个连通域（坐标系 = 概率图，不是原图）。
+struct Component {
+    int minX = 0;
+    int minY = 0;
+    int maxX = -1;
+    int maxY = -1;
+    int area = 0;
+    double scoreSum = 0.0;
+};
+
+// 概率图 -> 二值 -> 8 邻域连通域。逐像素 BFS，显式栈，不递归（大图递归会爆栈）。
+// 8 邻域与 PaddleOCR 用的 cv2.connectedComponents 默认 connectivity=8 一致。
+std::vector<Component> extractComponents(const float *prob, int w, int h, float threshold)
+{
+    std::vector<Component> comps;
+    std::vector<uint8_t> seen(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
+    std::vector<int> stack;
+    stack.reserve(1024);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const size_t seed = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+            if (seen[seed] != 0 || !(prob[seed] > threshold)) {
+                continue;
+            }
+
+            Component c;
+            c.minX = c.maxX = x;
+            c.minY = c.maxY = y;
+            seen[seed] = 1;
+            stack.push_back(static_cast<int>(seed));
+
+            while (!stack.empty()) {
+                const int idx = stack.back();
+                stack.pop_back();
+                const int cx = idx % w;
+                const int cy = idx / w;
+
+                ++c.area;
+                c.scoreSum += static_cast<double>(prob[idx]);
+                c.minX = std::min(c.minX, cx);
+                c.maxX = std::max(c.maxX, cx);
+                c.minY = std::min(c.minY, cy);
+                c.maxY = std::max(c.maxY, cy);
+
+                for (int dy = -1; dy <= 1; ++dy) {
+                    const int ny = cy + dy;
+                    if (ny < 0 || ny >= h) {
+                        continue;
+                    }
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) {
+                            continue;
+                        }
+                        const int nx = cx + dx;
+                        if (nx < 0 || nx >= w) {
+                            continue;
+                        }
+                        const size_t n = static_cast<size_t>(ny) * static_cast<size_t>(w)
+                                         + static_cast<size_t>(nx);
+                        if (seen[n] != 0 || !(prob[n] > threshold)) {
+                            continue;
+                        }
+                        seen[n] = 1;
+                        stack.push_back(static_cast<int>(n));
+                    }
+                }
+            }
+            comps.push_back(c);
+        }
+    }
+    return comps;
+}
+
+// DBNet 的 unclip：pyclipper 的 offset 距离 = area * ratio / perimeter。
+// 对轴对齐矩形来说，perimeter = 2*(w+h)，四边各外扩 distance —— 与 pyclipper 结果一致。
+QRectF unclipRect(const QRect &r, float ratio)
+{
+    const double w = static_cast<double>(r.width());
+    const double h = static_cast<double>(r.height());
+    const double perimeter = 2.0 * (w + h);
+    if (perimeter <= 0.0) {
+        return QRectF(r);
+    }
+    const double distance = (w * h * static_cast<double>(ratio)) / perimeter;
+    return QRectF(r.x() - distance, r.y() - distance, w + 2.0 * distance, h + 2.0 * distance);
+}
+
+struct DetBox {
+    QRect rect;        // 原图像素
+    qreal score = 0.0; // 连通域概率均值
+};
+
+// 阅读顺序：先按行（y），行内再按 x。
+//
+// 纯按 (top, left) 排序在标题 + 副标题混排时会串行：大字号标题的 top 比旁边小字高，
+// 却应该是同一行的开头。这里先按 top 粗排，再把垂直中心落在首框 ±半行高以内的并成一行，
+// 行内按 left 排 —— 屏幕文字（对话、菜单、按钮）这个启发式够用，不做版面分析。
+void sortReadingOrder(std::vector<DetBox> &boxes)
+{
+    if (boxes.size() < 2) {
+        return;
+    }
+
+    std::stable_sort(boxes.begin(), boxes.end(), [](const DetBox &a, const DetBox &b) {
+        if (a.rect.top() != b.rect.top()) {
+            return a.rect.top() < b.rect.top();
+        }
+        return a.rect.left() < b.rect.left();
+    });
+
+    std::vector<DetBox> ordered;
+    ordered.reserve(boxes.size());
+
+    size_t i = 0;
+    while (i < boxes.size()) {
+        const QRect head = boxes[i].rect;
+        const int center = head.center().y();
+        const int tolerance = std::max(4, head.height() / 2);
+
+        size_t j = i;
+        std::vector<DetBox> line;
+        while (j < boxes.size()
+               && std::abs(boxes[j].rect.center().y() - center) <= tolerance) {
+            line.push_back(boxes[j]);
+            ++j;
+        }
+        std::stable_sort(line.begin(), line.end(), [](const DetBox &a, const DetBox &b) {
+            if (a.rect.left() != b.rect.left()) {
+                return a.rect.left() < b.rect.left();
+            }
+            return a.rect.top() < b.rect.top();
+        });
+        for (const DetBox &b : line) {
+            ordered.push_back(b);
+        }
+        i = j;
+    }
+
+    boxes.swap(ordered);
+}
+
+// argmax 位置的概率：先找到 maxLogit，再算 1/sum(exp(x - max))，省掉一次 argmax。
+float softmaxAt(const float *row, int count, float maxLogit)
+{
+    double sum = 0.0;
+    for (int c = 0; c < count; ++c) {
+        const float v = row[c];
+        if (std::isfinite(v)) {
+            sum += std::exp(static_cast<double>(v) - static_cast<double>(maxLogit));
+        }
+    }
+    const float p = static_cast<float>(1.0 / std::max(sum, 1e-12));
+    return std::isfinite(p) ? p : 0.0f;
+}
+
+} // namespace
+
+struct OcrEngine::Session {
+    explicit Session(const QString &dir)
+        : modelsDir(dir),
+          detPath(QDir(dir).filePath(QString::fromLatin1(kDetFile))),
+          recPath(QDir(dir).filePath(QString::fromLatin1(kRecFile))),
+          dictPath(QDir(dir).filePath(QString::fromLatin1(kDictFile)))
+    {
+    }
+
+    QString modelsDir;
+    QString detPath;
+    QString recPath;
+    QString dictPath;
+
+    Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "studious-ocr"};
+    std::unique_ptr<Ort::Session> det;
+    std::unique_ptr<Ort::Session> rec;
+
+    // 张量名从模型里读出来，不硬编码：导出脚本换一版名字就变。
+    std::vector<std::string> detIn;
+    std::vector<std::string> detOut;
+    std::vector<std::string> recIn;
+    std::vector<std::string> recOut;
+    std::vector<const char *> detInPtrs;
+    std::vector<const char *> detOutPtrs;
+    std::vector<const char *> recInPtrs;
+    std::vector<const char *> recOutPtrs;
+
+    std::vector<int64_t> detShape;   // 检测输入的形状（静态导出时能直接读到 H/W）
+    std::vector<int64_t> recShape;   // 识别输入的形状（静态导出时一般为 [1,3,48,320]）
+    int detOutIndex = 0;             // 概率图输出下标
+
+    std::vector<QString> dict;       // ppocr_keys_v1.txt：每行一个字符，不含 blank
+
+    bool loaded = false;
+    int threads = 0;                 // 建会话时用的线程数（和请求不一致就重建）
+    bool loadFailed = false;         // 文件齐但加载失败：同线程数下不再反复重试
+    QString loadError;               // 最近一次加载失败的原因
+    QString lastError;               // 最近一次操作（isAvailable / recognize）的错误
+
+    QStringList missingFilesNow() const;
+    bool load(int wantThreads);
+    bool loadDict(QString *error);
+
+    bool detect(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
+                QString *error);
+    bool recognizeBox(const QImage &img, const QRect &box, QString *text, qreal *confidence,
+                      QString *error);
+};
+
+QStringList OcrEngine::Session::missingFilesNow() const
+{
+    QStringList missing;
+    if (!QFileInfo::exists(detPath)) {
+        missing << QString::fromLatin1(kDetFile);
+    }
+    if (!QFileInfo::exists(recPath)) {
+        missing << QString::fromLatin1(kRecFile);
+    }
+    if (!QFileInfo::exists(dictPath)) {
+        missing << QString::fromLatin1(kDictFile);
+    }
+    return missing;
+}
+
+bool OcrEngine::Session::loadDict(QString *error)
+{
+    QFile file(dictPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        *error = i18n::sf("OCR 字典打不开：%1", "Cannot open the OCR dictionary: %1", {dictPath});
+        return false;
+    }
+
+    QString content = QString::fromUtf8(file.readAll());
+    if (!content.isEmpty() && content.at(0) == QChar(0xFEFF)) {
+        content.remove(0, 1);   // UTF-8 BOM
+    }
+
+    QStringList lines = content.split(QLatin1Char('\n'));
+    // 文件末尾的换行会多切出一个空串，去掉它；中间的空行保留（否则后面所有 id 全部错位）。
+    if (!lines.isEmpty() && lines.last().isEmpty()) {
+        lines.removeLast();
+    }
+
+    dict.clear();
+    dict.reserve(lines.size());
+    for (QString &line : lines) {
+        if (line.endsWith(QLatin1Char('\r'))) {
+            line.chop(1);
+        }
+        dict.push_back(line);
+    }
+
+    if (dict.empty()) {
+        *error = i18n::sf("OCR 字典是空的：%1", "The OCR dictionary is empty: %1", {dictPath});
+        return false;
+    }
+    return true;
+}
+
+bool OcrEngine::Session::load(int wantThreads)
+{
+    // 1) 文件检查放最前面：缺文件是最常见的情形（资产还没下），别为它建会话。
+    const QStringList missing = missingFilesNow();
+    if (!missing.isEmpty()) {
+        det.reset();
+        rec.reset();
+        loaded = false;
+        loadFailed = false;   // 文件又缺了：等补装之后再试
+        loadError = i18n::sf("OCR 模型缺失：%1（目录 %2）",
+                             "OCR models are missing: %1 (directory %2)",
+                             {missing.join(QStringLiteral("、")), modelsDir});
+        return false;
+    }
+
+    if (loaded && threads == wantThreads) {
+        return true;
+    }
+    // 文件齐、会话却建不起来：同一线程数下不反复烧几百毫秒；换线程数才重试。
+    if (loadFailed && threads == wantThreads) {
+        return false;
+    }
+
+    loaded = false;
+    loadFailed = false;
+    loadError.clear();
+    det.reset();
+    rec.reset();
+    threads = wantThreads;
+
+    try {
+        det = createSession(env, detPath, threads);
+        rec = createSession(env, recPath, threads);
+
+        detIn = collectNames(*det, true);
+        detOut = collectNames(*det, false);
+        recIn = collectNames(*rec, true);
+        recOut = collectNames(*rec, false);
+    } catch (const Ort::Exception &ex) {
+        loadFailed = true;
+        loadError = i18n::sf("OCR 模型加载失败：%1", "Failed to load the OCR models: %1",
+                             {QString::fromUtf8(ex.what())});
+        det.reset();
+        rec.reset();
+        return false;
+    } catch (const std::exception &ex) {
+        loadFailed = true;
+        loadError = i18n::sf("OCR 模型加载失败：%1", "Failed to load the OCR models: %1",
+                             {QString::fromUtf8(ex.what())});
+        det.reset();
+        rec.reset();
+        return false;
+    }
+
+    if (detIn.size() != 1 || recIn.size() != 1) {
+        loadFailed = true;
+        loadError = i18n::sf("OCR 模型输入个数不对（det=%1 rec=%2，期望各 1 个）",
+                             "Unexpected OCR model inputs (det=%1 rec=%2, expected 1 each)",
+                             {static_cast<qint64>(detIn.size()), static_cast<qint64>(recIn.size())});
+        det.reset();
+        rec.reset();
+        return false;
+    }
+    if (detOut.empty() || recOut.empty()) {
+        loadFailed = true;
+        loadError = i18n::s("OCR 模型没有输出张量", "The OCR models have no output tensors");
+        det.reset();
+        rec.reset();
+        return false;
+    }
+
+    detOutIndex = 0;
+    for (size_t i = 0; i < detOut.size(); ++i) {
+        if (detOut[i].find("prob") != std::string::npos
+            || detOut[i].find("sigmoid") != std::string::npos) {
+            detOutIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    QString dictError;
+    if (!loadDict(&dictError)) {
+        loadFailed = true;
+        loadError = dictError;
+        det.reset();
+        rec.reset();
+        return false;
+    }
+
+    makePtrs(detIn, detInPtrs);
+    makePtrs(detOut, detOutPtrs);
+    makePtrs(recIn, recInPtrs);
+    makePtrs(recOut, recOutPtrs);
+
+    // 形状读取要包在 try 里：GetInputTypeInfo 对非张量输入会抛，别让异常漏出 load()。
+    try {
+        detShape = ioShape(*det, true, 0);
+        recShape = ioShape(*rec, true, 0);
+    } catch (const Ort::Exception &) {
+        detShape.clear();   // 读不到形状就当全动态，按 maxSideLen 算
+        recShape.clear();
+    }
+
+    loaded = true;
+
+    qInfo().noquote() << QStringLiteral("[ocr] 已加载：det=%1 %2 rec=%3 %4 字典=%5 行 threads=%6")
+                             .arg(QString::fromStdString(detIn.front()),
+                                  shapeText(detShape),
+                                  QString::fromStdString(recIn.front()),
+                                  shapeText(recShape))
+                             .arg(dict.size())
+                             .arg(threads);
+    return true;
+}
+
+bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
+                                std::vector<DetBox> &boxes, QString *error)
+{
+    const int imgW = img.width();
+    const int imgH = img.height();
+
+    // 输入尺寸：模型把 960×960 烧进图里（不少导出脚本这么干）就必须照它的尺寸喂；
+    // 动态维度才按 maxSideLen 缩放，并就近取整到 32 的倍数。
+    int detW = 0;
+    int detH = 0;
+    if (detShape.size() == 4 && detShape[2] > 0 && detShape[3] > 0) {
+        detH = static_cast<int>(detShape[2]);
+        detW = static_cast<int>(detShape[3]);
+    } else {
+        const int maxSide = opts.maxSideLen > 0 ? opts.maxSideLen : 960;
+        const int longest = std::max(imgW, imgH);
+        double scale = 1.0;
+        if (longest > maxSide) {
+            scale = static_cast<double>(maxSide) / static_cast<double>(longest);
+        }
+        detW = roundToMultiple(static_cast<int>(std::lround(imgW * scale)), kSizeMultiple);
+        detH = roundToMultiple(static_cast<int>(std::lround(imgH * scale)), kSizeMultiple);
+    }
+    if (detW <= 0 || detH <= 0) {
+        *error = i18n::s("OCR 检测：输入尺寸算出来是 0", "OCR detection: the input size resolved to 0");
+        return false;
+    }
+
+    std::vector<float> chw = toChwFloat(img, detW, detH, kDetMean, kDetStd);
+    const std::vector<int64_t> inShape{1, 3, detH, detW};
+
+    const float boxThreshold = opts.boxThreshold > 0.0f ? opts.boxThreshold : 0.5f;
+    const float detThreshold = opts.detThreshold > 0.0f ? opts.detThreshold : 0.3f;
+    const float unclipRatio = opts.unclipRatio > 0.0f ? opts.unclipRatio : 1.6f;
+
+    try {
+        Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+        std::vector<Ort::Value> inputs;
+        inputs.push_back(Ort::Value::CreateTensor<float>(memory, chw.data(), chw.size(),
+                                                         inShape.data(), inShape.size()));
+
+        std::vector<Ort::Value> outputs = det->Run(Ort::RunOptions{nullptr}, detInPtrs.data(),
+                                                  inputs.data(), inputs.size(), detOutPtrs.data(),
+                                                  detOutPtrs.size());
+        if (outputs.empty() || detOutIndex < 0
+            || static_cast<size_t>(detOutIndex) >= outputs.size()) {
+            *error = i18n::s("OCR 检测模型没有概率图输出",
+                             "The OCR detection model produced no probability map");
+            return false;
+        }
+
+        Ort::Value &out = outputs[static_cast<size_t>(detOutIndex)];
+        const auto info = out.GetTensorTypeAndShapeInfo();
+        const std::vector<int64_t> shape = info.GetShape();
+        if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            *error = i18n::sf("OCR 检测输出不是 float32：%1",
+                              "OCR detection output is not float32: %1", {shapeText(shape)});
+            return false;
+        }
+
+        int probW = 0;
+        int probH = 0;
+        if (shape.size() == 4) {
+            probH = static_cast<int>(shape[2]);
+            probW = static_cast<int>(shape[3]);
+        } else if (shape.size() == 3) {
+            probH = static_cast<int>(shape[1]);
+            probW = static_cast<int>(shape[2]);
+        } else if (shape.size() == 2) {
+            probH = static_cast<int>(shape[0]);
+            probW = static_cast<int>(shape[1]);
+        } else {
+            *error = i18n::sf("OCR 检测输出维度不对：%1", "Unexpected OCR detection shape: %1",
+                              {shapeText(shape)});
+            return false;
+        }
+        if (probW <= 0 || probH <= 0) {
+            *error = i18n::sf("OCR 检测输出尺寸非法：%1", "Invalid OCR detection size: %1",
+                              {shapeText(shape)});
+            return false;
+        }
+
+        const float *prob = out.GetTensorData<float>();
+        const std::vector<Component> comps = extractComponents(prob, probW, probH, boxThreshold);
+
+        // 概率图 -> 原图：模型输出可能比输入小（下采样后没上采样回来），用比例换算而不是假设 1:1。
+        const double sx = static_cast<double>(imgW) / static_cast<double>(probW);
+        const double sy = static_cast<double>(imgH) / static_cast<double>(probH);
+        const QRect imageRect(0, 0, imgW, imgH);
+
+        std::vector<DetBox> found;
+        found.reserve(comps.size());
+        for (const Component &c : comps) {
+            if (c.area < kMinComponentArea) {
+                continue;
+            }
+            const double mean = c.scoreSum / static_cast<double>(c.area);
+            // 先按平均分过滤（detThreshold），再谈几何：噪声块往往面积不小但分数很低。
+            if (mean < static_cast<double>(detThreshold)) {
+                continue;
+            }
+
+            const QRect maskRect(c.minX, c.minY, c.maxX - c.minX + 1, c.maxY - c.minY + 1);
+            if (std::min(maskRect.width(), maskRect.height()) < kMinComponentSide) {
+                continue;
+            }
+
+            const QRectF grown = unclipRect(maskRect, unclipRatio);
+            const QRectF mapped(grown.x() * sx, grown.y() * sy, grown.width() * sx,
+                                grown.height() * sy);
+            const QRect box = mapped.toAlignedRect().intersected(imageRect);
+            if (box.width() < kMinComponentSide || box.height() < kMinComponentSide) {
+                continue;
+            }
+
+            DetBox item;
+            item.rect = box;
+            item.score = mean;
+            found.push_back(item);
+        }
+
+        sortReadingOrder(found);
+        boxes = std::move(found);
+
+        if (debugEnabled()) {
+            qInfo().noquote() << QStringLiteral("[ocr] det %1x%2 -> %3x%4 阈值(box=%5 det=%6) 连通域=%7 保留=%8")
+                                     .arg(imgW)
+                                     .arg(imgH)
+                                     .arg(detW)
+                                     .arg(detH)
+                                     .arg(boxThreshold, 0, 'f', 2)
+                                     .arg(detThreshold, 0, 'f', 2)
+                                     .arg(comps.size())
+                                     .arg(boxes.size());
+        }
+        return true;
+    } catch (const Ort::Exception &ex) {
+        *error = i18n::sf("OCR 检测推理失败：%1", "OCR detection inference failed: %1",
+                          {QString::fromUtf8(ex.what())});
+        return false;
+    }
+}
+
+bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QString *text,
+                                      qreal *confidence, QString *error)
+{
+    text->clear();
+    *confidence = 0.0;
+
+    const QImage crop = img.copy(box);
+    if (crop.isNull() || crop.width() < 1 || crop.height() < 1) {
+        return true;   // 空裁剪不算失败，只是这一段没字
+    }
+
+    // 高固定 48，宽按比例（上限 320）。太宽的框改成"宽 320 + 高度反算"，
+    // 保证宽高比不变；画不满的右侧 / 下侧补 0（归一化后的黑）。
+    const double ratio =
+        static_cast<double>(crop.width()) / static_cast<double>(std::max(1, crop.height()));
+    int drawW = std::max(1, static_cast<int>(std::lround(kRecHeight * ratio)));
+    int drawH = kRecHeight;
+    if (drawW > kRecWidth) {
+        drawW = kRecWidth;
+        drawH = std::clamp(static_cast<int>(std::lround(kRecWidth / ratio)), 1, kRecHeight);
+    }
+
+    const QImage scaled = crop.scaled(drawW, drawH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                              .convertToFormat(QImage::Format_RGB888);
+
+    const size_t plane = static_cast<size_t>(kRecWidth) * static_cast<size_t>(kRecHeight);
+    std::vector<float> chw(plane * 3, 0.0f);
+    for (int y = 0; y < drawH; ++y) {
+        const uchar *line = scaled.constScanLine(y);
+        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(kRecWidth);
+        for (int x = 0; x < drawW; ++x) {
+            const size_t dst = rowOffset + static_cast<size_t>(x);
+            for (int c = 0; c < 3; ++c) {
+                const float v = static_cast<float>(line[x * 3 + c]) / 255.0f;
+                chw[static_cast<size_t>(c) * plane + dst] = (v - kRecMean) / kRecStd;
+            }
+        }
+    }
+
+    const std::vector<int64_t> inShape{1, 3, kRecHeight, kRecWidth};
+
+    try {
+        Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+        std::vector<Ort::Value> inputs;
+        inputs.push_back(Ort::Value::CreateTensor<float>(memory, chw.data(), chw.size(),
+                                                         inShape.data(), inShape.size()));
+
+        std::vector<Ort::Value> outputs = rec->Run(Ort::RunOptions{nullptr}, recInPtrs.data(),
+                                                  inputs.data(), inputs.size(), recOutPtrs.data(),
+                                                  recOutPtrs.size());
+        if (outputs.empty()) {
+            *error = i18n::s("OCR 识别模型没有输出", "The OCR recognition model produced no output");
+            return false;
+        }
+
+        const auto info = outputs.front().GetTensorTypeAndShapeInfo();
+        const std::vector<int64_t> shape = info.GetShape();
+        if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            *error = i18n::sf("OCR 识别输出不是 float32：%1",
+                              "OCR recognition output is not float32: %1", {shapeText(shape)});
+            return false;
+        }
+        if (shape.size() != 3) {
+            *error = i18n::sf("OCR 识别输出维度不对：%1（期望 3 维 [1,T,C]）",
+                              "Unexpected OCR recognition shape: %1 (expected 3 dims [1,T,C])",
+                              {shapeText(shape)});
+            return false;
+        }
+
+        const int steps = static_cast<int>(shape[1]);
+        const int classes = static_cast<int>(shape[2]);
+        if (steps <= 0 || classes <= 0) {
+            *error = i18n::sf("OCR 识别输出尺寸非法：%1", "Invalid OCR recognition size: %1",
+                              {shapeText(shape)});
+            return false;
+        }
+
+        const int dictSize = static_cast<int>(dict.size());
+        // 类别数 = 1(blank) + 字典 + 1(空格)：PP-OCR 的中英模型都是这个布局
+        // （ppocr_keys_v1.txt 6623 行 → 6625 类）。多出的一类就是空格。
+        const bool hasSpace = classes > dictSize + 1;
+        if (classes != dictSize + 1 && classes != dictSize + 2) {
+            // 字典与模型不配套：能跑，但映射会错位。只提示一次，不中断识别。
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                qWarning().noquote()
+                    << QStringLiteral("[ocr] 字典与模型类别数不匹配：字典 %1 行，模型 %2 类。"
+                                      "请确认 rec.onnx 与 ppocr_keys_v1.txt 来自同一套 PP-OCRv4 资产")
+                           .arg(dictSize)
+                           .arg(classes);
+            }
+        }
+
+        const float *logits = outputs.front().GetTensorData<float>();
+
+        // CTC 贪心解码：逐时间步 argmax → 去掉 blank(0) → 去掉连续重复。
+        // 注意 prev 连 blank 一起更新，这样 "a blank a" 会输出两个 a（不是 "aa" 折叠成一个）。
+        QString result;
+        double probSum = 0.0;
+        int kept = 0;
+        int prev = -1;
+        for (int t = 0; t < steps; ++t) {
+            const float *row = logits + static_cast<size_t>(t) * static_cast<size_t>(classes);
+            int best = 0;
+            float bestLogit = row[0];
+            for (int c = 1; c < classes; ++c) {
+                if (row[c] > bestLogit) {
+                    bestLogit = row[c];
+                    best = c;
+                }
+            }
+            if (best != 0 && best != prev) {
+                if (best >= 1 && best <= dictSize) {
+                    result += dict[static_cast<size_t>(best - 1)];
+                } else if (hasSpace && best == dictSize + 1) {
+                    result += QLatin1Char(' ');
+                }
+                // 超出字典的类别（字典不配套时）直接丢弃，不猜字。
+                probSum += static_cast<double>(softmaxAt(row, classes, bestLogit));
+                ++kept;
+            }
+            prev = best;
+        }
+
+        *text = result;
+        *confidence = kept > 0 ? probSum / static_cast<double>(kept) : 0.0;
+        return true;
+    } catch (const Ort::Exception &ex) {
+        *error = i18n::sf("OCR 识别推理失败：%1", "OCR recognition inference failed: %1",
+                          {QString::fromUtf8(ex.what())});
+        return false;
+    }
+}
+
+OcrEngine::OcrEngine(const QString &modelsDir) : m_impl(std::make_unique<Session>(modelsDir)) {}
+
+OcrEngine::~OcrEngine() = default;
+
+bool OcrEngine::isAvailable() const
+{
+    Session &s = *m_impl;
+    if (s.loaded) {
+        s.lastError.clear();
+        return true;
+    }
+    const bool ok = s.load(resolveThreads(0));
+    s.lastError = ok ? QString() : s.loadError;
+    return ok;
+}
+
+QStringList OcrEngine::missingFiles() const
+{
+    return m_impl->missingFilesNow();
+}
+
+QString OcrEngine::lastError() const
+{
+    return m_impl->lastError;
+}
+
+QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, const OcrOptions &opts)
+{
+    Session &s = *m_impl;
+    s.lastError.clear();
+
+    QVector<studious::platform::OcrWord> words;
+
+    // 空图 / 1 像素图：没有可检测的内容，返回空且不报错（调用方要区分"没字"和"坏了"）。
+    if (img.isNull() || img.width() < 2 || img.height() < 2) {
+        return words;
+    }
+
+    const int threads = resolveThreads(opts.threads);
+    if (!s.load(threads)) {
+        s.lastError = s.loadError;
+        return words;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // 一次转换，检测与识别共用：Format_RGB888 的 constScanLine 步长 = 3*w。
+    const QImage rgb = img.convertToFormat(QImage::Format_RGB888);
+
+    std::vector<DetBox> boxes;
+    QString error;
+    if (!s.detect(rgb, opts, boxes, &error)) {
+        s.lastError = error;
+        return words;
+    }
+    const qint64 detMs = timer.elapsed();
+
+    if (boxes.empty()) {
+        if (debugEnabled()) {
+            qInfo().noquote() << QStringLiteral("[ocr] 没检测到文本框（%1 ms）").arg(detMs);
+        }
+        return words;   // 整图无框：空 list，lastError 保持空
+    }
+
+    words.reserve(static_cast<int>(boxes.size()));
+    for (const DetBox &box : boxes) {
+        QString text;
+        qreal confidence = 0.0;
+        if (!s.recognizeBox(rgb, box.rect, &text, &confidence, &error)) {
+            s.lastError = error;
+            return {};   // 模型坏了：与其返回半截结果，不如整体报错
+        }
+        if (text.isEmpty()) {
+            continue;   // 检出来但解不出字的框（横线、图标）直接丢
+        }
+
+        studious::platform::OcrWord word;
+        word.text = text;
+        word.box = box.rect;
+        word.confidence = confidence;
+        words.push_back(word);
+    }
+
+    if (debugEnabled()) {
+        qInfo().noquote() << QStringLiteral("[ocr] det=%1 ms 总耗时=%2 ms 框=%3 文本=%4 threads=%5")
+                                 .arg(detMs)
+                                 .arg(timer.elapsed())
+                                 .arg(boxes.size())
+                                 .arg(words.size())
+                                 .arg(threads);
+    }
+    return words;
+}
+
+} // namespace studious::ocr

@@ -27,6 +27,11 @@ public:
 
     QWindow *createOverlay(const OverlayOptions &) override;
 
+    bool setClickThrough(QWindow *w, bool on, QString *error) override;
+    bool setExcludeFromCapture(QWindow *w, bool on, QString *error) override;
+    bool placeOverlay(QWindow *w, const QRect &globalRect, QString *error) override;
+
+    void setHotkeyHandler(HotkeyHandler) override {}
     bool registerHotkey(const HotkeySpec &) override;
     void unregisterHotkey(const QString &id) override;
 

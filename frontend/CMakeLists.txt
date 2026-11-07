@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Qt Quick 渲染栈。不再需要 Widgets：界面全部由 QML 描述。
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Qml Concurrent LinguistTools)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Qml Concurrent LinguistTools Sql)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -18,14 +18,27 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../backend ${CMAKE_BINARY_DIR}/back
 add_library(studious_platform STATIC
     src/platform/Desktop.cpp
     src/platform/Desktop.h
+    src/platform/HotkeyWin.cpp
+    src/platform/HotkeyWin.h
     src/platform/NullPlatform.cpp
+    src/platform/OverlayWin.cpp
+    src/platform/OverlayWin.h
     src/platform/PlatformFactory.cpp
     src/platform/ProcessGuard.cpp
     src/platform/ProcessGuard.h
+    src/platform/ScreenCaptureWin.cpp
+    src/platform/ScreenCaptureWin.h
+    src/platform/WinPlatform.cpp
+    src/platform/WinPlatform.h
 )
 target_include_directories(studious_platform PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # Network：Desktop 的单实例走 QLocalServer/QLocalSocket（托盘与自启是纯 Win32，不需要额外依赖）。
 target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
+if(WIN32)
+    # gdi32 不在 MinGW 默认链接表里，Qt6::Gui 也不传播它 —— 少了它 BitBlt 就是
+    # undefined reference to `__imp_BitBlt`。user32/shell32/advapi32 默认已链。
+    target_link_libraries(studious_platform PRIVATE gdi32)
+endif()
 
 # Windows 可执行文件图标（资源管理器 / 任务栏 / Alt-Tab 用）。
 # 走 .rc 而不是 WIN32_EXECUTABLE：本项目保留控制台子系统，
@@ -44,8 +57,14 @@ qt_add_executable(studious
     src/AppSettings.h
     src/LocalEngine.cpp
     src/LocalEngine.h
+    src/ScreenFlow.cpp
+    src/ScreenFlow.h
     src/TranslateJob.cpp
     src/TranslateJob.h
+    src/QuickTranslate.cpp
+    src/QuickTranslate.h
+    src/TranslatorRecords.cpp
+    src/TranslatorRecords.h
     src/AssetFormat.h
     src/i18n/Strings.cpp
     src/i18n/Strings.h
@@ -65,6 +84,7 @@ qt_add_qml_module(studious
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
+        qml/overlay/CaptureOverlay.qml
         qml/components/SectionCard.qml
         qml/components/FieldRow.qml
         qml/components/AppChip.qml
@@ -130,6 +150,7 @@ target_link_libraries(studious PRIVATE
     Qt6::QuickControls2
     Qt6::Concurrent
     Qt6::Qml
+    Qt6::Sql
 )
 
 set_target_properties(studious PROPERTIES

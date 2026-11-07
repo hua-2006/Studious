@@ -160,6 +160,122 @@
     </message>
 </context>
 <context>
+    <name>CaptureOverlay</name>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="63"/>
+        <source>云端</source>
+        <translation>Cloud</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="65"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="78"/>
+        <source>本地 LLM</source>
+        <translation>Local LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="67"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="79"/>
+        <source>本地 MT</source>
+        <translation>Local MT</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="69"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="75"/>
+        <source>自动</source>
+        <translation>Auto</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="77"/>
+        <source>云端 LLM</source>
+        <translation>Cloud LLM</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="91"/>
+        <source>截屏翻译</source>
+        <translation>Screenshot translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="270"/>
+        <source>光标不在画面内</source>
+        <translation>Cursor is outside the frame</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="437"/>
+        <source>识别中…</source>
+        <translation>Recognizing…</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="437"/>
+        <source>翻译中…</source>
+        <translation>Translating…</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="470"/>
+        <source>没有翻译成功</source>
+        <translation>Translation didn&apos;t go through</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="610"/>
+        <source>已选 %1 × %2</source>
+        <translation>Selected %1 × %2</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="613"/>
+        <source>失败</source>
+        <translation>Failed</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="614"/>
+        <source>处理中…</source>
+        <translation>Working…</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="614"/>
+        <source>译文</source>
+        <translation>Translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="670"/>
+        <source>重新翻译</source>
+        <translation>Retranslate</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="670"/>
+        <source>翻译</source>
+        <translation>Translate</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="644"/>
+        <source>重新框选</source>
+        <translation>Reselect</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="654"/>
+        <source>显示译文</source>
+        <translation>Show translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="654"/>
+        <source>显示原文</source>
+        <translation>Show original</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="659"/>
+        <source>复制</source>
+        <translation>Copy</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="664"/>
+        <source>关闭 Esc</source>
+        <translation>Close (Esc)</translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="700"/>
+        <source>选区宽或高为 0，请重新框选</source>
+        <translation>The selection has zero width or height. Please reselect.</translation>
+    </message>
+</context>
+<context>
     <name>ConfigPage</name>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="139"/>
@@ -1167,6 +1283,21 @@
         <source>关闭</source>
         <translation>Close</translation>
     </message>
+    <message>
+        <location filename="../qml/Main.qml" line="506"/>
+        <source>小窗翻译</source>
+        <translation>Mini window translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/Main.qml" line="506"/>
+        <source>实时翻译</source>
+        <translation>Live translation</translation>
+    </message>
+    <message>
+        <location filename="../qml/Main.qml" line="508"/>
+        <source>这个入口的地基已就位，界面在下一批接上。</source>
+        <translation>The foundation for this entry is in place; the UI lands in the next batch.</translation>
+    </message>
 </context>
 <context>
     <name>SettingsPage</name>
@@ -1910,62 +2041,68 @@ The files will be removed; you can download them again later.</translation>
         <translation>Pick a language and an engine, then choose an entry point below.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="292"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="637"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="659"/>
         <source>接口已预留</source>
         <translation>Interface reserved</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="325"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="327"/>
         <source>欢迎来到 Studious</source>
         <translation>Welcome to Studious</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="336"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="338"/>
         <source>文字如舟，渡你过语言的河。先选好语言与引擎，再挑一个入口。</source>
         <translation>Words are the boat across the river of language. Set the language pair and engine first, then pick an entry point.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="631"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="633"/>
         <source>小窗口</source>
         <translation>Mini window</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="632"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="634"/>
         <source>一个置顶小窗，随手输入随手出译文，不打断你正在做的事。</source>
         <translation>A small always-on-top window: type away, get the translation, and stay in what you were doing.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="633"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="635"/>
         <source>全局热键&#x3000;·&#x3000;置顶不抢焦点&#x3000;·&#x3000;回车即译</source>
         <translation>Global hotkey · on top without stealing focus · Enter to translate</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="640"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="644"/>
         <source>截图翻译</source>
         <translation>Screenshot translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="641"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="645"/>
         <source>框选屏幕任意区域，识别文字后直接给译文，图片不外传。</source>
         <translation>Select any region of the screen and get its text translated; the image never leaves your machine.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="642"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="646"/>
         <source>框选即译&#x3000;·&#x3000;本地 OCR&#x3000;·&#x3000;自动复制</source>
         <translation>Select and translate · local OCR · auto-copy</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="649"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="648"/>
+        <source>点一下开始框选</source>
+        <translation>Click to start selecting</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/TranslatePage.qml" line="655"/>
         <source>实时翻译</source>
         <translation>Live translation</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="650"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="656"/>
         <source>盯住一块屏幕，字幕和对话边说边翻，只翻变化的部分。</source>
         <translation>Watch a region of the screen and translate subtitles or chat as they change — only what changed.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="651"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="657"/>
         <source>锁定区域&#x3000;·&#x3000;增量翻译&#x3000;·&#x3000;悬浮字幕</source>
         <translation>Locked region · incremental translation · floating subtitles</translation>
     </message>
@@ -1974,32 +2111,32 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">Words are a boat that carries you across the river of language. Pick a target language and set off.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="367"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="369"/>
         <source>源语言 · 检测到%1</source>
         <translation>Source · detected %1</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="368"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="370"/>
         <source>源语言</source>
         <translation>Source language</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="478"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="480"/>
         <source>目标语言</source>
         <translation>Target language</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="561"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="563"/>
         <source>引擎</source>
         <translation>Engine</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="608"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="610"/>
         <source>原文对照</source>
         <translation>Show source</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="594"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="596"/>
         <source>缓存键含引擎</source>
         <translation>Cache key includes engine</translation>
     </message>
@@ -2072,9 +2209,72 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">%1 hits</translation>
     </message>
     <message>
-        <location filename="../qml/pages/TranslatePage.qml" line="777"/>
+        <location filename="../qml/pages/TranslatePage.qml" line="785"/>
         <source>查看引擎状态</source>
         <translation>View engine status</translation>
+    </message>
+</context>
+<context>
+    <name>studious::ui::ScreenFlow</name>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="87"/>
+        <source>翻译失败。</source>
+        <translation>Translation failed.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="165"/>
+        <source>缺少 OCR 模型：%1</source>
+        <translation>OCR models are missing: %1</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="209"/>
+        <source>这个平台不支持截屏。</source>
+        <translation>This platform does not support screen capture.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="216"/>
+        <source>抓屏失败。</source>
+        <translation>Screen capture failed.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="230"/>
+        <source>%1 × %2 · 拖拽框选要翻译的区域</source>
+        <translation>%1 × %2 · Drag to select the area to translate</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="239"/>
+        <source>选区宽或高为 0，请重新框选。</source>
+        <translation>The selection has zero width or height. Please reselect.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="243"/>
+        <source>没有抓到屏幕内容，请重新开始。</source>
+        <translation>No screen content was captured. Please start again.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="258"/>
+        <source>选区不在屏幕内。</source>
+        <translation>The selection is not on screen.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="269"/>
+        <source>识别中…</source>
+        <translation>Recognizing…</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="283"/>
+        <source>识别失败：该区域没有检测到文字。</source>
+        <translation>Recognition failed: no text found in that area.</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="353"/>
+        <source>翻译中…</source>
+        <translation>Translating…</translation>
+    </message>
+    <message>
+        <location filename="../src/ScreenFlow.cpp" line="369"/>
+        <source>翻译没能启动。</source>
+        <translation>Translation could not be started.</translation>
     </message>
 </context>
 </TS>

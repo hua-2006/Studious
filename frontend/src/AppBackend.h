@@ -178,6 +178,19 @@ class AppBackend : public QObject {
     // 托盘是否真的装上了（没 shell 的会话 / 非 Windows 为 false），界面据此置灰。
     Q_PROPERTY(bool trayAvailable READ trayAvailable NOTIFY prefsChanged)
 
+    // ---- 截屏翻译 / 浮层（A 页）----
+    // 「选完直接翻译」：松手即送翻，跳过二次确认那一步。
+    Q_PROPERTY(bool captureAutoRun READ captureAutoRun WRITE setCaptureAutoRun NOTIFY prefsChanged)
+    Q_PROPERTY(bool captureAutoCopy READ captureAutoCopy WRITE setCaptureAutoCopy NOTIFY prefsChanged)
+    Q_PROPERTY(bool captureAutoHide READ captureAutoHide WRITE setCaptureAutoHide NOTIFY prefsChanged)
+    // 译文底色的不透明度（40~100，百分比）与字号（10~20 px）。
+    Q_PROPERTY(int overlayOpacity READ overlayOpacity WRITE setOverlayOpacity NOTIFY prefsChanged)
+    Q_PROPERTY(int overlayFontSize READ overlayFontSize WRITE setOverlayFontSize NOTIFY prefsChanged)
+    // 译文上方要不要留一行虚线原文。
+    Q_PROPERTY(bool overlayKeepOriginal READ overlayKeepOriginal WRITE setOverlayKeepOriginal NOTIFY prefsChanged)
+    // 选区放大镜的倍率（2~8 倍），设置页以后直接改这个值。
+    Q_PROPERTY(int overlayZoom READ overlayZoom WRITE setOverlayZoom NOTIFY prefsChanged)
+
 public:
     explicit AppBackend(studious::cache::TranslationCache *cache, QObject *parent = nullptr);
     ~AppBackend() override;
@@ -314,6 +327,21 @@ public:
     // ---- 设置页：桌面集成 ----
     bool autoStart() const { return m_autoStart; }
     void setAutoStart(bool on);
+
+    bool captureAutoRun() const { return m_captureAutoRun; }
+    void setCaptureAutoRun(bool on);
+    bool captureAutoCopy() const { return m_captureAutoCopy; }
+    void setCaptureAutoCopy(bool on);
+    bool captureAutoHide() const { return m_captureAutoHide; }
+    void setCaptureAutoHide(bool on);
+    int overlayOpacity() const { return m_overlayOpacity; }
+    void setOverlayOpacity(int percent);
+    int overlayFontSize() const { return m_overlayFontSize; }
+    void setOverlayFontSize(int px);
+    bool overlayKeepOriginal() const { return m_overlayKeepOriginal; }
+    void setOverlayKeepOriginal(bool on);
+    int overlayZoom() const { return m_overlayZoom; }
+    void setOverlayZoom(int times);
     bool minimizeToTray() const { return m_minimizeToTray; }
     void setMinimizeToTray(bool on);
     bool closeToTray() const { return m_closeToTray; }
@@ -520,6 +548,14 @@ private:
     QString m_proxyUrl;
     int m_httpTimeoutMs = 30000;
     bool m_autoStart = false;
+    // 截屏翻译那一组（A 页）。默认值与 AppSettings 保持一致 —— 那边才是落盘口径。
+    bool m_captureAutoRun = false;
+    bool m_captureAutoCopy = false;
+    bool m_captureAutoHide = true;
+    int m_overlayOpacity = 96;
+    int m_overlayFontSize = 13;
+    bool m_overlayKeepOriginal = false;
+    int m_overlayZoom = 3;
     bool m_minimizeToTray = false;
     bool m_closeToTray = false;
     bool m_singleInstance = true;

@@ -404,7 +404,10 @@ Window {
                     currentIndex: root.currentPage
 
                     TranslatePage {
+                        objectName: "translatePage"
                         onNavigateRequested: function (index) { root.currentPage = index }
+                        // 三张入口卡：小窗与实时的界面还没接（先明确说一句），截图直接进流程。
+                        onLaunchRequested: function (kind) { root.launch(kind) }
                     }
                     HotkeysPage { }
                     ConfigPage {
@@ -483,5 +486,35 @@ Window {
         height: 5
         cursorShape: Qt.SizeVerCursor
         onPressed: root.startSystemResize(Qt.BottomEdge)
+    }
+
+    // ---------------- 截屏翻译的遮罩 / 结果浮层 ----------------
+    // 它是**独立顶层窗口**：铺满虚拟桌面、置顶、无边框。主窗口自己不能当遮罩
+    // （会裁到 1120×720 的窗口范围内，选区一出界就废）。
+    CaptureOverlay {
+        id: captureOverlay
+        // 几何从平台层拿（QML 的 Screen.virtualWidth 在 Qt 6.12 里取不到值，会变 NaN）。
+        desktopRect: screenFlow.desktopRect
+    }
+
+    // 入口分发：三张卡片与全局热键都从这里进来。
+    // 小窗与实时还没做界面，先用通知条明确说一句，别让人以为点了没反应。
+    function launch(kind) {
+        if (kind === "capture") {
+            screenFlow.begin()
+        } else if (kind === "mini" || kind === "live") {
+            const title = kind === "mini" ? qsTr("小窗翻译") : qsTr("实时翻译")
+            noticeBar.title = title
+            noticeBar.detail = qsTr("这个入口的地基已就位，界面在下一批接上。")
+            noticeBar.shown = true
+            noticeTimer.restart()
+        }
+    }
+
+    Connections {
+        target: screenFlow
+        // 热键走的是 C++ → QML 这条：capture 已经在 C++ 里直接 begin()，
+        // 这里只接过 mini / live。
+        function onLaunchRequested(kind) { root.launch(kind) }
     }
 }

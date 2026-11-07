@@ -19,7 +19,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Sql)
+# Gui 只为 OCR：本地 OCR 的输入输出都是 QImage（QImage 属于 Qt Gui，不在 Qt Core 里）。
+find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Gui)
 
 # 第三方：sentencepiece 0.2.0（Apache-2.0，源码内嵌）。
 # 只用分词，不训练、不导出：关掉 shared / tcmalloc / 测试，
@@ -72,7 +73,8 @@ set(MONOCYPHER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher)
 # 只用它的 zip **读取**（解压资产包），不用它的压缩写入。
 set(MINIZ_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz)
 
-# 注意：只用 Qt Core / Network，不引 Widgets / Gui，后端保持无 UI 依赖。
+# 注意：只用 Qt Core / Network / Gui（Gui 仅因 OCR 需要 QImage 这一数据类型），
+# 不引 Widgets / Quick，后端保持无 UI 依赖：没有人能在 backend 里弹窗。
 add_library(backend STATIC
     src/contract/LanguageRegistry.cpp
     src/i18n/L10n.cpp
@@ -96,6 +98,7 @@ add_library(backend STATIC
     src/asset/Downloader.cpp
     src/mt/MtTokenizer.cpp
     src/mt/MtModel.cpp
+    src/ocr/OcrEngine.cpp
     src/Factory.cpp
     # ---- 第三方（C） ----
     ${MONOCYPHER_DIR}/monocypher.c
@@ -119,7 +122,7 @@ target_include_directories(backend PRIVATE ${MONOCYPHER_DIR})
 # miniz 同理：解压是实现细节，调用方只关心 Downloader 的接口。
 target_include_directories(backend PRIVATE ${MINIZ_DIR})
 
-target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
+target_link_libraries(backend PUBLIC Qt6::Core Qt6::Network Qt6::Sql Qt6::Gui)
 
 # 本地 MT：sentencepiece 与 onnxruntime 都是实现细节，头文件不外泄，
 # 但静态库要把依赖往上传，否则可执行文件链不上（PRIVATE 在 STATIC 下等同 LINK_ONLY）。
@@ -127,6 +130,15 @@ target_include_directories(backend PRIVATE
     ${SENTENCEPIECE_DIR}/src
     ${ONNXRUNTIME_DIR}/include
 )
+
+# 本地 OCR：结果结构体直接复用平台层的 OcrWord（frontend/src/platform/Types.h），
+# 不另造一份，免得两边字段漂移。这里只多一个**编译期**头文件搜索路径，
+# 不链接任何前端目标、不引用它的符号，backend 反过来依赖 frontend 这件事不存在。
+# （frontend/CMakeLists.txt 是 add_subdirectory(backend)，所以 backend 单独 configure 也找得到。）
+target_include_directories(backend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../frontend/src
+)
+
 target_link_libraries(backend PRIVATE sentencepiece-static ${ONNXRUNTIME_LIB})
 
 # 控制台自测程序

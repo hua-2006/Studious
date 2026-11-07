@@ -16,6 +16,8 @@
 #include <QImage>
 #include <QVector>
 
+#include <functional>
+
 class QWindow; // 前向声明，勿改成 #include <QWindow>
 
 namespace studious::platform {
@@ -42,6 +44,19 @@ public:
     // 而 Widgets 从没进过这个项目的链接表。实现方负责设置窗口标志与生命周期
     // （调用方拿到后自己 setParent / deleteLater）。
     virtual QWindow *createOverlay(const OverlayOptions &) = 0;
+
+    // 浮层窗口的三个附加能力。拆成独立方法而不是塞进 createOverlay() 的选项，
+    // 是因为窗口是 QML 建的（QQuickWindow），平台层只负责"改造它"，不负责创建。
+    // w 必须已经 show() 过（有原生句柄）；失败返回 false，原因通过 *error 给人话。
+    virtual bool setClickThrough(QWindow *w, bool on, QString *error) = 0;
+    virtual bool setExcludeFromCapture(QWindow *w, bool on, QString *error) = 0;
+    // globalRect 是**物理像素**（虚拟桌面坐标系），实现方不许再做逻辑坐标换算。
+    virtual bool placeOverlay(QWindow *w, const QRect &globalRect, QString *error) = 0;
+
+    // 热键回调。平台层不引用 Qt 信号（IPlatform 不是 QObject），用一个纯函数对象当出口：
+    // 谁注册的谁接收，id 原样回传（capture / mini / live）。
+    using HotkeyHandler = std::function<void(const QString &id)>;
+    virtual void setHotkeyHandler(HotkeyHandler handler) = 0;
 
     virtual bool registerHotkey(const HotkeySpec &) = 0;
     virtual void unregisterHotkey(const QString &id) = 0;

@@ -171,6 +171,8 @@ Item {
         required property string title
         required property string description
         required property string tags
+        // 底部那行小字：做完了的入口说"点一下开始"，没做的老实说"接口已预留"。
+        required property string footer
         required property string kind
 
         signal activated()
@@ -289,7 +291,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("接口已预留")
+                    text: card.footer
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
                     color: hover.hovered ? Theme.inkVariant : Theme.inkVariant
@@ -631,8 +633,10 @@ Item {
                 title: qsTr("小窗口")
                 description: qsTr("一个置顶小窗，随手输入随手出译文，不打断你正在做的事。")
                 tags: qsTr("全局热键　·　置顶不抢焦点　·　回车即译")
+                objectName: "cardMini"
+                footer: qsTr("接口已预留")
                 kind: "mini"
-                onActivated: page.launchRequested(card.kind)
+                onActivated: page.launchRequested("mini")
             }
 
             LauncherCard {
@@ -640,8 +644,10 @@ Item {
                 title: qsTr("截图翻译")
                 description: qsTr("框选屏幕任意区域，识别文字后直接给译文，图片不外传。")
                 tags: qsTr("框选即译　·　本地 OCR　·　自动复制")
+                objectName: "cardCapture"
+                footer: qsTr("点一下开始框选")
                 kind: "capture"
-                onActivated: page.launchRequested(card.kind)
+                onActivated: page.launchRequested("capture")
             }
 
             LauncherCard {
@@ -649,8 +655,10 @@ Item {
                 title: qsTr("实时翻译")
                 description: qsTr("盯住一块屏幕，字幕和对话边说边翻，只翻变化的部分。")
                 tags: qsTr("锁定区域　·　增量翻译　·　悬浮字幕")
+                objectName: "cardLive"
+                footer: qsTr("接口已预留")
                 kind: "live"
-                onActivated: page.launchRequested(card.kind)
+                onActivated: page.launchRequested("live")
             }
         }
 

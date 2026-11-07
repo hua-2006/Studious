@@ -40,7 +40,8 @@ struct CapabilityReport {
 struct MonitorInfo {
     int id = 0;
     QString label;
-    QRect geometry;     // 物理像素
+    QRect geometry;     // 整屏，物理像素（含任务栏）
+    QRect workRect;     // 可用区（扣掉任务栏与停靠栏），物理像素
     qreal devicePixelRatio = 1.0;
     bool primary = false;
 };

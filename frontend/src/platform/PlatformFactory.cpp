@@ -2,22 +2,28 @@
 
 #include "platform/NullPlatform.h"
 
+#if defined(Q_OS_WIN)
+#    include "platform/WinPlatform.h"
+#endif
+
 namespace studious::platform {
 
 std::unique_ptr<IPlatform> createPlatform()
 {
-    // 以后这里按平台分支：
-    //   #ifdef Q_OS_WIN
-    //       return std::make_unique<WinPlatform>();      // platform/win/WinPlatform.cpp
-    //   #elif defined(Q_OS_LINUX) && defined(STUDIOUS_HAVE_X11)
-    //       return std::make_unique<X11Platform>();      // platform/linux/X11Platform.cpp
-    //   #elif defined(Q_OS_LINUX)
-    //       return std::make_unique<WaylandPortalPlatform>(); // platform/linux/WaylandPortalPlatform.cpp
-    //   #else
-    //       return std::make_unique<NullPlatform>();
-    //   #endif
-    // 本任务只定接缝：无条件 NullPlatform。
+#if defined(Q_OS_WIN)
+    // Windows：ScreenCaptureWin（GDI BitBlt）+ HotkeyWin（RegisterHotKey）
+    //            + OverlayWin（WS_EX_* / WDA_EXCLUDEFROMCAPTURE）
+    return std::make_unique<WinPlatform>();
+#else
+    // Linux：X11 版（XShm 抓屏 + XGrabKey + override-redirect 浮层）与
+    // Wayland portal 版都还没写。这两条路在 platform/README.md 里记了取舍：
+    //   · X11 没有 WDA_EXCLUDEFROMCAPTURE 的等价物（要 XComposite 直取窗口 pixmap，
+    //     且做不到跨窗口排除）→ 实时翻译的「浮层不被自己拍进去」无法保证；
+    //   · Wayland 既不能排除、也不能定位窗口、也没有全局热键 → 实时翻译不可做。
+    // 所以这里先恒返回 NullPlatform（所有能力返回 Unsupported + 人话原因），
+    // 等 X11 / portal 实现落地再改这一行。
     return std::make_unique<NullPlatform>();
+#endif
 }
 
 // ---------------------------------------------------------------------------

@@ -69,6 +69,21 @@ AppSettings AppSettings::defaults()
     s.proxyUrl.clear();             // 空 = 不覆盖环境变量
     s.httpTimeoutMs = 30000;        // 后端各调用点自己的超时多数是 5~15 s，这里只做上限抬升
     s.assetRoot.clear();            // 空 = %APPDATA%/studious/assets
+    // ---- 截屏 / 小窗 / 实时（三个入口共用这一套） ----
+    s.captureAutoRun = false;       // 默认还要点一次「翻译」，防止误触就烧 token
+    s.captureAutoCopy = false;      // 别偷偷改剪贴板
+    s.captureAutoHide = true;       // 翻完就收起浮层，视线不被挡住
+    s.overlayOpacity = 96;          // 96% 还能透一点原来的行距，100% 更像贴纸
+    s.overlayFontSize = 13;
+    s.overlayKeepOriginal = false;
+    s.overlayZoom = 3;                 // 3 倍左右刚好：看得清字，又不至于只剩几个像素
+    s.miniAlwaysOnTop = true;
+    s.liveIntervalMs = 600;         // 400 太快，本地 MT 跟不上
+    s.liveEngineLocked = true;      // 实时默认锁本地引擎，免得每 600 ms 打一次云端
+    s.recordSaveMode = QStringLiteral("original");   // original / current
+    s.hotkeyCapture = QStringLiteral("Ctrl+Alt+S");
+    s.hotkeyMini = QStringLiteral("Ctrl+Alt+W");
+    s.hotkeyLive = QStringLiteral("Ctrl+Alt+L");
     return s;
 }
 
@@ -225,6 +240,31 @@ AppSettings AppSettings::load()
     // 资产根目录：空串是合法值（= 默认位置），只 trim。
     s.assetRoot = store.value(key("asset/root")).toString().trimmed();
 
+    // ---- 截屏 / 小窗 / 实时 ----
+    s.captureAutoRun = store.value(key("capture/autoRunOnSelect"), def.captureAutoRun).toBool();
+    s.captureAutoCopy = store.value(key("capture/autoCopy"), def.captureAutoCopy).toBool();
+    s.captureAutoHide = store.value(key("capture/autoHide"), def.captureAutoHide).toBool();
+    s.overlayOpacity = clampedInt(store.value(key("overlay/opacity"), def.overlayOpacity).toInt(), 40, 100);
+    s.overlayFontSize = clampedInt(store.value(key("overlay/fontSize"), def.overlayFontSize).toInt(), 10, 20);
+    s.overlayKeepOriginal = store.value(key("overlay/keepOriginal"), def.overlayKeepOriginal).toBool();
+    s.overlayZoom = clampedInt(store.value(key("overlay/zoom"), def.overlayZoom).toInt(), 2, 8);
+    s.miniAlwaysOnTop = store.value(key("mini/alwaysOnTop"), def.miniAlwaysOnTop).toBool();
+    s.liveIntervalMs = clampedInt(store.value(key("live/intervalMs"), def.liveIntervalMs).toInt(), 400, 1500);
+    s.liveEngineLocked = store.value(key("live/engineLocked"), def.liveEngineLocked).toBool();
+    // 只认两个已知值，其余一律回默认——这值会决定记录里存哪份文本，写错就是数据事故。
+    const QString saveMode = store.value(key("record/saveMode"), def.recordSaveMode).toString().trimmed().toLower();
+    s.recordSaveMode = (saveMode == QLatin1String("current")) ? saveMode : QStringLiteral("original");
+
+    // 热键文本只做去空白：合法性由平台层注册时判定，写在这里会把用户的写法「规范」掉。
+    // key() 收的是 const char*，所以这里直接写三个字面量、不要再套一层 QString。
+    const auto hotkey = [&store](const char *k, const QString &fallback) {
+        const QString v = store.value(key(k), fallback).toString().trimmed();
+        return v.isEmpty() ? fallback : v;
+    };
+    s.hotkeyCapture = hotkey("hotkey/capture", def.hotkeyCapture);
+    s.hotkeyMini = hotkey("hotkey/mini", def.hotkeyMini);
+    s.hotkeyLive = hotkey("hotkey/live", def.hotkeyLive);
+
     return s;
 }
 
@@ -277,6 +317,21 @@ void AppSettings::save() const
     store.setValue(key("network/proxy"), proxyUrl);               // 空 = 跟环境变量
     store.setValue(key("network/timeoutMs"), httpTimeoutMs);      // 1000~600000
     store.setValue(key("asset/root"), assetRoot);                 // 空 = 默认位置
+
+    store.setValue(key("capture/autoRunOnSelect"), captureAutoRun);
+    store.setValue(key("capture/autoCopy"), captureAutoCopy);
+    store.setValue(key("capture/autoHide"), captureAutoHide);
+    store.setValue(key("overlay/opacity"), overlayOpacity);       // 40~100
+    store.setValue(key("overlay/fontSize"), overlayFontSize);     // 10~20
+    store.setValue(key("overlay/keepOriginal"), overlayKeepOriginal);
+    store.setValue(key("overlay/zoom"), overlayZoom);                // 2~8
+    store.setValue(key("mini/alwaysOnTop"), miniAlwaysOnTop);
+    store.setValue(key("live/intervalMs"), liveIntervalMs);       // 400~1500
+    store.setValue(key("live/engineLocked"), liveEngineLocked);
+    store.setValue(key("record/saveMode"), recordSaveMode);       // original / current
+    store.setValue(key("hotkey/capture"), hotkeyCapture);
+    store.setValue(key("hotkey/mini"), hotkeyMini);
+    store.setValue(key("hotkey/live"), hotkeyLive);
 
     store.sync();
 }

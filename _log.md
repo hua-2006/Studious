@@ -781,3 +781,255 @@ CMake 里的 `Icon.qml` / `icon.frag` 条目也回滚了。
   否则 Windows 构建会有"未使用函数"告警。
 - 之前那条"`--ui-section 6` 拍关于页"的钩子在 `if (sectionIndex > 0)` 里，行为正常；
   但设置页分区下标改动过，拍关于页要重新确认下标（本次用 `[appinfo]` 行验证版本号即可）。
+## 批次 1：平台底座 + OCR + 记录 + QuickTranslate（2026-11-07）
+
+目标：把 docs/TempUI/flows.html 的三条新流程（截屏翻译 / 小窗 / 实时）的地基落地，Linux 只留接口。
+
+### 平台层（frontend/src/platform/，Win 实现 + 其他平台空实现）
+- 新增 `ScreenCaptureWin.{h,cpp}`：GDI `BitBlt(SRCCOPY|CAPTUREBLT)` + `CreateDIBSection`，`Format_RGB32`（GDI 不写 alpha），句柄 RAII；调用线程内临时 `SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)`；`GetDpiForMonitor` 动态解析（回落 96）；全黑抽样判失败（独占全屏/HDR 需 DXGI，留 `// TODO(dxgi)`）。
+- 新增 `OverlayWin.{h,cpp}`：只改 `GWL_EXSTYLE`（恒 `TOOLWINDOW|NOACTIVATE`，穿透加 `LAYERED|TRANSPARENT`）+ `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`；**不碰 `QWindow::setFlags()`**（会重建原生窗口丢 QML 场景）。坑：`WS_EX_LAYERED` 与 D3D11 flip-model 组合可能黑屏，排查先 `QSG_RHI_BACKEND=opengl`。
+- 新增 `HotkeyWin.{h,cpp}`：`HWND_MESSAGE` + `RegisterHotKey`，窗口过程只排队、emit 回事件循环避免重入；`HotkeySpec` 无文本字段 → `key==0` 时把 `description` 当 `"Ctrl+Alt+S"` 解析。坑：mingw 的 `winuser.h` 没有 `VK_A..VK_Z`，字母用 `'A'..'Z'`。
+- 新增 `WinPlatform.{h,cpp}`：组合上面三个 + 能力矩阵；`createOverlay()` 返回 nullptr（浮层是 QML 的 QQuickWindow，平台层只负责改造窗口）。
+- `Types.h`：`MonitorInfo` 加 `workRect`（rcWork，物理像素，浮层定位避任务栏）。
+- `IPlatform.h` 加 `HotkeyHandler` 回调出口 + `setHotkeyHandler()`（IPlatform 不是 QObject，不用信号）。
+- `PlatformFactory.cpp`：`#if defined(Q_OS_WIN) → WinPlatform`，其它平台仍是 `NullPlatform`（注释写明 X11/Wayland 的硬限制）。
+
+### 后端
+- 新增 `backend/include/studious/ocr/OcrEngine.h` + `backend/src/ocr/OcrEngine.cpp`（PP-OCRv4：DBNet 检测 + CRNN/CTC 识别，pimpl 不泄漏 onnxruntime；不做 CTRBox 旋转分类，理由写在头文件）。
+- `backend/CMakeLists.txt`：加 Gui（QImage）与 `../frontend/src` include（复用 `platform::OcrWord`）。
+- `backend/asset/manifest.json`：加 `ocr.det/rec/dict.ppocrv4` 三条，`sha256` 与 `urls` **故意留空**（Downloader 会拒装而不是假装成功）——要真用 OCR 必须补真实地址与哈希。
+
+### 前端功能层
+- 新增 `QuickTranslate.{h,cpp}`：不与 AppBackend 共用 job；进程级共享 `LocalEngine`（三页共用一台 llama-server）与共享缓存；自动引擎走 priority + 降级，显式引擎才写 engineId；`TranslateJob` 没有 cancel()，所以 `cancel()` 是逻辑取消（真结果丢弃）。
+- 新增 `TranslatorRecords.{h,cpp}`：SQLite + WAL + 2000 条剪枝；`list()` 只回顶层行、`children(parentKey)` 展开实时会话；`imagePath`/`region` 支持 B7 的缩略图与选区。
+- 删掉重复实现：`backend/src/records/Records.cpp` + `backend/include/studious/records/Records.h`（另一套三表模型，全仓无人引用；与"以后端为准"冲突时以 UX 契约优先）。
+- 新增 `ScreenFlow.{h,cpp}`：状态机 Idle→Capturing→Selecting→Recognizing→Translating→Showing(→ShowingOriginal)/Error；**先抓整屏再显示遮罩**；OCR 在工作线程（QFutureWatcher + 截图 token 作废在途结果）；段落与译文块 1:1 对齐（数量不符补空串而不是错位）。
+- `AppSettings`：新增 `capture/*`、`overlay/*`、`mini/*`、`live/*`、`record/saveMode`、`hotkey/{capture,mini,live}` 等键（load/save/defaults 全齐）。
+- `main.cpp`：GUI 路径新建平台实例 + `ScreenFlow`，注册三个热键（失败只 `qWarning`，不影响启动），把 `screenFlow` / `platformName` / `platformCanCapture` / `platformCanHotkey` 注入 QML 上下文。
+
+### 验证
+- `cmake --build frontend/build` 通过（`[4/4] Linking CXX executable studious.exe`）。
+- `--ui-shot docs/ui-shots-qml/batch1_start.png --ui-page 0 --ui-size 1120x720` 正常出图（1680x1080），QML 无警告。
+- `--smoke "Hello, world!" --from en --to zh --engine local-mt` → 「你好,世界观!」exit 0。
+- 本机 `Ctrl+Alt+W` 被别的程序占用（注册失败只打日志，不影响其余热键）——说明热键冲突路径真的走到了。
+
+### 未完成（下一批）
+- flows.html 的 A/B/C 三套界面（选区遮罩+工具栏+译文块、小窗、实时浮层+控制条）与 D 二级设置页。
+- `LiveRunner`（增量 OCR + 只在文本变化时翻）。
+- 记录面板接线（`ScreenFlow::saveRecordRequested` 目前没有消费者）。
+- OCR 资产真实下载地址与哈希。
+## 批次 2：A 页截屏翻译（2026-11-07）
+
+### 做了什么
+- `frontend/qml/overlay/CaptureOverlay.qml`（约 620 行）：一个窗口承担 A1–A10。
+  - 底图 = 抓屏 PNG（`screenFlow.imageSourceUrl()`，绑定里显式引用 `screenSize` 才会随每次抓屏重新求值）。
+  - 压暗用四块 Rectangle 围出镂空（不是「大矩形 + 选区反色」——那样选区内会被压两次）。
+  - 选区：1.5px 边 + 尺寸标签 + 八个手柄；松手只到「已选、等确认」，翻译要按工具栏（或开「选完直接翻译」）。
+  - 工具栏：引擎槽（Dropdown 改 `backend.engineId`，与翻译页/配置页同一个值）+ 翻译/重新翻译 + 重新框选 + 显示原文/译文 + 复制 + 关闭 Esc；放不下自动翻到选区上方。
+  - 译文块 `plateLayer`：按 OCR 行 1:1 贴纸，底色 `surfaceLow`（设计稿 `--plate`）+ `backend.overlayOpacity` 不透明度，字号 `backend.overlayFontSize` 再按行高收一次；「保留原文标注」在译文上方压一条薄原文条。
+  - 错误态 `errBox` 用 `dangerContainer` 底 + **`dangerContainerText`**（`dangerText` 在深色主题下是深红，压在 danger 容器上看不清 —— 本轮踩到并修掉）。
+- `ScreenFlow` 新增：`Q_PROPERTY(QRect desktopRect)`、`Q_INVOKABLE void debugSampleBlocks()`（仅截图走查）、自动复制（`captureAutoCopy`）。
+- `AppBackend` 新增 capture/overlay 六个属性（`captureAutoRun/captureAutoCopy/captureAutoHide/overlayOpacity/overlayFontSize/overlayKeepOriginal`），全部落盘到 `settings/capture|overlay/*`。
+- `main.cpp` 截图钩子扩展：`STUDIOUS_UI_TARGET=screenFlow`、`STUDIOUS_UI_CALL=a|b|c`（`|` 分隔顺序执行）、`STUDIOUS_UI_SELECT="x,y,w,h"`（摆到二次确认态）、`STUDIOUS_UI_RECT`（直接送翻译）。正式启动路径完全不看这些变量。
+
+### 坑
+1. **`Screen.virtualX/virtualWidth` 在这版 Qt 6.12 的 QML 里取不到**（`undefined`），`Qt.rect(...)` 变 `QRectF(0,0,nan,nan)`，浮层窗口只有 160×160。改成 C++ 暴露 `ScreenFlow::desktopRect`。
+2. **`forceActiveFocus()` 在 `Window` 上不存在**（`ReferenceError`），要用 `requestActivate()`。
+3. `MultiEffect.colorization` 是**乘法**不是替换 —— 图标 SVG 描边改白色之后，各处 `colorizationColor` 才是精确颜色。
+4. `Popup` 的 parent 要给 `contentItem`，直接把 Window 当 parent 拿不到可视父级。
+5. 截图钩子的 `STUDIOUS_UI_TARGET` 忘了设时，调用会静默打到 `backend` 上（方法不存在 → 什么都不发生，截图是主窗口而不是浮层）。
+
+### 验证
+- `capture_a2.png`（选区 + 六键工具栏 + 引擎槽「本地 LLM ▾」）、`capture_a4.png`（三块译文贴纸）、`capture_a5.png`（显示原文 + 描边）、`capture_a6.png`（缺 OCR 模型的错误态）。
+- 压暗实测：选区内外同一行像素 (11,10,14) vs (20,18,26) —— 外侧确实压暗。
+- `--smoke --engine local-mt` → 你好,世界观! exit 0；`backend_selftest.exe` → ALL CORE TESTS PASSED；翻译 371 条 0 unfinished。
+
+## 翻译页入口卡接线（2026-11-07）
+
+**用户要求**：把翻译页「截图翻译」卡片的事件绑到新做的截屏翻译上。
+
+**根因（真的是 bug，不是没接线）**：三张卡片都是内联组件 `component LauncherCard`，
+实例上的处理器写成 `onActivated: page.launchRequested(card.kind)`。
+`card` 是组件**内部**的 id，在实例级处理器的作用域里不可见 —— 运行时抛
+`ReferenceError: card is not defined`（TranslatePage.qml:646），信号发出去、处理器一进去就断，
+所以点卡片**完全没有反应**，而且只在控制台留一行 qml 报错，界面上看不出任何异常。
+改成每张卡写字面量 `page.launchRequested("mini"/"capture"/"live")`，问题消失。
+
+**顺带的改动**
+- 三张卡加 `objectName`（`cardMini` / `cardCapture` / `cardLive`），`TranslatePage` 实例加
+  `objectName: "translatePage"` —— 截图走查要按名字找对象。
+- 卡片底部小字由固定「接口已预留」改成 `required property string footer`：截图翻译是
+  「点一下开始框选」，另两张仍是「接口已预留」。**别写死热键**：`Ctrl+Alt+S` 是设置项，
+  写进文案就会和用户改过的值打架。
+- `--ui-shot` 分支新增 `STUDIOUS_UI_EMIT="objectName:signal:arg"`（先按 `signal(QString)` 找，
+  找不到再按零参 `signal()` 找），用来验「点下去之后」的链路；新增 `STUDIOUS_UI_SHOT=overlay`
+  改抓浮层窗口，并把日志里的逻辑尺寸改成按**被抓的那个窗口**算（原来抓整屏却报 1120x720）。
+- 去掉浮层里那行 `console.log`（Qt 6.12 的 `Screen.virtualWidth` 在 QML 侧取不到，
+  已经改成 C++ 的 `ScreenFlow::desktopRect`，日志留着只是噪声）。
+
+**验证**
+- `STUDIOUS_UI_EMIT=cardCapture:activated:x STUDIOUS_UI_SHOT=overlay` →
+  `[ui-shot] after emit: phase=Selecting`、`captureOverlay 1707x1067 visible=1`、
+  截图 `docs/ui-shots-qml/card_capture.png`（2561x1601，整屏压暗 + 「拖拽框选」提示）。
+- 常态页截图 `docs/ui-shots-qml/launcher_bound.png`：截图卡底部「点一下开始框选」，
+  另两张「接口已预留」，零 QML 警告。
+- `STUDIOUS_UI_EMIT=cardMini:activated:x` → 顶部通知条出现（与常态页对比前 300px 带内
+  抽样差 10223 点），docs/ui-shots-qml/card_mini_notice.png。
+- 翻译链路未受影响：`--smoke "Hello, world!" --from en --to zh --engine local-mt` → 你好,世界观!
+- 译文：`update_translations` 372 条（1 new =「点一下开始框选」），补英文后 unfinished = 0。
+
+**坑**
+- 内联组件的内部 id **不能**在实例的处理器里用；要么写字面量，要么把值提成 `required property`
+  再在实例上赋值（属性本身在实例作用域里是可见的）。
+- `QMetaObject::invokeMethod` 默认匹配签名，给零参信号硬塞 `Q_ARG(QString, …)` 只会返回 false，
+  看起来像「信号没连上」。判 `indexOfSignal` 更省事。
+- `QQuickWindow::findChild` 要用窗口对象，别从 `contentItem()` 往下找 —— 页面级 objectName
+  不在那棵子树里。
+
+
+## 截屏翻译：选中后没有工具栏（2026-11-07）
+
+用户报："可以选中翻译区域了但是选中后没有出现工具栏，选中后就只是被选中了一下"。
+
+### 两个独立根因
+
+1. **CaptureOverlay.qml 里的 property bool active 撞了 Window::active**
+   Window 自带 ctive（窗口是否拿到键盘焦点）。我写的自定义 ctive = selecting || working || showing || errored 被它覆盖/覆盖不了，
+   而 isible: active 于是变成"窗口获得焦点才可见"。浮层窗口是 WS_EX_NOACTIVATE（platform/OverlayWin.cpp），**永远不会激活**，
+   所以浮层在实际运行里几乎从不显示。
+   而 --ui-shot 一直能拍到它 —— QQuickWindow::grabWindow() 是离屏渲染场景，跟窗口是否真显示无关。
+   这就是"截图看得见、人看不见"的分裂来源，也是最容易骗过自己的坑。
+   修法：改名 ctive → engaged，isible: engaged，三处引用同步。
+
+2. **松手顺序错了（onReleased）**
+   原代码 overlay.dragging = false; const r = overlay.liveRect; —— liveRect 的定义是
+   dragging ? 临时框 : (localRect.width > 0 ? localRect : sel)，一清 dragging 两个来源都是空， 恒为 0x0，
+   commitSelection 里 width < 3 直接 return，工具栏的 isible: liveRect.width > 1 永不满足。
+   修法：先按 mouse.x/mouse.y 与 dragX/dragY 算出矩形，**再**清 dragging，再 commitSelection(r)。
+
+### 开发钩子（main.cpp）
+- STUDIOUS_DEV_CAPTURE=1：正常启动 1.2 s 后自动 screenFlow->begin()，方便手动拖框走查。注意它必须写在 --ui-shot 分支**之外**
+  （排查期一度写进分支内，导致"手动拖拽全都没生效"的假象）。
+- STUDIOUS_UI_COMMIT="x,y,w,h"：直接对浮层窗口 invoke commitSelection，单独验证"松手之后"这段。
+- --ui-shot 日志改为按实际被抓窗口报逻辑尺寸。
+
+### 像素证据（全屏 2560x1600 抓图）
+- 选区内部平均亮度 39.9 / 选区外 17.9 / 远处 18.9 → 选区内是未压暗的原始截屏。
+- 工具栏带 y=624..668：max=185 bright=80 → 文字在，工具栏确实画出来了。
+- Esc 后桌面角落 89 → 105.4 → 压暗消失，浮层已关。
+
+### 教训
+- QML 里 Window / Item 已有的属性名（ctive、isible、contentItem、parent）不要拿来当自己的状态位，
+  shadowing 不会报错，只会静默变成另一个语义。
+- 截图能拍到 ≠ 用户能看到：grabWindow() 走离屏渲染，验证可见性要用全屏抓图或像素对比。
+
+## 截屏浮层统一到主界面视觉（2026-11-07）
+
+要求：浮层（遮罩 + 工具栏）的颜色/圆角/字号跟主界面一套，配色走外观页里配的强调色；引擎选择器留在工具栏内（用户明确选了这一档，不单独钉左上角）。
+
+改动全部落在 `frontend/qml/overlay/CaptureOverlay.qml`，只换令牌、不动结构：
+
+| 位置 | 之前 | 现在 |
+|---|---|---|
+| 选区边框 / 八手柄 | `Theme.primaryText`（近白） | `Theme.primary`（强调色），边框 1.5 → 2px |
+| 尺寸标签 | 黑 72% + 白字 | `Theme.surfaceHigh` + `outlineVariant` 边 + `Theme.ink` 字 |
+| busy 框 | 黑 55% + 白字 | `surfaceHigh` 96% + 边，字 `ink` / `inkVariant` |
+| 工具栏底 | 黑 82% | `surfaceHigh` 97%，圆角 `rSm` → `rMd` |
+| 工具栏分隔 / 阶段标签 | 白 18% / 白 65% | `outlineVariant` / `inkVariant` |
+| 按钮 | 白 10% 底、白字 | 次按钮透明底 + 悬浮 `surfaceHighest`；主按钮 `primary` 实心 + `primaryText` |
+| 空选区提示 | 裸文字（caution） | `cautionContainer` 胶囊 + `caution` 边 |
+
+好处不只是好看：强调色换掉后浮层整体跟着变（实测 border/主按钮在深色是 `#9A8EC6`、浅色是 `#6750A4`，即从 seed #6750A4 推出来的那份）。
+
+### 验证
+- 深色 `docs/ui-shots-qml/ov_theme_a2.png`：边框 `#9A8EC6`、工具栏底 `#2A2736`（surface 系，不是纯黑 `#0B0A0E`）、主按钮 `#9A8EC6`。
+- 浅色 `ov_theme_a2_light.png`：边框 `#6750A4`、工具栏底 `#DCD6E7`、主按钮 `#6750A4`。
+- 主界面回归 `ov_main_check.png` 零 QML 警告；`--smoke … --engine local-mt` → 你好,世界观!。
+
+### 备注
+- 抓图用 `STUDIOUS_UI_TARGET=screenFlow STUDIOUS_UI_CALL=begin STUDIOUS_UI_SELECT="300,220,760,220" STUDIOUS_UI_SHOT=overlay`，一条命令摆出 A2 态。
+- 本轮第一次跑 local-mt 冒烟撞到已知的间歇 `exit -1`（header 打完即死），重跑三次均正常，与本次改动无关。
+
+## 引擎下拉弹到屏幕左上角（2026-11-07）
+
+现象：点工具栏里的引擎槽，下拉菜单不贴着按钮出现，而是跑到整个屏幕的左上角。
+
+### 两个原因，一个比一个隐蔽
+
+1. **用 Popup 做浮层内的下拉**。Popup 是**独立顶层窗口**，x/y 只要算偏就贴屏幕角；
+   而且我们的浮层本身是 WS_EX_NOACTIVATE 的全屏窗口，弹出去以后 z 序还要自己管。
+   改成窗内 Rectangle（id: engineMenu，z=20），天然跟着工具栏走，isible 绑 menuOpen。
+2. **mapToItem() 写在绑定里不会产生依赖**。原来写
+   engineSlot.mapToItem(overlay.contentItem, 0, 0)，这是 C++ 调用，内部读的 x/y 不进入
+   QML 依赖图；它只在第一次求值时算了一次 —— 那时布局还没跑，得到 (0,0)，之后再也不会更新。
+   **日志实证**：MENUTEMP anchor 0 0 pos 8 38。
+   改成逐级相加：Qt.point(ovbar.x + barRow.x + engineSlot.x, ovbar.y + barRow.y + engineSlot.y)，
+   每个坐标都是属性读取，依赖成立。同样的日志变成 nchor 558.46 459 pos 558.46 497，
+   即菜单正好贴在引擎槽下沿 8px。
+
+### 附带
+- 点空白处收起：加一层 MouseArea { z: 4; visible: menuOpen }（低于工具栏 5、高于内容），
+  工具栏按钮照样能点，菜单自身 z=20 在它上面。
+- Esc 先收菜单再退出框选；开始新拖拽、阶段回 Idle 也都会把菜单关掉。
+- 开发钩子 STUDIOUS_UI_EMIT 挪到 SELECT/COMMIT 之后执行，并且会在**所有顶层窗口**里
+  找 objectName（浮层的控件不在主窗口树里），这样才能脚本化点开引擎槽取证。
+
+### 教训
+- QML 里凡是"按位置算"的东西（mapToItem / mapFromItem / mapRectToItem）都别直接放进绑定，
+  要么放到信号处理里现算，要么拆成属性相加。
+- Popup 适合主窗口内的下拉；全屏浮层里宁可用窗内面板。
+## 截屏翻译：选区放大镜（2026-11-07）
+
+微信截图那种「放大镜」：拖框时在光标旁边显示一块放大的像素视图，下面列坐标、色值和 RGB。
+
+- `frontend/src/ScreenFlow.{h,cpp}`：新增 `Q_INVOKABLE QVariantMap pixelInfoAt(int x, int y)`，从 `m_shot` 取像素返回 `{ok, x, y, hex, r, g, b}`。**QML 的 Image 读不到自己的像素**，色值只能由 C++ 给；`hex` 直接能当颜色字符串用，省得在 QML 里拼十六进制。
+- `frontend/qml/overlay/CaptureOverlay.qml`：新增 `property point cursorPos: Qt.point(-1, -1)` + `MouseArea { hoverEnabled: true }` 跟踪光标；放大镜是一块 `Rectangle`（`objectName: "magnifier"`），上半是放大区 + 十字线 + 中心像素描边，下半是 `X/Y`、色块 + `#RRGGBB`、`R/G/B`。
+- 位置：**竖向优先放在光标上方**（工具栏默认贴选区下方，往上一躲就不会互相压），上方放不下才翻到下面；横向在光标左侧，贴左边就翻到右侧。
+- z 序压到工具栏之下（`z: 4`，工具栏 5）：放大镜跟着光标跑难免压到「翻译」按钮，主按钮必须永远在上面。
+- **只在拖框时出现**（`visible: overlay.dragging`）：松手、选区定了就收起来 —— 第一版写成 `selecting` 就一直挂在画面上，用户当场指出。
+
+### 三个坑
+
+1. **`Image` 在 Qt 6 没有 `sourceRect`**（`Cannot assign to non-existent property "sourceRect"`）。要「只画源图的一小块」只能：把整屏底图按 `zoom` 倍放大、用 `Item { clip: true }` 只露出光标那一块，再按 `-(cursorPos * zoom) + 视口半宽` 平移。`smooth: false` 才有像素块质感。
+2. **`QString("…")` 在 QML 里不存在**（`ReferenceError: QString is not defined`）—— 直接写 `"—"` / `""`。
+3. `MouseArea.onExited` 里清 `cursorPos` 会把放大镜一起关掉：选区一旦 `confirmed`，`MouseArea` 被 `enabled: false` 停用，Qt 随即派一个 exit 事件。清坐标改挂到「阶段回 Idle」那一处。
+
+### 新增截图钩子
+
+`frontend/src/main.cpp` 的 `--ui-shot` 分支：`STUDIOUS_UI_CURSOR="x,y"`（摆假光标，真光标在自动截图里动不了）、`STUDIOUS_UI_DRAGGING=1`（配合前者假一份「正在拖框」，否则放大镜不显示）。
+
+### 验证
+
+- 深色：`docs/ui-shots-qml/magnifier5.png`（坐标 400/480、色值 `#151515`）、`magnifier6_crop.png`（`X 1050 Y 450` / `#FBF4F8` / `R251 G244 B248`，与页面底色一致 → 取色正确）。
+- 拖框中：`mag_drag.png` + `mag_drag_crop.png`。
+- 松开后：`mag_after.png` + `mag_after_crop.png`（放大镜已消失，工具栏仍在）。
+- `--smoke "Hello, world!" --from en --to zh --engine local-mt` → exit 0；`backend_selftest.exe` → `ALL CORE TESTS PASSED`。
+- 新增文案 1 条（「光标不在画面内」/ Cursor is outside the frame），`studious_en.ts` unfinished = 0。
+### 追加：位置改右下角 + 倍率可配（2026-11-07）
+
+用户要求「放大镜放鼠标右下角、倍率小一点、不要像素级的、别写死以后在设置里调」。
+
+- 位置：x/y 都改成「光标 + 间距」，右边/下边放不下才翻到另一侧（原来是左侧 + 优先上方）。
+- 视觉：`smooth: true`（原来 `false` 是为了看清像素块），中心那一格的描边改成小圆点，倍率默认 3 倍。
+- 倍率不再写死：新增 `AppSettings::overlayZoom`（键 `settings/overlay/zoom`，夹 2~8，默认 3）+ `AppBackend::overlayZoom`（`Q_PROPERTY`，`NOTIFY prefsChanged`），QML 里 `magnifier.zoom = Math.max(2, backend.overlayZoom)`。
+- 验证同倍率可改：注册表写 `zoom=6` 再截图，放大区明显变大（`docs/ui-shots-qml/mag_zoom6.png`），改回 3 即恢复（`mag_zoom3.png`）→ 证明不是硬编码。
+- 设置界面还没做（截图/浮层的设置分区还没建），眼下要改只能写注册表或等设置页接上 `backend.overlayZoom`。
+## 截屏浮层：二次调整八向手柄 + 整块搬家 + 待做清单（2026-11-07）
+
+### 做了什么
+1. 八个手柄（四角 + 四边中点）改成可拖，框定之后仍然可用：拖它改四条边，最小 12px，翻过对面时钉住对侧，最后夹在屏幕内；`applyResize(dx, dy)` 按 `resizeEdge` 走。
+2. 框内长按拖动整块选区（`moveArea`，`anchors.fill` + `margins: 4`，`z` 压在八向手柄之下），`applyMove(dx, dy)` 只在屏幕范围内平移，宽高不变。
+3. 「翻译」按钮从工具栏中间挪到最右端（主操作收尾位置），次要操作在左。
+4. 新增仓库根 `TODO.md`：九组「还没做成设置」的自定义接口清单（放大镜倍率/位置/开关、浮层外观、操作与热键、小窗、实时、记录、引擎网络、资产 OCR、Linux 预留），每项标 `已实现 / 待接线 / 未开始`。
+5. `--ui-shot` 新增 `STUDIOUS_UI_RESIZE="e,120,0"` 与 `STUDIOUS_UI_MOVE="80,40"` 两个钩子：直接驱动 QML 的 `applyResize` / `applyMove`，用来验几何算法（自动截图里没法真拖鼠标）。
+
+### 坑（重要）
+- **`Repeater { model: [ {key:…}, … ] }` + `delegate` 里的 `required property var modelData` 在这版 Qt 上取不到值**，八个手柄一个都不显示，且**没有任何 QML 警告**。改成 `model: 8` + `required property int index` + 页面级 `readonly property var handleSpecs` 索引取值后立刻正常。教训：数组当 model 时宁可走 index，别指望 modelData；控件"没显示"先怀疑 delegate 求值失败，而不是 visible 条件。
+- 手柄的拖拽位移必须用 `mapToItem(overlay.contentItem, mouse.x, mouse.y)` 算绝对位置：手柄自己会跟着框移动，用相对位移会自我循环。
+- 整块搬家必须用按下那一刻的 `moveRect` 当基准，不能每次拿 `liveRect`（否则每次 move 都以最新值为基准，位移被叠加）。
+
+### 验证
+- `STUDIOUS_UI_RESIZE="e,120,0"` → 尺寸标签 `880 × 220`（原 760 × 220）。
+- `STUDIOUS_UI_MOVE="60,50"` → 标签仍是 `760 × 220`、整框右移下移。
+- 截图：`docs/ui-shots-qml/hs_fix.png`（手柄可见）、`hs_resize.png`、`hs_move.png`、`hz_se.png`（角落放大看手柄）。
+- `--smoke … --engine local-mt` exit 0；`backend_selftest.exe` → `ALL CORE TESTS PASSED`；`update_translations` 373 条 0 new。

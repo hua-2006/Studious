@@ -129,6 +129,45 @@ struct AppSettings {
     // 空闲判定阈值，分钟（键 settings/llm/localIdleMinutes，默认 10，合法 1~240）。
     int localIdleMinutes = 10;
 
+    // ---- 三个新入口（截屏翻译 / 小窗翻译 / 实时翻译）的共用设置 ----
+    //
+    // 设计稿 docs/TempUI/flows.html 的 A/B/C 三页共用一份 D「二级设置」，
+    // 所以这些键集中在这里，不放各自的模块里。
+
+    // 松开选区后直接进「翻译中」，跳过二次确认（键 settings/capture/autoRunOnSelect）。
+    bool captureAutoRun = false;
+
+    // 翻译完成后自动复制译文 / 自动关闭浮层（键 settings/capture/autoCopy、autoHide）。
+    bool captureAutoCopy = false;
+    bool captureAutoHide = true;
+
+    // 浮层外观（键 settings/overlay/opacity 40~100、fontSize 10~20、keepOriginal）。
+    int overlayOpacity = 96;
+    int overlayFontSize = 13;
+    bool overlayKeepOriginal = false;
+    // 放大镜的缩放倍率（2~8）。不写死在 QML 里，设置页以后直接改这里。
+    int overlayZoom = 3;
+
+    // 小窗是否置顶（键 settings/mini/alwaysOnTop，默认 true）。
+    bool miniAlwaysOnTop = true;
+
+    // 实时翻译轮询间隔毫秒（键 settings/live/intervalMs，400~1500，默认 600）。
+    // 太小会把引擎压死，太大会看不出"实时"，所以夹得很紧。
+    int liveIntervalMs = 600;
+
+    // 实时翻译锁本地引擎（键 settings/live/engineLocked，默认 true）：
+    // 云端 / web 单次 1 秒以上，做实时没有意义，默认逼用户走本地。
+    bool liveEngineLocked = true;
+
+    // 记录里存哪一份文本（键 settings/record/saveMode）："original"（OCR 原文）或 "current"。
+    QString recordSaveMode = QStringLiteral("original");
+
+    // 三个全局热键（键 settings/hotkey/capture|mini|live）。
+    // 空串 = 不注册（界面上显示「未设置」）。格式 "Ctrl+Alt+S"。
+    QString hotkeyCapture = QStringLiteral("Ctrl+Alt+S");
+    QString hotkeyMini = QStringLiteral("Ctrl+Alt+W");
+    QString hotkeyLive = QStringLiteral("Ctrl+Alt+L");
+
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
     // 不改翻译本身的目标语言（那是 dstLang 的事）。

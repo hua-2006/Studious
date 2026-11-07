@@ -85,6 +85,30 @@ QWindow *NullPlatform::createOverlay(const OverlayOptions &)
     return nullptr;
 }
 
+bool NullPlatform::setClickThrough(QWindow *, bool, QString *error)
+{
+    if (error) {
+        *error = unsupportedReason();
+    }
+    return false;
+}
+
+bool NullPlatform::setExcludeFromCapture(QWindow *, bool, QString *error)
+{
+    if (error) {
+        *error = unsupportedReason();
+    }
+    return false;
+}
+
+bool NullPlatform::placeOverlay(QWindow *, const QRect &, QString *error)
+{
+    if (error) {
+        *error = unsupportedReason();
+    }
+    return false;
+}
+
 bool NullPlatform::registerHotkey(const HotkeySpec &)
 {
     return false;

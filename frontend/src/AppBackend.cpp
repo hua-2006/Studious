@@ -439,6 +439,13 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_proxyUrl = settings.proxyUrl;
     m_httpTimeoutMs = settings.httpTimeoutMs;
     m_minimizeToTray = settings.minimizeToTray;
+    m_captureAutoRun = settings.captureAutoRun;
+    m_captureAutoCopy = settings.captureAutoCopy;
+    m_captureAutoHide = settings.captureAutoHide;
+    m_overlayOpacity = settings.overlayOpacity;
+    m_overlayFontSize = settings.overlayFontSize;
+    m_overlayKeepOriginal = settings.overlayKeepOriginal;
+    m_overlayZoom = settings.overlayZoom;
     m_closeToTray = settings.closeBehavior == QLatin1String("tray");
     m_singleInstance = settings.singleInstance;
     // 开机自启以注册表为准：用户可能在任务管理器 / 别的工具里删过，
@@ -928,6 +935,108 @@ void AppBackend::setMinimizeToTray(bool on)
     emit prefsChanged();
 }
 
+// ---- 截屏翻译（A 页）：三个开关 + 浮层两个滑块 ----
+// 这一组只存不改行为，行为在 QML 的浮层与 ScreenFlow 里读它。
+void AppBackend::setCaptureAutoRun(bool on)
+{
+    if (m_captureAutoRun == on) {
+        return;
+    }
+    m_captureAutoRun = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.captureAutoRun = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setCaptureAutoCopy(bool on)
+{
+    if (m_captureAutoCopy == on) {
+        return;
+    }
+    m_captureAutoCopy = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.captureAutoCopy = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setCaptureAutoHide(bool on)
+{
+    if (m_captureAutoHide == on) {
+        return;
+    }
+    m_captureAutoHide = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.captureAutoHide = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayOpacity(int percent)
+{
+    const int next = std::clamp(percent, 40, 100);
+    if (m_overlayOpacity == next) {
+        return;
+    }
+    m_overlayOpacity = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayOpacity = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayFontSize(int px)
+{
+    const int next = std::clamp(px, 10, 20);
+    if (m_overlayFontSize == next) {
+        return;
+    }
+    m_overlayFontSize = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayFontSize = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayKeepOriginal(bool on)
+{
+    if (m_overlayKeepOriginal == on) {
+        return;
+    }
+    m_overlayKeepOriginal = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayKeepOriginal = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayZoom(int times)
+{
+    const int next = std::clamp(times, 2, 8);
+    if (m_overlayZoom == next) {
+        return;
+    }
+    m_overlayZoom = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayZoom = next;
+    settings.save();
+
+    emit prefsChanged();
+}
 void AppBackend::setCloseToTray(bool on)
 {
     if (m_closeToTray == on) {
