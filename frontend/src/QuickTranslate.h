@@ -56,9 +56,9 @@ public:
     // 同一个 QuickTranslate 上并发调用 → 返回 false 并设置 error（不排队）。
     bool translate(const QString &text, const QString &srcLang, const QStringList &dstLangs);
 
-    // 逻辑取消：立刻 emit 一个 ok=false /「已取消」的 finished，真结果回来时丢掉。
-    // TranslateJob 没有 cancel()，工作线程收不回来，所以 isBusy() 仍然为 true，
-    // 直到那次作业自己结束（在那之前再 translate() 会被拒绝）。
+    // 主动取消：立刻 emit 一个 ok=false /「已取消」的 finished，并把 isBusy() 放开。
+    // 同时给 TranslateJob 发取消信号 —— 后端 translator 的段落循环会在下一个检查点
+    // 退出（已经在飞的那一次 HTTP 请求没法硬打断，最多等它超时/返回）。
     void cancel();
 
 signals:

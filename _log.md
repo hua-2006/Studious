@@ -1033,3 +1033,220 @@ CMake 里的 `Icon.qml` / `icon.frag` 条目也回滚了。
 - `STUDIOUS_UI_MOVE="60,50"` → 标签仍是 `760 × 220`、整框右移下移。
 - 截图：`docs/ui-shots-qml/hs_fix.png`（手柄可见）、`hs_resize.png`、`hs_move.png`、`hz_se.png`（角落放大看手柄）。
 - `--smoke … --engine local-mt` exit 0；`backend_selftest.exe` → `ALL CORE TESTS PASSED`；`update_translations` 373 条 0 new。
+## OCR 实装 + 设置页「截图」分区（2026-11-07）
+
+### OCR 三处真 bug
+1. **`QFile::link()` 在 Windows 造出 .lnk**：模型 staging 里用 `QFile::link` 想省空间，结果 `models/ocr/det.onnx` 只有 1243 B、头是 `4c 00 00 00`（Shell Link），onnxruntime 报 `Protobuf parsing failed`。改 `QFile::copy` + 「已存在但尺寸不同先删」。
+2. **置信度恒 0**：PP-OCRv4 的 rec 输出**已经 softmax 过**，`softmaxAt()` 再算一次得 ≈1/6625。修法：按第一行行和判 `rowIsProbability`，概率行直接取 argmax 的值。
+3. **低置信噪声**：图标/边框常被识别成 0.3 左右的碎片，`ScreenFlow` 里加 `kMinConfidence = 0.5` 过滤 + 空串丢弃。
+
+### 端到端证据
+`STUDIOUS_UI_TARGET=screenFlow STUDIOUS_UI_CALL=begin STUDIOUS_UI_RECT="900,300,700,180" STUDIOUS_UI_SHOT=overlay` → `confirmSelection done: phase=Showing words=3 blocks=3 status=本地 MT · 2205 ms`，截图 `docs/ui-shots-qml/ocr_e2e.png` 里贴纸压在原文行上。抓屏 → OCR → 翻译 → 贴纸全链路通。
+
+### 模型来源（写死在 manifest，不随仓库分发）
+det 4,745,517 B / rec 10,857,958 B（HF `SWHL/RapidOCR` 的 `PP-OCRv4/*_infer.onnx`）+ dict 26,250 B（PaddleOCR `v2.10.0/ppocr/utils/ppocr_keys_v1.txt`，钉版本防漂移）。`archive: ""` 表示直链单文件。
+
+### 设置页「截图」分区
+`sections` 插到「数据」与「关于」之间 → 8 个分区（截图 = 索引 6）；卡片 `SectionCard { title: "截图翻译" }` 里 4 个 `AppToggle`（选完直接翻译 / 翻译完自动复制 / 复制后自动关闭 / 保留原文标注）+ 3 个 `NumStepper`（不透明度 40–100 步 4、字号 10–20、放大镜 2–8）。`NumStepper` 是新加的内联组件（`AppButton −` / mono 值 / `AppButton +`），不用 SpinBox 是因为 Basic 样式的指示器跟主题打架。
+
+坑：`AppToggle` **没有 `text` 属性**，写了就 `Cannot assign to non-existent property "text"` → 说明文字改由 `FieldRow` 的标签承担。
+
+### `captureAutoHide` 真正接上
+以前只落盘。现在 `ScreenFlow` 自动复制成功且开着该开关时，`QTimer::singleShot(0, …)` 收掉浮层（`copyResult()` 里手动复制那条路径早就有同样逻辑）。
+
+### 验证
+- 构建 `[9/9]`；`--ui-shot --ui-page 3 --ui-section 6` 截图 `docs/ui-shots-qml/set_capture.png`（8 个导航项、截图高亮、四开关 + 三组步进）。
+- 注册表回灌：`overlay/zoom=5` + `capture/autoRunOnSelect=1` + `capture/autoCopy=1` → 截图显示 5× 与两个开关亮起（`set_capture_state_crop.png`），改回 3 / 0 / 0。
+- `studious_en.ts` 386 条、unfinished = 0；`--smoke … --engine local-mt` exit 0；`backend_selftest.exe` → `ALL CORE TESTS PASSED`。
+## 浮层设置页 + 翻译历史框架（2026-11-07）
+
+**做了什么**
+- 导航栏在「快捷键」与「配置」之间加第 6 项「浮层」（新图标 `resources/icons/overlay.svg`，白描边给 MultiEffect 上色）。页序变成：翻译 0 / 快捷键 1 / 浮层 2 / 配置 3 / 设置 4 / 外观 5；`Main.qml` 里两处写死的 `currentPage = 3` 跟着改成 4，`TranslatePage.onNavigateRequested` 里 `index >= 2 ? index + 1 : index` 平移一位（TranslatePage 那句 `navigateRequested(2)` 是上一版写死的配置页下标，这次不动那个文件）。
+- 新页 `frontend/qml/pages/OverlayPage.qml`（280 行）三张卡：放大镜（开关 / 四角分段 / 倍率 2–8）、遮罩（压暗 20–80）、操作（方向键微调开关 / 复制后延迟关闭 0–10 秒）。
+- C++ 新增 6 个设置项：`overlayMagnifier`、`magnifierCorner`（四值白名单）、`overlayDim`(20–80)、`overlayArrowNudge`、`overlayAutoHideDelay`(0–10)、`historyEnabled` + `historyDir`（只读解析）。`AppBackend` 全部走「比对 → 落盘 → `prefsChanged`」。
+- `CaptureOverlay`：压暗改用 `backend.overlayDim / 100`；放大镜按 `magnifierCorner` 拆成 x/y 两轴各自翻折（贴边只翻越界那轴，不会跳到对角）；方向键微调走 `Keys.onPressed` 内的门控函数（不用 `Keys.enabled`，否则同一 Item 的 Esc/Enter 会被一起关掉），1px / Shift 10px，只在框定未翻译时生效；进入 Selecting 时补一次 `requestActivate()`（原来只在 `Component.onCompleted` 抢焦点，第二次热键进来方向键会哑）。
+- `ScreenFlow` 两处「复制后自动关闭」都改成按 `overlayAutoHideDelay` 秒数 `QTimer::singleShot`（原来是写死 0）。
+- 翻译历史：设置 → 缓存 → 「历史对话」小节（开关 + 目录只读展示 + 打开目录 + 「待做」徽章 + 三行说明）。`AppBackend::historyDir()` 空串时解析成 `<资产根>/history`，`openHistoryDir()` 先 `mkpath` 再交给 `QDesktopServices`——目录归应用所有，不该弹「路径不存在」。
+- `TODO.md`：第 1/2/3 节里放大镜位置、放大镜开关、遮罩压暗、方向键微调、复制后延迟关闭全部落成「已完成」；新增第 11 节「翻译历史（框架已立，功能未做）」，把写入 JSON、浏览列表、容量剪枝三条列清楚。
+- `studious_en.ts`：lupdate 422 条（35 新增），全部补英文，unfinished = 0。
+
+**验证**
+- 构建 `[5/5] Linking CXX executable studious.exe`；`--smoke … --engine llm-cloud` 1366 ms 出「你好，世界！」。
+- `--ui-page 2` 中文/英文各一张截图，OCR 复核到「放大镜 / 遮罩 / 操作」三张卡、四角分段（右下/左下/右上/左上）、`3x`、`45%`、`Shift 10px`；英文版 rail 显示 Translate / Shortcuts / Overlay / Configuration / Settings，`Overlay` 在 88px 栏内不溢出。
+- 真机抓屏（记事本）验证压暗可调：`dim=70` 时选区外亮度 3.0~4.1（`dim=45` 时同点是 7.9~10.8），选区内仍 221~245。
+- 历史小节截图：`保存翻译历史` 开关、目录 `C:/Users/hua/AppData/Roaming/studious/assets/history`、`打开目录`、「待做」徽章都在；把注册表 `history/enabled` 置 1 后重启，开关显示为开。
+- 测试后注册表复位：`overlay/dim=45`、`magnifierCorner=bottomRight`、`magnifier=1`、`history/enabled=0`、`ui/language=zh`。
+
+**坑**
+- `components/` 里**没有** `NumStepper`（那是 `SettingsPage.qml` 的页内 component），`ThemedSpin` 才是 ConfigPage 的页内组件；两者 API 不同（`stepSize/onValueModified` vs `step/unit/modified(int)`）。新页里内联了一份 NumStepper，点击只发 `modified()`、不自己赋 `value`，否则会打断 `value: backend.x` 的绑定。
+- `--ui-page N` 的语义随页序变动（`2` 现在是浮层，设置 3→4、外观 4→5），旧截图脚本写死数字的会拍到别的页。
+- PowerShell 把 `stderr` 重定向成文件会写成 **UTF-16LE**，用 `Get-Content` 读回来再打印仍然是乱码；要 `[System.Text.Encoding]::Unicode` 读、且别指望控制台能显示中文。
+
+## 翻译取消（2026-11-07）
+
+**起因**：`AppBackend::cancel()` 是假的——只把 `m_running` 置 false 加一句状态文案，注释直接写着"TranslateJob 没有 cancel 接口"；`QuickTranslate::cancel()` 同样只是逻辑取消。界面上没有一处能真正停下翻译。
+
+**后端**
+- 四个引擎的 `bool m_cancelRequested` 全改成 `std::atomic_bool`（UI 线程置位、工作线程读，必须原子）。
+- `TranslatorRouter::cancel()`：逐个转发给注册的引擎。
+- **LLM 补齐三处检查点**（这是"点了取消还要等两分钟"的真凶）：
+  1. 批量 `while (cursor < pending.size())` 顶部（原本就有，但失败后走的是别的路）；
+  2. 批量失败后的**逐段补救**循环 —— 每段最多 5 次换 prompt 重试，13 段就是 65 次完整请求，这条路上原本一次都不查取消；
+  3. `postChat()` 的 5 次尝试循环顶部。
+  三处统一用 `cancelled` 标志跳出，最后返回「llm 翻译已取消」。
+
+**前端**
+- `TranslateJob` 重写：每次 `start()` 建一个 `TranslateCancelState{std::mutex, router 指针, atomic requested}` 和一个独立的 `QFutureWatcher`（旧的还在收尾时新的可以立刻开始）；`cancel()` 置标志 + `++m_generation`（迟到的结果回来时代号不符，直接丢，不会把"已取消"覆盖成"成功"）；另起 150 ms 定时器反复置位，因为各引擎每次 `translate` 入口都会清自己的标志。
+- `QuickTranslate::cancel()`：`m_job->cancel()` + 立刻 `m_busy = false`（不等作业收尾就能重新按）。
+- `AppBackend::cancel()`：真转 `m_job->cancel()`，状态写「已取消」。
+- `ScreenFlow::cancelTranslation()`：浮层专用，保住选区与已经贴出来的译文块，`++m_shotToken` 作废在途 OCR，phase 回 `Selecting`；`m_cancelling` 门闩吞掉取消时同步发出的 `finished`（否则会弹错误框）。
+- QML：浮层忙碌框加「取消 Esc」，Esc 改成三档（收菜单 / 取消翻译 / 关浮层）；翻译页状态行右侧加「取消」按钮（`visible: backend.running`）。
+
+**验证**
+- 取消：`phase=Translating words=13` → `cancelTranslation()` → 手上那次请求 1.7 s 后返回 → `[router] done llm ok=0 err=llm 翻译已取消` → 进程 8.9 s 内退出（修之前同一场景 213 s 才退）。
+- 不取消：15 块全流程 `phase=Showing`，`12925 ms`，`batch ok=1`。
+- `--smoke` 命中缓存 0.1 s；`backend_selftest.exe` → `ALL CORE TESTS PASSED`；`studious_en.ts` 425 条 / 0 unfinished。
+
+**坑**
+- 排查时在 `TranslateJob`/`TranslatorRouter`/`LlmTranslator` 里插了临时 `qInfo`（统一带 `TEMP-DIAG` 后缀），定位完按整行删掉，别留。
+- `stderr` 重定向到文件后**行缓冲不可靠**：进程还活着时可能只看到前半段日志，别据此判断"卡住不动"。
+- `--ui-shot` 的 `RECT_WAIT` 是"确认选区后还等多久"，把它调大再去量"总耗时"会把自己的等待算成程序卡死。
+- 截图取证要先把记事本 `ShowWindow(SW_RESTORE)` 再 `SetWindowPos(HWND_TOPMOST)`；被最小化时 topmost 不管用，OCR 会得到 `words=0`，看起来像"OCR 坏了"。
+- 隐藏主窗口后 `grabWindow()` 抓不到浮层（枚举里 `visible=0`，抓到的是主窗口），这种组合下用真实屏幕 BitBlt 又是一片黑（浮层是分层窗口）。要看浮层就去掉 `STUDIOUS_UI_HIDE_MAIN`。
+
+**遗留**
+- 在飞的那一次 HTTP 请求仍不可打断（同步 `HttpClient::send`），取消后最多再等一个请求的时长。
+- Web / 本地 MT 只在段落循环顶部查一次取消，各自的重试/decode 没查。
+- 翻译页至今没有"开始翻译"的入口（`backend.translate()` 没有任何 QML 调用点），所以主窗口里的「取消」平时不可见。
+
+## 浮层工具栏「设置」→ 独立设置窗口（2026-11-07）
+
+**用户要求**：截图翻译工具栏加齿轮；点它打开一个**独立的**小窗（模板的二级设置），按功能分三节
+（翻译小窗口 / 截图翻译 / 实时翻译）；截图翻译节里要有「选完直接翻译」。补充澄清：点齿轮时
+如果正在框选，要**先收起框选**再弹窗。
+
+**做法**
+- `frontend/qml/overlay/CaptureSettingsPanel.qml`：`Window` + `Qt.Dialog | FramelessWindowHint |
+  WindowStaysOnTopHint | NoDropShadowWindowHint`、`transientParent: null`、透明底，圆角与描边由内部
+  `card` 画（328 宽，高度由内容撑）。`openAt(screenX, screenY, anchorWidth)`：右边缘对齐锚点、
+  向下展开、下面放不下翻到上面、最后按 `Screen.desktopAvailableWidth/Height` 夹边；`openAt` 里才写
+  `x/y`（用函数而不是绑定，因为要按"点下去那一刻"的锚点摆）。
+- 三节：翻译小窗口（两行 + `Badge`「待做」，小窗界面还没做）／截图翻译（真控件：选完直接翻译、
+  保留原文标注、自动复制译文、译文不透明度、译文字号、复制后延迟关闭）／实时翻译（两行 + 「待做」）。
+- `frontend/qml/overlay/CaptureOverlay.qml`：齿轮 `onClicked` 只发
+  `settingsRequested(screenX, screenY, anchorWidth)`（屏幕坐标 = `overlay.x + ovbar.x + barRow.x + gearSlot.x`，
+  不许用 `mapToItem`），删掉原来的窗内 `settingsOpen` 面板与它带来的 Esc 第四档、点空白收起、phase 清理。
+- `frontend/qml/Main.qml`：`CaptureSettingsPanel { id: captureSettings }` 挂在根窗口下；
+  `captureOverlay.onSettingsRequested` → 先 `screenFlow.cancel()`（收起框选）→ `captureSettings.openAt(...)`。
+
+**为什么不能画在浮层里**：浮层是 `WS_EX_NOACTIVATE` + `WDA_EXCLUDEFROMCAPTURE` 的全屏分层窗口 ——
+画在里面的东西会跟着选区被搬走、关掉浮层一起消失、`CopyFromScreen` 也拍不到。第一版就是窗内面板，
+真机整屏截图里浮层与小窗**都**不见了，才改成独立窗口。
+
+**验证**
+- `STUDIOUS_UI_EMIT="gearSlot:clicked:x"` + `STUDIOUS_UI_SHOT="captureSettingsPanel"` →
+  `[ui-shot] after emit: phase=Idle`（框选确实先收了）+ `saved -> capture_settings_win.png (492x846 @1.5x, logical 328x564)`。
+- 真机整屏 `CopyFromScreen` → `docs/ui-shots-qml/screen_with_panel.png`：小窗浮在浏览器之上、位置贴着
+  原来齿轮那一带；浮层已退出（分层窗口本来就不进截图）。
+- 第一版给的是 `Qt.Window` 不置顶 → 真机被浏览器盖住，看起来像"点了没反应"；而且 `Start-Process
+  -WindowStyle Hidden` 起的进程抢不到前台，`requestActivate()` 无效。加 `WindowStaysOnTopHint` + `raise()`
+  之后才稳定可见。
+
+**坑**
+- `STUDIOUS_UI_HIDE_MAIN=1` 原来用 `main->hide()`，而 `CaptureOverlay` 是声明在 `Main.qml` 里的 Window、
+  会被 Qt 当成主窗口的 transient 子窗口 —— 父窗口一 hide 浮层一起不可见，`grabWindow()` 就回退抓主窗口
+  （1680x1080 而不是 2561x1601）。改成 `setPosition(-20000, -20000)`。
+- `STUDIOUS_UI_SHOT` 现在认任意 `objectName`（`overlay` 是老名字，映射到 `captureOverlay`），可以单独抓小窗。
+
+### 追加：去掉两节占位、加「更多设置」、标题可拖动（2026-11-07）
+
+**用户要求**：把小窗里的「翻译小窗口」「实时翻译」两节去掉（等对应功能做了再放回设置里）；
+加一个「更多设置」用来打开主界面的「浮层」页；小窗目前不能拖动，补上。
+
+**改动**
+- `frontend/qml/overlay/CaptureSettingsPanel.qml`：删掉两节占位（`小窗不透明度`/`小窗字号` 两行 +
+  `实时翻译` 的 `刷新间隔`/`只在内容变化时翻译` + 两句占位说明 + 两条分隔线），现在只剩「截图翻译」一节。
+  新增 `signal moreSettingsRequested()` 与页脚整行按钮「更多设置 ›」（`surfaceLow` 底 + `outline` 边，
+  悬浮 `surfaceHighest`）。标题行改成「标题 + 拖拽层」：`Item` 里放 `Text` 与 `MouseArea`
+  （`Qt.SizeAllCursor`），`onPressed` 存 `grabX/grabY` 并调 `panel.startSystemMove()`，
+  返回 false（拿不到系统拖拽）时在 `onPositionChanged` 里按 `x/y` 跟随 —— 不会出现"按住标题没反应"。
+- `frontend/qml/Main.qml`：`captureSettings.onMoreSettingsRequested` → 收小窗 → `root.show()/raise()/
+  requestActivate()` → `root.currentPage = 2`（浮层页）。
+
+**为什么不手工只算坐标**：`startSystemMove()` 由系统接管（跨屏、贴边、不抖）；确认过
+`QWindow::startSystemMove()` 在 `qwindow.h` 里、且 QML 侧在 `qml/QtQuick/plugins.qmltypes` 里有导出，
+Qt 6.12 可用；手工跟随只作为兜底。
+
+**验证**：构建通过（`[11/11] Linking`）；`--ui-shot`（输出到 `%TEMP%`）走「起浮层 → 框选 → 点齿轮」
+全链路，stderr 零 QML 错误，`after emit: phase=Idle`（框选先收），小窗尺寸 328×328（两节删掉后变矮）。
+`update_translations` → 436 条（1 new「更多设置」/ More settings，10 条 obsolete 保留），`unfinished = 0`。
+
+### 追加：按钮改成「设置」文字、点设置不打断这一单、页脚样式收统一（2026-11-07）
+
+- `CaptureOverlay.qml`：工具栏那个按钮的 `text` 从 `⚙` 改成 `qsTr("设置")`（英文界面是 Settings），`objectName` 仍是 `gearSlot`（旧的取证脚本还能用）。
+- `Main.qml`：`onSettingsRequested` 里去掉 `screenFlow.cancel()` —— 点设置不再把框选扔掉；`onClosed` 补 `captureOverlay.requestActivate()`，把键盘还给浮层（浮层是 NOACTIVATE，不抢就没有方向键与 Esc）。
+- `CaptureSettingsPanel.qml`：页脚「更多设置」从带边框的按钮改成跟上面各行同款的无边框行（强调色文字 + `›`，悬浮铺 `surfaceHighest`，圆角 rXs），左右缩进改 Theme.s1 与各行文字对齐。
+
+**验证**：构建通过；`--ui-shot`（输出到 %TEMP%）走「起浮层 → 框选 → 点设置」，stderr 零 QML 错误，`after emit: phase=Selecting` —— 选区确实还留着（改之前是 Idle）。`studious_en.ts` 437 条、`unfinished = 0`。
+
+### 追加：设置小窗改成浮层的子窗口（2026-11-07）
+
+用户要求：不要独立窗口，改成子窗口。
+
+- `CaptureSettingsPanel.qml`：`flags` 从 `Qt.Dialog | Frameless | StaysOnTop | NoDropShadow` 改成
+  `Qt.Tool | Frameless | NoDropShadow`，删掉 `transientParent: null`；`openAt()` 只算 `x/y`，
+  **不再自己 `visible = true` / `raise()`** —— 显示与否统一由宿主的 `settingsOpen` 管。
+- `CaptureOverlay.qml`：拿回 `property bool settingsOpen` 与 `signal moreSettingsRequested()`；
+  「设置」按钮改成开关（`settingsOpen = !settingsOpen`，打开时调 `settingsPanel.openAt(...)`）；
+  文件末尾实例化 `CaptureSettingsPanel { visible: overlay.settingsOpen && overlay.engaged;
+  onClosed: overlay.settingsOpen = false; onMoreSettingsRequested: { 收起自己 → overlay.moreSettingsRequested() } }`；
+  Esc 恢复四档、点空白处也收起小窗、phase 回 Idle 一起清。
+- `Main.qml`：删掉根窗口下的 `CaptureSettingsPanel` 实例与 `onSettingsRequested`（子窗口自己摆位置），
+  只保留 `captureOverlay.onMoreSettingsRequested` → `screenFlow.cancel()` + 主窗口 `show/raise` + `currentPage = 2`。
+
+**为什么归属窗口不需要 StaysOnTop**：被 owner 拥有的窗口在 Windows 上恒在 owner 之上，浮层自己置顶，
+小窗自然跟着在它上面；再加置顶反而会盖住系统弹窗、且关浮层时容易留下一个孤儿置顶窗口。
+
+**验证**：构建通过；`--ui-shot`（输出到 %TEMP%）走「起浮层 → 框选 → 点设置」，stderr 零 QML 错误，
+小窗 328×328 正常渲染、`after emit` 之后浮层仍是 `Selecting`（选区没被扔掉）。
+
+### 追加：小窗落点让开工具栏（2026-11-07）
+
+用户报「从下方出现会覆盖工具栏，从上方出现没问题」。原来落点是 `screenY + s2*2`（从「设置」按钮**上沿**往下 16px），
+而按钮本身就在 44px 高的工具栏里 —— 小窗顶边还压在工具栏下沿以内。改成按「按钮下沿」算：
+
+- `openAt(screenX, screenY, anchorWidth, anchorHeight)` 新增第四参（`CaptureOverlay` 传 `gearSlot.height`，缺省 30）。
+- 向下：`py = screenY + barH + gap`；下面放不下才翻到 `screenY - height - gap`；最后夹进 `Screen.desktopAvailableHeight`。
+- 实测两次（1024 逻辑高、DPR 1.5）：选区 (300,300,600,200) → 工具栏在下，小窗 y=557（工具栏 508~552，留 5px）；
+  选区 (300,760,600,200) → 工具栏在上面被挤到下方，小窗翻到 y=648（底边 976，工具栏 978 起），两向都不压工具栏。
+- `[ui-shot] window` 那行补了 `at (x,y)`，以后量位置不用截图猜。
+
+### 追加：引擎菜单加状态点、缺资产不可选（2026-11-07）
+
+- `CaptureOverlay.qml` 新增 `engineStatusMap`（从 `backend.engineStatuses` 绑出来，不拷贝，状态一变圆点就跟着变）、
+  `engineStateOf(code)`、`engineUsable(code)`、`engineDotColor(code)`；菜单行右边画 8px 圆点
+  （绿 `Theme.good` / 黄 `Theme.caution` / 红 `Theme.danger`），不可用的行 `opacity: 0.45` 且
+  `TapHandler.enabled: false`、光标恢复箭头。菜单宽 176 → 196 给圆点留位置。
+- 「自动」那一行看全体：只要还有一个引擎不是缺资产就是绿的。
+- 打开菜单前先 `backend.refreshEngineStatuses()`，避免用上一单的旧状态。
+- 取证：本机四个引擎都是 ready → 5 个绿点（x 968..978，y 830/882/932/984/1034 物理，行距 32 逻辑）。
+  临时把 local-mt 强制成 missing-assets 复测：第 5 个点渲成 `#CA888D` =
+  `0.45 × #B3261E` 叠在 `#DFD8EA` 上，正好是「红点 + 45% 灰化行」，随后已还原。
+### 翻译历史：自动存档 + 三分库 + 合并时间线（2026-11-07）
+
+- 需求：历史开启时不点按钮也自动存；小窗 / 截屏 / 实时分三个库；展示时三库按时间合并；实时翻译「开启到关闭」算一组写一条。
+- C++：`AppBackend` 撤掉单库成员，改 `m_recordsCapture/m_recordsMini/m_recordsLive`；
+  `recordsFor(kind)` 懒建 `%APPDATA%\studious\records\{capture,mini,live}.db`；
+  `persistRecord()` 先读 `settings/history/enabled`，关着直接不写（存档全是自动的，开关是唯一总闸）；
+  `historyRecords(limit)` 三库各取满 limit 再合并按 `createdAt` 倒序切前 limit。
+- 实时分组：`beginLiveSession()` / `appendLiveSession(blocks)` / `finishLiveSession()`，
+  append 时与上一条 `original` 相同就跳过（实时刷新会重复送同一行），finish 才落一条。
+- 截屏自动存档挂在 `ScreenFlow` 翻译成功回调里（`blocksChanged` 之后、`finished` 之前，
+  因为 `saveToRecords` 要读 `m_blocks`），工具栏的「保存」按钮删掉。
+- 设置·缓存 → 历史对话：`最近 %1 条` + 刷新 + 表头（时间/来源/摘要）+ 50 行列表；
+  行间距自管（外层 ColumnLayout 的 spacing 会把行撑得很散），行底 1px `outlineVariant` 0.5 分隔线。
+- 坑：替换说明文字时从 `FieldRow` 起替换，漏掉它上面那条旧 `Text`，界面上会连着出现两段说明 —— 已删旧的。
+- 取证：history=1 → 记事本跑一屏 → `capture.db` 落地 1 条；history=0 重跑 → 条数与时间戳不变（开关卡住）。
+  另用 python `sqlite3` 往 mini/live 各塞 2/1 条模拟记录，列表合并显示「最近 4 条」并按时间倒序，
+  来源列正确区分「实时翻译 / 小窗翻译 / 截屏翻译」（`docs/ui-shots-qml/settings_history_multi.png`）。测试数据已清空、`history/enabled` 复位 0。
+- 遗留：`saveMiniRecord` 与三个 live 接口尚无调用点（B/C 页未做），未做运行期验证；`%APPDATA%\studious\records.db` 单库遗留文件待迁移时清理。

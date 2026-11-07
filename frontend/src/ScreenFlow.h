@@ -86,6 +86,11 @@ public:
     Q_INVOKABLE void confirmSelection(const QRect &region);
     // 3) 取消（Esc / 工具栏「取消」）：回 Idle，丢掉这一次的所有中间状态。
     Q_INVOKABLE void cancel();
+
+    // 打断当前这一单（识别中 / 翻译中），但**保住选区与已有贴纸**：
+    // 用户可能只是想换个引擎再翻一次，不愿重新框选。
+    // 与 cancel() 的区别：cancel() 是「结束整个截屏流程」，这个是「这一单不做了」。
+    Q_INVOKABLE void cancelTranslation();
     // 4) 浮层工具栏的三个动作。
     Q_INVOKABLE void toggleOriginal();
     Q_INVOKABLE void retranslate();
@@ -100,8 +105,13 @@ public:
     // QML 的 Image 读不到像素，色值只能由这边给；越界返回 ok=false。
     // 返回 {ok, x, y, hex, r, g, b}，hex 可直接当颜色字符串用。
     Q_INVOKABLE QVariantMap pixelInfoAt(int x, int y) const;
+
     Q_INVOKABLE QRect physicalSelection() const;   // 物理像素，浮层定位用
     Q_INVOKABLE QRect selectionScreenRect() const; // 选区在虚拟桌面里的物理坐标
+
+    // 开发走查用：对一张本地图片跑一次 OCR，把每个框的文本与置信度打到 stderr。
+    // 返回 "N word(s)" / "unavailable: …" / "image"，只用于命令行验证模型装没装对。
+    Q_INVOKABLE QString ocrTest(const QString &imagePath);
 
     // 仅截图走查用：塞三段假译文，看 A4/A5 的译文块排版对不对。
     // 不会出现在任何正式路径里（只有 --ui-shot 的调试钩子会调它）。
@@ -151,6 +161,9 @@ private:
     QVariantList m_lastWords;      // OCR 原始结果，重新翻译时不再 OCR
     bool m_showOriginal = false;
     bool m_busy = false;
+    // 用户点了「取消」：QuickTranslate::cancel() 会同步发一个「已取消」的 finished，
+    // 那不是错误，别让它把浮层推进错误态。
+    bool m_cancelling = false;
     quint64 m_shotToken = 0;
 
     std::unique_ptr<studious::ocr::OcrEngine> m_ocr;

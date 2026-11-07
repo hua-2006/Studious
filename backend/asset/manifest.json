@@ -284,48 +284,54 @@
         "type": "model",
         "family": "ppocr",
         "quant": "",
-        "version": "2024-11",
-        "size": 0,
-        "sha256": "",
-        "archive": "zip",
-        "urls": [],
+        "version": "ppocrv4",
+        "size": 4745517,
+        "sha256": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+        "archive": "",
+        "urls": [
+          "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx"
+        ],
         "files": [
           "det.onnx"
         ],
         "requiresRamGB": 1,
-        "note": "【本地 OCR · 检测】PP-OCRv4 DBNet 文本检测模型（det.onnx）。输入 1×3×H×W（H/W 为 32 的倍数），输出文本区域概率图。下载地址与 sha256 **故意留空**（仓库里没有可发布的真实资产）：留空会被 Downloader 判为占位并拒绝安装，而不是假装装好了。"
+        "note": "【本地 OCR · 检测】PP-OCRv4 DBNet 文本检测模型（det.onnx，4.5 MB）。输入 1×3×H×W（H/W 为 32 的倍数），输出文本区域概率图。权重来自 RapidOCR 在 Hugging Face 上的镜像（SWHL/RapidOCR，PP-OCRv4 目录）。"
       },
       {
         "id": "ocr.rec.ppocrv4",
         "type": "model",
         "family": "ppocr",
         "quant": "",
-        "version": "2024-11",
-        "size": 0,
-        "sha256": "",
-        "archive": "zip",
-        "urls": [],
+        "version": "ppocrv4",
+        "size": 10857958,
+        "sha256": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+        "archive": "",
+        "urls": [
+          "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx"
+        ],
         "files": [
           "rec.onnx"
         ],
         "requiresRamGB": 1,
-        "note": "【本地 OCR · 识别】PP-OCRv4 CRNN + CTC 识别模型（rec.onnx）。输入 1×3×48×320（右侧补 0），输出 [1,T,C] 概率，C = 1(blank) + 字典行数 + 1(空格)。下载地址与 sha256 **故意留空**，安置未完成时 OCR 直接不可用，不返回假结果。"
+        "note": "【本地 OCR · 识别】PP-OCRv4 CRNN + CTC 识别模型（rec.onnx，10.4 MB）。输入 1×3×48×320（右侧补 0），输出 [1,T,C] 概率，C = 1(blank) + 字典行数 + 1(空格)。"
       },
       {
         "id": "ocr.dict.ppocrv4",
         "type": "model",
         "family": "ppocr",
         "quant": "",
-        "version": "2024-11",
-        "size": 0,
-        "sha256": "",
-        "archive": "zip",
-        "urls": [],
+        "version": "ppocrv4",
+        "size": 26250,
+        "sha256": "a1c84d9bdb9ab29043c58896224d32941783eb821629618416dcb08f12886492",
+        "archive": "",
+        "urls": [
+          "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v2.10.0/ppocr/utils/ppocr_keys_v1.txt"
+        ],
         "files": [
           "ppocr_keys_v1.txt"
         ],
         "requiresRamGB": 0,
-        "note": "【本地 OCR · 字典】PP-OCRv4 字符表（ppocr_keys_v1.txt，每行一个字符，约 6623 行）。索引 0 是 CTC blank，字符 id = 行号 + 1；必须与 rec.onnx 配对，混用别的版本会导致解码错位。下载地址与 sha256 **故意留空**。"
+        "note": "【本地 OCR · 字典】PP-OCRv4 字符表（ppocr_keys_v1.txt，6623 行）。索引 0 是 CTC blank，字符 id = 行号 + 1；必须与 rec.onnx 配对，混用别的版本会导致解码错位。地址钉在 PaddleOCR v2.10.0 标签上，避免 main 分支改动后哈希对不上。"
       }
     ]
   },

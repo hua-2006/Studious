@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "contract/ITranslator.h"
 
 #include <QSet>
@@ -113,7 +115,7 @@ private:
     // 多语言 token 表缓存（惰性读一次 vocab.json；mutable 因为 resolve()/supports() 是 const）。
     mutable bool m_mulTokensLoaded = false;
     mutable QSet<QString> m_mulTokens;
-    bool m_cancelRequested = false;
+    std::atomic_bool m_cancelRequested{false};
 };
 
 } // namespace studious::translate

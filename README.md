@@ -6,8 +6,8 @@
 
 跨平台截图翻译工具（Windows 优先）。
 
-> **状态：翻译后端 + 桌面界面已完成（当前版本 0.9.0-separate）；
-> 平台层（抓屏 / 框选 / 浮层 / 全局热键 / OCR）接口已定，实现尚未开始。**
+> **状态：翻译后端 + 桌面界面 + 截屏翻译（框选 / OCR / 译文浮层 / 全局热键）已完成（当前版本 0.9.2-separate）；
+> 小窗翻译与实时翻译尚未开工。**
 
 ---
 
@@ -25,7 +25,11 @@
 | **翻译缓存** | SQLite 落地，键含引擎 / 模型 / 采样参数指纹，换模型不串味 |
 | **语言检测** | 14 种语言，无需外部模型 |
 | **资产系统** | 清单验签（bundle 内）、多源下载、断点续传、原子安装、删除、按文件导入 |
-| **桌面界面** | Qt Quick（QML）五页：翻译 / 快捷键 / 配置 / 设置 / 外观 |
+| **桌面界面** | Qt Quick（QML）六页：翻译 / 快捷键 / 浮层 / 配置 / 设置 / 外观 |
+| **截屏翻译** | 全局热键框选 → OCR → 译文贴纸浮在原文上；放大镜、八向手柄、方向键微调、选完即译、自动复制、复制后延迟关闭 |
+| **OCR** | PP-OCRv4（DBNet 检测 + CRNN/CTC 识别 + 字符表），按空白列切片处理宽行，词级坐标还原成行供贴纸对齐 |
+| **翻译记录** | 截屏 / 小窗 / 实时三个库（`capture.db` / `mini.db` / `live.db`），历史开启时自动存档，界面按时间合并展示 |
+| **翻译取消** | 真正可打断：随时取消，LLM 逐段补救与重试路径也会立刻停 |
 | **引擎配置** | 分段控件分 Web / 云端 LLM / 本地 LLM / 本地 MT，带状态点，与引擎列表联动 |
 | **主题** | 由强调色（seed）按 OKLab 混色推导整套配色，明暗两套，可持久化 |
 | **桌面集成** | 开机自启（Windows 注册表 / Linux XDG autostart）、最小化到托盘、关闭到托盘、单实例 |
@@ -37,11 +41,15 @@
 
 | 项 | 现状 |
 |---|---|
-| 截图抓取 / 框选交互 / 结果浮层 / 全局热键 | 只有 `frontend/src/platform/IPlatform.h` 接口与 `NullPlatform` 空实现 |
-| OCR | 同上，接口预留（`recognize()` 已定好，实现留空） |
-| 外观页 6 项、快捷键页热键表 | 界面在，未接后端（橙色「未实现」标记） |
+| 小窗翻译（B 页） | 数据接口已就位（`saveMiniRecord()`、热键 `mini` 的 `launchRequested` 信号），界面未做 |
+| 实时翻译（C 页） | 同上（`beginLiveSession` / `appendLiveSession` / `finishLiveSession` 已实现，未接界面） |
+| 主界面翻译入口 | 翻译页双语栏目前只能看结果，原文框旁还没有「开始翻译」按钮 |
+| 翻译字号 | 译文栏字号写死，只有全局缩放倍率（`TODO.md` 第 10 节） |
+| 快捷键页 | 三组热键已能注册，页面上仍是占位 |
+| 外观页 | 强调色 / 明暗 / 字体 / 缩放已通，剩余项见 `TODO.md` |
+| Linux 抓屏 | X11 无 `WDA_EXCLUDEFROMCAPTURE` 等价物，Wayland 三者皆无；实现走 `NullPlatform` |
 
-界面上没有接后端的控件会显示橙色「未实现」标记，方便逐项补齐。
+界面上没有接后端的控件会显示橙色「未实现」标记，方便逐项补齐；逐条状态见 [`TODO.md`](TODO.md)。
 
 ---
 
@@ -51,19 +59,19 @@
 
 ```
 frontend/   界面层（Qt Quick / QML + 少量 C++ 桥）
-            qml/          页面与组件
-            src/          AppBackend（QML 与后端的唯一桥）、主题、设置
-            src/platform/ 截图 / OCR / 浮层 / 热键的接缝（尚未实现）
-                          Desktop 已实现：开机自启 / 托盘 / 单实例 / 关闭行为
-backend/    翻译引擎（C++20 + Qt Core，平台无关）
-            contract / router / translators / mt / asset / cache / i18n
+            qml/          页面、组件、浮层（overlay/）
+            src/          AppBackend（QML 与后端的唯一桥）、主题、设置、抓屏编排
+            src/platform/ 平台接缝：抓屏 / 浮层排除 / 全局热键 / 托盘 / 单实例 / 进程兜底
+backend/    翻译引擎 + OCR（C++20 + Qt Core，平台无关）
+            contract / router / translators / mt / ocr / asset / cache / i18n
 ```
 
 **边界约定：**
 
-- `backend/` 不接收图像、不返回坐标、不含平台相关头文件。OCR 属于前端。
+- `backend/` 不含任何平台相关头文件：`windows.h` 只允许出现在 `frontend/src/platform/` 的 `.cpp` 里。
+  OCR 在 `backend/src/ocr/`，输入是内存里的 `QImage`，不认识窗口、句柄与显示器。
 - QML 只通过 `AppBackend` 访问后端，不直接引用 `studious::*` 类型。
-- 平台差异（截图 / 热键 / 浮层）全部收在 `frontend/src/platform/` 后面，
+- 平台差异（抓屏 / 热键 / 浮层排除）全部收在 `frontend/src/platform/` 后面，
   由运行时能力查询驱动界面，不用编译期 `#ifdef`。
 
 ---
@@ -152,15 +160,18 @@ font/centent-v1.530/LXGWWenKaiMono-*.ttf               等宽字体
 .\frontend\build\studious.exe
 ```
 
-模型与运行时通过「设置 → 资产」按需下载（LLM 与本地 MT 分两类，支持带进度的下载与卸载）。
+模型与运行时通过「设置 → 资产」按需下载（LLM / 本地 MT / 视觉·OCR 三类，支持带进度的下载、断点续传与卸载）。
 
 ### 命令行
 
 ```powershell
 # 文本翻译（不开 GUI）
-studious.exe --smoke "Hello, world!" --to zh --engine llm
-#   可选：--from <lang> --provider <google|mymemory> --cache on|off
-#         --local --local-gpu on|off --local-model <file>
+studious.exe --smoke "Hello, world!" --to zh --engine llm-cloud
+#   --engine  自动 | web | llm-cloud | llm-local | local-mt（默认走设置里的优先级）
+#   --from <lang> --to <lang>        不给 --to 就用设置里的目标语言
+#   --provider <google|mymemory>     Web 来源
+#   --cache on|off
+#   --local --local-gpu on|off --local-model <file>    本地 LLM
 
 # 模型目录
 studious.exe --list-models
@@ -175,6 +186,11 @@ studious.exe --assets-cli backend\asset\manifest.json
 studious.exe --asset-download backend\asset\manifest.json <assetId>
 ```
 
+### 截屏翻译
+
+默认热键 `Ctrl+Alt+S`（可在「设置 → 通用」改）：框选区域 → 松手后点工具栏的「翻译」（或在浮层「设置」小窗里打开「选完直接翻译」）→ 译文贴纸盖在原文上。
+第一次用要先在「设置 → 资产 → 视觉 / OCR」下载 PP-OCRv4 的三件套（约 15 MB）。
+
 ---
 
 ## 版本信息
@@ -182,25 +198,24 @@ studious.exe --asset-download backend\asset\manifest.json <assetId>
 版本号 / 渠道名读仓库根的 `version.json`；提交号在构建期从 git 取，Qt 版本与架构运行期取。
 发版只需改 `version.json`，再打一个 `vX.Y.Z` 标签。
 
-当前：`0.9.0-separate`（separate/分离版）。
+当前：`0.9.2-separate`（separate/分离版）。
 
 ---
 
 ## 路线图
 
-三步主线：**小窗翻译 → 截图翻译 → 实时翻译**。前两步共用同一套平台层与 OCR，
-所以顺序不能倒过来做。
+三步主线：**小窗翻译 → 截图翻译 → 实时翻译**。三者共用同一套平台层与 OCR。
 
-| 阶段 | 事项 | 依赖 |
+| 阶段 | 事项 | 状态 |
 |---|---|---|
-| **M1** | 平台层落地：整屏/区域抓图、交互式框选遮罩、结果浮层、全局热键、多屏与高 DPI | 无（`IPlatform` 接口已定） |
-| **M2** | 小窗翻译：置顶浮动小窗、热键唤起、回车翻译、失焦/ESC 收起 | M1（热键） |
-| **M3** | OCR：截图 → 文本，中英为主要目标，返回词级坐标供浮层对齐 | 资产系统（模型按需下载） |
-| **M4** | 截图翻译：热键框选 → OCR → 小窗出译文，可复制、可重识别 | M2 + M3 |
-| **M5** | 实时翻译：锁定屏幕区域，按增量做 OCR + 翻译，浮层贴边显示 | M4 |
-| P1 | 外观页剩余 6 项、快捷键页热键自定义 | M1 |
-| P2 | Linux 平台实现（X11 抓图 / xdg-desktop-portal） | M1 |
-| P3 | 预翻译与缓存导入导出 | — |
+| **M1** | 平台层落地：整屏/区域抓图、交互式框选遮罩、结果浮层、全局热键、多屏与高 DPI | ✅ 已做（Windows） |
+| **M2** | 小窗翻译：置顶浮动小窗、热键唤起、回车翻译、失焦/ESC 收起 | 待做 |
+| **M3** | OCR：截图 → 文本，返回词级坐标供浮层对齐 | ✅ 已做 |
+| **M4** | 截图翻译：热键框选 → OCR → 浮层出译文，可复制、可重识别 | ✅ 已做 |
+| **M5** | 实时翻译：锁定屏幕区域，按增量做 OCR + 翻译，浮层贴边显示 | 待做 |
+| P1 | 快捷键页热键自定义、外观页剩余项、翻译字号 | 待做 |
+| P2 | Linux 平台实现（X11 抓图 / xdg-desktop-portal） | 待做 |
+| P3 | 预翻译与缓存导入导出 | 待做 |
 
 ---
 

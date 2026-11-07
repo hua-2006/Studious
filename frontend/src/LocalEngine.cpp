@@ -182,12 +182,24 @@ QStringList LocalEngine::availableModels()
     const QFileInfoList entries =
         dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort);
 
+    // 同一个 models/ 目录还躺着视觉模型的单文件资产（ocr.det/rec 的 .onnx、字典 .txt）。
+    // 它们是给 OcrEngine 用的，不是 llama 权重，选了只会让 llama-server 启动失败，
+    // 所以这里按扩展名挡掉。
+    const QStringList nonWeightSuffixes = { QStringLiteral("onnx"),
+                                            QStringLiteral("txt"),
+                                            QStringLiteral("json"),
+                                            QStringLiteral("spm") };
+
     QStringList names;
     names.reserve(entries.size());
     for (const QFileInfo &entry : entries) {
-        if (entry.isFile()) {
-            names << entry.fileName();
-        }
+        if (!entry.isFile())
+            continue;
+        if (entry.fileName().startsWith(QLatin1String("ocr.")))
+            continue;
+        if (nonWeightSuffixes.contains(entry.suffix().toLower()))
+            continue;
+        names << entry.fileName();
     }
 
     // 稳定且确定的顺序：先大小写不敏感，再按原始串兜底（避免只差大小写时顺序随平台变）。

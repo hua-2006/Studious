@@ -76,6 +76,7 @@ Strings makeChinese()
     t.translate.runHint = QStringLiteral("点击开始翻译 · 翻译中可取消");
     t.translate.running = QStringLiteral("翻译中…");
     t.translate.cancelHint = QStringLiteral("点击取消");
+    t.translate.cancelled = QStringLiteral("已取消");
     t.translate.passthroughBadge = QStringLiteral("这是原文");
     t.translate.copySelection = QStringLiteral("复制选中");
     t.translate.statusLine = QStringLiteral("状态");
@@ -318,6 +319,7 @@ Strings makeEnglish()
     t.translate.runHint = QStringLiteral("Click to translate · click again to cancel");
     t.translate.running = QStringLiteral("Translating…");
     t.translate.cancelHint = QStringLiteral("Click to cancel");
+    t.translate.cancelled = QStringLiteral("Cancelled");
     t.translate.passthroughBadge = QStringLiteral("Source text");
     t.translate.copySelection = QStringLiteral("Copy selection");
     t.translate.statusLine = QStringLiteral("Status");

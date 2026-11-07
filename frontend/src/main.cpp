@@ -1477,6 +1477,56 @@ int main(int argc, char *argv[])
         QTimer::singleShot(700, &loop, &QEventLoop::quit);
         loop.exec();
 
+        // 截图取证专用：抓屏之前先把主窗口挪出可视区。真实热键路径里主窗口本来就压在
+        // 别的程序后面，而 --ui-shot 会把它端到最前，抓到的整屏就变成"主界面盖住
+        // 目标窗口"，OCR 出来全是自己的 UI 文字。
+        //
+        // 注意这里**不能 hide()**：CaptureOverlay 是声明在 Main.qml 里的 Window，
+        // 会被 Qt 当成主窗口的 transient 子窗口 —— 父窗口一 hide，浮层跟着不可见，
+        // 于是 grabWindow() 只能回退去抓主窗口（踩过：截图尺寸 1680x1080 而不是 2561x1601）。
+        // 挪到屏幕外面既能避开抓屏，又能让浮层继续活着。
+        if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("screenFlow")) {
+            if (qEnvironmentVariableIsSet("STUDIOUS_UI_HIDE_MAIN")) {
+                if (auto *main = qobject_cast<QQuickWindow *>(window))
+                    main->setPosition(-20000, -20000);
+            }
+            QEventLoop settle;
+            QTimer::singleShot(400, &settle, &QEventLoop::quit);
+            settle.exec();
+        }
+
+        // 选区可以"单独在最后给"，也可以在调用序列中间用 `rect` 这个词占位。
+        // 验证"翻译中途取消"必须用后者：begin -> rect(开跑) -> cancelTranslation。
+        bool rectApplied = false;
+        auto applyUiRect = [&]() {
+            if (rectApplied)
+                return;
+            rectApplied = true;
+            const QByteArray uiRect = qgetenv("STUDIOUS_UI_RECT");
+            if (uiRect.isEmpty())
+                return;
+            const QList<QByteArray> parts = uiRect.split(',');
+            if (parts.size() != 4)
+                return;
+            const QRect rect(parts[0].toInt(), parts[1].toInt(),
+                             parts[2].toInt(), parts[3].toInt());
+            QEventLoop rectLoop;
+            QMetaObject::invokeMethod(screenFlow, "confirmSelection",
+                                      Qt::DirectConnection, Q_ARG(QRect, rect));
+            const int rectWaitMs = [] {
+                bool ok = false;
+                const int ms = qEnvironmentVariableIntValue("STUDIOUS_UI_RECT_WAIT", &ok);
+                return ok && ms > 0 ? ms : 4000;
+            }();
+            QTimer::singleShot(rectWaitMs, &rectLoop, &QEventLoop::quit);
+            rectLoop.exec();
+            qWarning("[ui-shot] confirmSelection done: phase=%s words=%d blocks=%d status=%s",
+                     qUtf8Printable(screenFlow->property("phase").toString()),
+                     screenFlow->property("blocks").toList().size(),
+                     screenFlow->property("blocks").toList().size(),
+                     qUtf8Printable(screenFlow->property("statusText").toString()));
+        };
+
         // STUDIOUS_UI_CALL=<Q_INVOKABLE>：走查"点下去之后"的样子用（通知条、弹窗、
         // 列表展开态）。只在这个截图分支里生效，正式启动路径完全不看这个变量。
         const QByteArray uiCall = qgetenv("STUDIOUS_UI_CALL");
@@ -1490,23 +1540,40 @@ int main(int argc, char *argv[])
             if (qgetenv("STUDIOUS_UI_TARGET") == QByteArray("screenFlow"))
                 uiTarget = screenFlow;
             // 一次要按顺序触发好几个动作（先 begin() 再 debugSampleBlocks()）时用 `|` 分隔。
+            // 每一项可以带 `@毫秒` 后缀，表示"这一步做完后等多久"（默认 400）。
+            // 验证"翻译中途取消"就得靠它：begin@4000 等 OCR+翻译跑起来，
+            // 再 cancelTranslation@800 看它是不是真的停了。
             const QList<QByteArray> calls = uiCall.split('|');
-            for (const QByteArray &one : calls) {
+            for (const QByteArray &raw : calls) {
+                QByteArray one = raw;
+                int waitMs = 400;
+                const qsizetype at = one.lastIndexOf('@');
+                if (at > 0) {
+                    waitMs = one.mid(at + 1).toInt();
+                    one = one.left(at);
+                }
                 if (one.isEmpty())
                     continue;
+                if (one == "rect") {
+                    applyUiRect();
+                    continue;
+                }
                 const QMetaObject *mo = uiTarget->metaObject();
                 const QMetaMethod method = mo->method(mo->indexOfMethod(
                     QByteArray(one + "()").constData()));
                 const bool zeroArg = method.isValid() && method.parameterCount() == 0;
                 if (zeroArg) {
                     QMetaObject::invokeMethod(uiTarget, one.constData(), Qt::DirectConnection);
+                    qInfo("[ui-shot] called %s()", one.constData());
                 } else {
-                    QMetaObject::invokeMethod(uiTarget,
-                                              one.constData(),
-                                              Qt::DirectConnection,
-                                              Q_ARG(QString, uiArg));
+                    const bool ok = QMetaObject::invokeMethod(uiTarget,
+                                                              one.constData(),
+                                                              Qt::DirectConnection,
+                                                              Q_ARG(QString, uiArg));
+                    qInfo("[ui-shot] called %s(\"%s\") -> %d", one.constData(),
+                          qUtf8Printable(uiArg), ok ? 1 : 0);
                 }
-                QTimer::singleShot(400, &callLoop, &QEventLoop::quit);
+                QTimer::singleShot(waitMs, &callLoop, &QEventLoop::quit);
                 callLoop.exec();
             }
             QTimer::singleShot(qEnvironmentVariableIntValue("STUDIOUS_UI_WAIT_MS") > 0
@@ -1518,19 +1585,8 @@ int main(int argc, char *argv[])
         }
 
         // STUDIOUS_UI_RECT="x,y,w,h"：直接给选区，省掉真拖鼠标（只用于截图取证）。
-        const QByteArray uiRect = qgetenv("STUDIOUS_UI_RECT");
-        if (!uiRect.isEmpty()) {
-            const QList<QByteArray> parts = uiRect.split(',');
-            if (parts.size() == 4) {
-                const QRect rect(parts[0].toInt(), parts[1].toInt(),
-                                 parts[2].toInt(), parts[3].toInt());
-                QEventLoop rectLoop;
-                QMetaObject::invokeMethod(screenFlow, "confirmSelection",
-                                          Qt::DirectConnection, Q_ARG(QRect, rect));
-                QTimer::singleShot(4000, &rectLoop, &QEventLoop::quit);
-                rectLoop.exec();
-            }
-        }
+        // 如果上面的调用序列里已经用 `rect` 占位跑过一次，这里不会重复执行。
+        applyUiRect();
 
         // STUDIOUS_UI_CURSOR="x,y"：给浮层摆一个假光标位置，用来拍放大镜
         // （真光标在自动截图里动不了）。排在 SELECT 之前：放大镜只在框选阶段可见。
@@ -1679,15 +1735,20 @@ int main(int argc, char *argv[])
             }
         }
 
-        // 浮层是独立顶层窗口：STUDIOUS_UI_SHOT=overlay 时改抓它，主窗口那份不参与。
+        // 浮层/设置小窗都是独立顶层窗口：STUDIOUS_UI_SHOT 给了名字就抓那个窗口，
+        // 主窗口那份不参与（"main" 或不设 = 抓主窗口）。
         QQuickWindow *shotWindow = window;
-        if (qgetenv("STUDIOUS_UI_SHOT") == QByteArray("overlay")) {
+        const QByteArray shotTarget = qgetenv("STUDIOUS_UI_SHOT");
+        if (!shotTarget.isEmpty() && shotTarget != QByteArray("main")) {
+            const QString wanted = QString::fromUtf8(shotTarget == QByteArray("overlay")
+                                                         ? QByteArray("captureOverlay")
+                                                         : shotTarget);
             const auto tops = QGuiApplication::topLevelWindows();
             for (QWindow *w : tops) {
-                qWarning("[ui-shot] window '%s' %dx%d visible=%d",
+                qWarning("[ui-shot] window '%s' %dx%d at (%d,%d) visible=%d",
                          qUtf8Printable(w->objectName()), w->width(), w->height(),
-                         int(w->isVisible()));
-                if (w->objectName() == QStringLiteral("captureOverlay") && w->isVisible()) {
+                         w->x(), w->y(), int(w->isVisible()));
+                if (w->objectName() == wanted && w->isVisible()) {
                     shotWindow = qobject_cast<QQuickWindow *>(w);
                     break;
                 }

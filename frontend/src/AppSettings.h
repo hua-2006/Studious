@@ -147,6 +147,23 @@ struct AppSettings {
     bool overlayKeepOriginal = false;
     // 放大镜的缩放倍率（2~8）。不写死在 QML 里，设置页以后直接改这里。
     int overlayZoom = 3;
+    // 放大镜开关与落点（键 settings/overlay/magnifier、magnifierCorner）。
+    // corner 取 "bottomRight" / "bottomLeft" / "topRight" / "topLeft"：
+    // 贴边放不下时 QML 会自己翻到另一侧，这里只记"用户偏好哪个角"。
+    bool overlayMagnifier = true;
+    QString magnifierCorner = QStringLiteral("bottomRight");
+
+    // 遮罩压暗程度（键 settings/overlay/dim，20~80，百分比）。
+    // 框选时只有选区露出来，其它地方压到接近全黑；太小会看不出"在被框的地方之外"。
+    int overlayDim = 45;
+
+    // 方向键微调选区（键 settings/overlay/arrowNudge，默认开）：
+    // 鼠标定位到像素级很难，选中后用方向键补 1px（按住 Shift 时 10px）。
+    bool overlayArrowNudge = true;
+
+    // 复制后延迟关闭浮层（键 settings/overlay/autoHideDelay，单位秒，0~10）。
+    // 0 = 复制完立刻收；非 0 是给"再看一眼译文"留的时间。
+    int overlayAutoHideDelay = 0;
 
     // 小窗是否置顶（键 settings/mini/alwaysOnTop，默认 true）。
     bool miniAlwaysOnTop = true;
@@ -161,6 +178,14 @@ struct AppSettings {
 
     // 记录里存哪一份文本（键 settings/record/saveMode）："original"（OCR 原文）或 "current"。
     QString recordSaveMode = QStringLiteral("original");
+
+    // ---- 翻译历史（键 settings/history/enabled、settings/history/dir）----
+    //
+    // 现在是"框架"：开关与目录先落地，写入 / 浏览界面在后面批次接上。
+    // 目录为空串表示用默认位置（<AppData>/studious/history，由 AppBackend 解析成绝对路径），
+    // 这样默认值不依赖运行时的 QStandardPaths，AppSettings 仍然可以被 CLI 无 GUI 地加载。
+    bool historyEnabled = false;
+    QString historyDir;
 
     // 三个全局热键（键 settings/hotkey/capture|mini|live）。
     // 空串 = 不注册（界面上显示「未设置」）。格式 "Ctrl+Alt+S"。

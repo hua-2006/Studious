@@ -85,6 +85,7 @@ qt_add_qml_module(studious
         qml/Main.qml
         qml/Theme.qml
         qml/overlay/CaptureOverlay.qml
+        qml/overlay/CaptureSettingsPanel.qml
         qml/components/SectionCard.qml
         qml/components/FieldRow.qml
         qml/components/AppChip.qml
@@ -99,6 +100,7 @@ qt_add_qml_module(studious
         qml/components/NoticeBar.qml
         qml/pages/TranslatePage.qml
         qml/pages/HotkeysPage.qml
+        qml/pages/OverlayPage.qml
         qml/pages/ConfigPage.qml
         qml/pages/SettingsPage.qml
         qml/pages/AppearancePage.qml
@@ -107,6 +109,7 @@ qt_add_qml_module(studious
         resources/icons/brand.svg
         resources/icons/translate.svg
         resources/icons/keyboard.svg
+        resources/icons/overlay.svg
         resources/icons/tune.svg
         resources/icons/settings.svg
         resources/icons/palette.svg

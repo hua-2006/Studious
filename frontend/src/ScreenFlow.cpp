@@ -9,6 +9,8 @@
 
 #include <studious/ocr/OcrEngine.h>
 
+#include <algorithm>
+
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
@@ -23,6 +25,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -53,20 +56,147 @@ QString ocrModelsDir()
                              ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
                                    .filePath(QStringLiteral("assets"))
                              : settings.assetRoot;
-    return QDir(QDir(root).filePath(QStringLiteral("models"))).filePath(QStringLiteral("ocr"));
+    const QString modelsDir = QDir(root).filePath(QStringLiteral("models"));
+    const QString stagedDir = QDir(modelsDir).filePath(QStringLiteral("ocr"));
+
+    // 资产是「一条资产一个文件/目录」装的：单文件资产的落点是 models/<assetId>（没有扩展名），
+    // 而 OcrEngine 只收一个目录。这里把三个文件收拢到 models/ocr/ 下（优先硬链接，失败再复制），
+    // 三种布局都认：models/ocr/det.onnx、models/ocr.det.ppocrv4（单文件资产）、
+    // models/ocr.det.ppocrv4/det.onnx（压缩包资产）。
+    struct Item {
+        const char *fileName;
+        const char *assetId;
+    };
+    static const Item kItems[] = {
+        {"det.onnx", "ocr.det.ppocrv4"},
+        {"rec.onnx", "ocr.rec.ppocrv4"},
+        {"ppocr_keys_v1.txt", "ocr.dict.ppocrv4"},
+    };
+
+    bool anyStaged = false;
+    for (const Item &item : kItems) {
+        const QString staged = QDir(stagedDir).filePath(QString::fromLatin1(item.fileName));
+
+        const QString assetName = QString::fromLatin1(item.assetId);
+        const QString candidates[] = {
+            QDir(modelsDir).filePath(assetName),
+            QDir(QDir(modelsDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
+        };
+        QString source;
+        for (const QString &candidate : candidates) {
+            if (QFileInfo(candidate).isFile()) {
+                source = candidate;
+                break;
+            }
+        }
+        if (source.isEmpty())
+            continue;
+
+        // 已经收拢过就跳过；但尺寸对不上说明上次留下的是坏文件（例如 Qt 的
+        // QFile::link() 在 Windows 上会写成 1 KB 的 .lnk 快捷方式，不是硬链接），重来。
+        const QFileInfo stagedInfo(staged);
+        if (stagedInfo.isFile() && stagedInfo.size() == QFileInfo(source).size())
+            continue;
+        if (stagedInfo.exists())
+            QFile::remove(staged);
+
+        QDir().mkpath(stagedDir);
+        if (!QFile::copy(source, staged))
+            qWarning("[ocr] failed to stage %s from %s",
+                     qUtf8Printable(item.fileName),
+                     qUtf8Printable(source));
+        anyStaged = true;
+    }
+
+    if (anyStaged)
+        qInfo("[ocr] staged models into %s", qUtf8Printable(stagedDir));
+
+    return stagedDir;
 }
 
 // OCR 的 box 是「裁剪图」坐标；浮层要按「相对选区左上角」画，两者是同一套物理像素。
-QVariantMap wordToMap(const studious::platform::OcrWord &w)
+// 一行文字对应一张贴纸：OCR 给的是「词」，翻译与贴纸都按「行」来，所以这里把
+// 同一水平带上的词并成一块（见 groupWordsIntoLines()）。
+QVariantMap lineToMap(const QRect &box, const QString &text, qreal confidence)
 {
     QVariantMap m;
-    m.insert(QStringLiteral("text"), w.text);
-    m.insert(QStringLiteral("x"), w.box.x());
-    m.insert(QStringLiteral("y"), w.box.y());
-    m.insert(QStringLiteral("w"), w.box.width());
-    m.insert(QStringLiteral("h"), w.box.height());
-    m.insert(QStringLiteral("confidence"), w.confidence);
+    m.insert(QStringLiteral("x"), box.x());
+    m.insert(QStringLiteral("y"), box.y());
+    m.insert(QStringLiteral("w"), box.width());
+    m.insert(QStringLiteral("h"), box.height());
+    m.insert(QStringLiteral("original"), text);
+    m.insert(QStringLiteral("text"), QString());
+    m.insert(QStringLiteral("untranslated"), true);
+    m.insert(QStringLiteral("confidence"), confidence);
     return m;
+}
+
+struct TextLine
+{
+    QRect box;
+    QVector<studious::platform::OcrWord> words;
+};
+
+// 把词按「垂直重叠超过较矮者一半」归到同一行；行内按 x 排序，词间距超过字高
+// 三分之一就补空格（OCR 的分片本身已经补过空格，这里兜住跨分片的情况）。
+QVector<TextLine> groupWordsIntoLines(const QVector<studious::platform::OcrWord> &words)
+{
+    QVector<studious::platform::OcrWord> sorted = words;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const studious::platform::OcrWord &a, const studious::platform::OcrWord &b) {
+                  if (a.box.center().y() != b.box.center().y())
+                      return a.box.center().y() < b.box.center().y();
+                  return a.box.x() < b.box.x();
+              });
+
+    QVector<TextLine> lines;
+    for (const studious::platform::OcrWord &w : std::as_const(sorted)) {
+        int target = -1;
+        for (int i = 0; i < lines.size(); ++i) {
+            const QRect box = lines.at(i).box;
+            const int overlap = qMin(box.bottom(), w.box.bottom()) - qMax(box.top(), w.box.top());
+            const int shorter = qMin(box.height(), w.box.height());
+            if (shorter > 0 && overlap * 2 >= shorter) {
+                target = i;
+                break;
+            }
+        }
+        if (target < 0) {
+            TextLine line;
+            line.box = w.box;
+            line.words.append(w);
+            lines.append(line);
+        } else {
+            lines[target].box = lines.at(target).box.united(w.box);
+            lines[target].words.append(w);
+        }
+    }
+    return lines;
+}
+
+QString lineText(const TextLine &line)
+{
+    QVector<studious::platform::OcrWord> ws = line.words;
+    std::sort(ws.begin(), ws.end(),
+              [](const studious::platform::OcrWord &a, const studious::platform::OcrWord &b) {
+                  return a.box.x() < b.box.x();
+              });
+    QString text;
+    int prevRight = 0;
+    int prevHeight = 0;
+    for (int i = 0; i < ws.size(); ++i) {
+        const studious::platform::OcrWord &w = ws.at(i);
+        if (i > 0) {
+            const int gap = w.box.left() - prevRight;
+            const int height = qMax(1, qMax(prevHeight, w.box.height()));
+            if (gap > height / 3)
+                text += QLatin1Char(' ');
+        }
+        text += w.text.trimmed();
+        prevRight = w.box.right();
+        prevHeight = w.box.height();
+    }
+    return text;
 }
 
 } // namespace
@@ -82,6 +212,11 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
     m_qt = new QuickTranslate(this);
     connect(m_qt, &QuickTranslate::finished, this, [this](const QuickTranslateResult &r) {
         m_busy = false;
+        // 取消造成的那一次 finished 是预期的，不能当失败弹错误框。
+        if (m_cancelling) {
+            m_cancelling = false;
+            return;
+        }
         m_engineLabel = r.engineLabel;
         if (!r.ok) {
             fail(r.error.isEmpty() ? tr("翻译失败。") : r.error);
@@ -109,10 +244,23 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
                 if (!text.isEmpty())
                     copied.append(text);
             }
-            if (!copied.isEmpty())
+            if (!copied.isEmpty()) {
                 QGuiApplication::clipboard()->setText(copied.join(QLatin1Char('\n')));
+                // 「复制后自动关闭」：既然要的文字已经在剪贴板里了，就别让人再盯一眼贴纸。
+                // 用 singleShot 收，是因为这会儿还在把 phase 推到 Showing 的路上；
+                // 延迟秒数来自设置（0 = 下一轮事件循环就收）。
+                const AppSettings autoHide = AppSettings::load();
+                if (autoHide.captureAutoHide) {
+                    QTimer::singleShot(qBound(0, autoHide.overlayAutoHideDelay, 10) * 1000, this,
+                                       [this]() { cancel(); });
+                }
+            }
         }
         emit blocksChanged();
+        // 设置里「保存翻译历史」开着就自动存档，不再要用户点按钮。
+        // 放在 blocksChanged 之后：saveToRecords 读的是 m_blocks，得先就位。
+        if (AppSettings::load().historyEnabled)
+            saveToRecords(QStringLiteral("capture"));
         emit finished();
     });
     connect(m_qt, &QuickTranslate::errorOccurred, this, [this](const QString &message) {
@@ -163,6 +311,43 @@ QString ScreenFlow::ocrMissingText() const
     if (missing.isEmpty())
         return self->m_ocr->lastError();
     return tr("缺少 OCR 模型：%1").arg(missing.join(QStringLiteral("、")));
+}
+
+QString ScreenFlow::ocrTest(const QString &imagePath)
+{
+    // 开发走查用：拿一张图跑一遍识别，把每个框的文本与置信度打到 stderr。
+    // 正常流程不走这里（第 265 行那段是真正的工作线程路径），它只是让"模型到底认不认得字"
+    // 这件事能单独验证，不必每次拖一次框、翻一次译再猜。
+    const QImage image(imagePath);
+    if (image.isNull()) {
+        qWarning("[ocr-test] cannot read image: %s", qUtf8Printable(imagePath));
+        return QStringLiteral("image");
+    }
+
+    studious::ocr::OcrEngine engine(ocrModelsDir());
+    if (!engine.isAvailable()) {
+        const QString missing = engine.missingFiles().join(QStringLiteral(", "));
+        qWarning("[ocr-test] unavailable (%s) %s",
+                 qUtf8Printable(missing),
+                 qUtf8Printable(engine.lastError()));
+        return QStringLiteral("unavailable: ") + missing;
+    }
+
+    const QVector<studious::platform::OcrWord> words =
+        engine.recognize(image, studious::ocr::OcrOptions{});
+    qInfo("[ocr-test] %d word(s) from %dx%d", int(words.size()), image.width(), image.height());
+    for (const studious::platform::OcrWord &w : words) {
+        qInfo("[ocr-test] %.3f %4d,%4d %4dx%-4d %s",
+              w.confidence,
+              w.box.x(),
+              w.box.y(),
+              w.box.width(),
+              w.box.height(),
+              qUtf8Printable(w.text));
+    }
+    if (words.isEmpty() && !engine.lastError().isEmpty())
+        qWarning("[ocr-test] %s", qUtf8Printable(engine.lastError()));
+    return QStringLiteral("%1 word(s)").arg(words.size());
 }
 
 void ScreenFlow::setPhase(const QString &phase)
@@ -274,10 +459,24 @@ void ScreenFlow::confirmSelection(const QRect &region)
     // "模型没就绪"，靠 lastError() 区分（模型问题在进来之前已经拦过一次，这里是兜底）。
     auto *watcher = new QFutureWatcher<QVector<studious::platform::OcrWord>>(this);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, token]() {
-        const QVector<studious::platform::OcrWord> words = watcher->result();
+        const QVector<studious::platform::OcrWord> raw = watcher->result();
         watcher->deleteLater();
         if (token != m_shotToken || m_phase == QLatin1String("Idle"))
             return;   // 这次截屏已经被取消/替换，结果作废
+
+        // 置信度过滤：图标、边框、半透明文字经常被检测成框，识出来是 "XA""6" 这种噪声。
+        // 0.5 是实测分界（真文字普遍 0.9+，噪声多在 0.3 以下），也可以自己调。
+        constexpr qreal kMinConfidence = 0.5;
+        QVector<studious::platform::OcrWord> words;
+        words.reserve(raw.size());
+        for (const studious::platform::OcrWord &w : raw) {
+            if (w.confidence < kMinConfidence)
+                continue;
+            if (w.text.trimmed().isEmpty())
+                continue;
+            words.append(w);
+        }
+
         if (words.isEmpty()) {
             const QString err = m_ocr ? m_ocr->lastError() : QString();
             fail(err.isEmpty() ? tr("识别失败：该区域没有检测到文字。") : err);
@@ -286,13 +485,18 @@ void ScreenFlow::confirmSelection(const QRect &region)
 
         m_lastWords.clear();
         m_blocks.clear();
-        for (const studious::platform::OcrWord &w : words) {
-            QVariantMap block = wordToMap(w);
-            block.insert(QStringLiteral("original"), w.text);
-            block.insert(QStringLiteral("text"), QString());
-            block.insert(QStringLiteral("untranslated"), true);
-            m_blocks.append(block);
-            m_lastWords.append(w.text);
+        // 一个词一块会把"一句话"拆成十几个翻译单元：云端 LLM 要发十几次请求，
+        // 本地 MT 更会被碎片弄崩。所以先并成行，再按行贴。
+        const QVector<TextLine> lines = groupWordsIntoLines(words);
+        for (const TextLine &line : lines) {
+            const QString text = lineText(line);
+            if (text.isEmpty())
+                continue;
+            qreal confidence = 1.0;
+            for (const studious::platform::OcrWord &w : line.words)
+                confidence = qMin(confidence, w.confidence);
+            m_blocks.append(lineToMap(line.box, text, confidence));
+            m_lastWords.append(text);
         }
         emit blocksChanged();
         startTranslation();
@@ -363,6 +567,20 @@ void ScreenFlow::startTranslation()
         paragraphs.append(v.toString());
     const QString text = paragraphs.join(QStringLiteral("\n\n"));
 
+    // 开发钩子：把每行贴纸的框与原文打出来，用来核对"贴纸没盖住原行"这类几何问题。
+    if (qEnvironmentVariableIsSet("STUDIOUS_DEBUG_BLOCKS")) {
+        for (int i = 0; i < m_blocks.size() && i < paragraphs.size(); ++i) {
+            const QVariantMap block = m_blocks.at(i).toMap();
+            qInfo("[blocks] %2d x=%4d y=%4d w=%4d h=%3d %.2f %s", i,
+                  block.value(QStringLiteral("x")).toInt(),
+                  block.value(QStringLiteral("y")).toInt(),
+                  block.value(QStringLiteral("w")).toInt(),
+                  block.value(QStringLiteral("h")).toInt(),
+                  block.value(QStringLiteral("confidence")).toReal(),
+                  qUtf8Printable(paragraphs.at(i)));
+        }
+    }
+
     m_busy = true;
     if (!m_qt->translate(text, settings.srcLang.isEmpty() ? QStringLiteral("auto") : settings.srcLang, dst)) {
         m_busy = false;
@@ -385,6 +603,27 @@ void ScreenFlow::cancel()
     emit selectionChanged();
     emit blocksChanged();
     emit errorTextChanged();
+}
+
+void ScreenFlow::cancelTranslation()
+{
+    const bool wasWorking = m_busy || m_qt->isBusy();
+    if (m_qt->isBusy()) {
+        m_cancelling = true;
+        m_qt->cancel();     // 会同步发一个「已取消」的 finished，被上面的守卫吃掉
+    }
+    m_busy = false;
+    if (!wasWorking) {
+        return;             // 没在跑：别动当前阶段（例如已经 Showing 了）
+    }
+    // 作废在途的 OCR 结果：识别阶段取消时，回调回来也不能再往下翻译。
+    ++m_shotToken;
+    m_errorText.clear();
+    emit errorTextChanged();
+    setStatusText(tr("已取消。"));
+    // 选区还在 → 回到「框选好但还没翻译」的状态，工具栏可以直接再按翻译；
+    // 没选区（理论上不会）就老实回 Idle。
+    setPhase(hasSelection() ? QStringLiteral("Selecting") : QStringLiteral("Idle"));
 }
 
 void ScreenFlow::toggleOriginal()
@@ -419,6 +658,15 @@ bool ScreenFlow::copyResult()
         return false;
     if (QClipboard *clipboard = QGuiApplication::clipboard())
         clipboard->setText(lines.join(QLatin1Char('\n')));
+
+    // 复制完就把浮层收掉（设置里「复制后自动关闭」，默认开）：用户要的是这段文字，
+    // 不是继续盯着屏幕上的贴纸。延迟秒数允许用户调（0 = 立刻）。
+    const AppSettings copySettings = AppSettings::load();
+    if (copySettings.captureAutoHide && (m_phase == QLatin1String("Showing")
+                                         || m_phase == QLatin1String("ShowingOriginal"))) {
+        QTimer::singleShot(qBound(0, copySettings.overlayAutoHideDelay, 10) * 1000, this,
+                           [this]() { cancel(); });
+    }
     return true;
 }
 

@@ -5,10 +5,33 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVector>
+
+#include <atomic>
+#include <memory>
+#include <mutex>
 
 #include <studious/cache/TranslationCache.h>
 #include <studious/config/LlmConfig.h>
 #include <studious/contract/Types.h>
+
+class QTimer;
+
+namespace studious::router {
+class TranslatorRouter;
+}
+
+// 取消通道：工作线程把 router 指针挂进来，主线程拿着 atomic 标志和同一把锁去置位。
+// 锁的意义不是保护 router 的方法，而是保证"读指针 + 调用 cancel()"期间
+// 工作线程不会把 router 析构掉（worker 在离开作用域前会先拿锁把指针清空）。
+struct TranslateCancelState {
+    std::mutex mu;
+    studious::router::TranslatorRouter *router = nullptr;
+    std::atomic_bool requested{false};
+
+    // 主线程 / 定时器调用：把取消请求转给当前在跑的那个 router。
+    void raise();
+};
 
 // 把"输入文本 -> 段落列表"的切分规则集中在一处，GUI 与 --smoke 共用同一份实现。
 QStringList splitParagraphs(const QString &text);
@@ -57,9 +80,16 @@ struct TranslateJobResult {
 //   QtHttpClient / QNetworkAccessManager 是线程亲和的，所以 http 实例、
 //   factory 装配出来的 translator 集合、TranslatorRouter 全部在**工作线程内部**
 //   构造并在同一线程内使用、销毁，绝不跨线程共享。
-//   （TranslationCache 是唯一例外：后端保证它线程安全，见上面 req.cache 的注释。）
+//   （TranslationCache 是唯一例外：后端保证它线程安全，见上面 req.cache 的注释。
+//     取消用的 CancelState 是第二个例外：里面只有一把互斥量和原子的请求标志。）
 //   本类自身一直活在主线程（QFutureWatcher 也在主线程），只跨线程搬运纯数据
 //   TranslateJobRequest（入）/ TranslateJobResult（出）。
+//
+// 取消语义（重要）：
+//   cancel() 之后 isRunning() 立刻变 false、界面可以马上再点一次翻译，但工作线程
+//   还要过一小会儿才真的退出（背层的同步 HTTP 没法从外部打断，只能在两次请求之间
+//   的检查点松手）。为了让"迟到的结果"不覆盖新状态，每次 start() 都递增代号，
+//   结果回来时代号对不上就直接丢弃。
 class TranslateJob : public QObject {
     Q_OBJECT
 
@@ -67,19 +97,29 @@ public:
     explicit TranslateJob(QObject *parent = nullptr);
     ~TranslateJob() override;
 
+    // 逻辑运行状态：cancel() 之后马上为 false（此时工作线程可能还在收尾）。
     bool isRunning() const;
 
 public slots:
-    // 重复调用在跑动期间会被忽略（GUI 侧同时也会禁用按钮，双保险）。
+    // 逻辑上已在跑时会被忽略（GUI 侧同时也会禁用按钮，双保险）。
     void start(const TranslateJobRequest &req);
+
+    // 主动取消：置位后端各 translator 的 atomic 取消标志，并让界面立刻解锁。
+    // 可以在 start() 之后任意时刻调用；没在跑时是空操作。
+    void cancel();
 
 signals:
     // elapsedMs 由 QElapsedTimer 在 start() 起算，回到主线程时取。
     void finished(const TranslateJobResult &result, qint64 elapsedMs);
 
 private:
-    void onFutureFinished();
+    void reapplyCancel();
 
-    QFutureWatcher<TranslateJobResult> *m_watcher = nullptr;
+    // 每次 start() 一个 watcher：被取消的旧作业还在收尾时，新作业可以立刻开始。
+    QVector<QFutureWatcher<TranslateJobResult> *> m_pending;
+    std::shared_ptr<TranslateCancelState> m_cancel;
     QElapsedTimer m_timer;
+    QTimer *m_cancelTimer = nullptr;
+    int m_generation = 0;
+    bool m_running = false;
 };

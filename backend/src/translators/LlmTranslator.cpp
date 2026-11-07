@@ -397,10 +397,11 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
         // 实测 5 段 5662ms -> 1034ms。batchSize <= 1 时退回逐段。
         const int batchSize = m_cfg.batchSize > 1 ? m_cfg.batchSize : 1;
         int cursor = 0;
+        bool cancelled = false;
         while (cursor < pending.size()) {
             if (m_cancelRequested) {
-                out.error = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
-                return out;
+                cancelled = true;
+                break;
             }
 
             // 整个调用的预算已用完：不再开新块。已经翻好的段落保留在 translated 里，
@@ -491,6 +492,12 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
             }
 
             for (int k = 0; k < chunk.size(); ++k) {
+                // 取消要能打断"逐段补救"：每段最多 5 次重试，14 段就是 70 次请求，
+                // 不在这里检查，用户点了取消还要再等好几分钟。
+                if (m_cancelRequested) {
+                    cancelled = true;
+                    break;
+                }
                 if (!translated.at(chunk.at(k)).isEmpty()) {
                     continue;   // 批量已经给了可用译文，不重复请求
                 }
@@ -504,6 +511,12 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                                                    {dst, chunk.at(k) + 1, err});
                 }
             }
+        }
+
+        if (cancelled) {
+            out.ok = false;
+            out.error = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
+            return out;
         }
 
         out.byLang.insert(rawDst, translated);
@@ -690,6 +703,11 @@ bool LlmTranslator::translateOne(const QString &text,
     QString lastError;
 
     for (int attempt = 1; attempt <= 5; ++attempt) {
+        // 用户按了取消：别再为这一段换下一种 prompt 重试（每次都是一次完整请求）。
+        if (m_cancelRequested) {
+            outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
+            return false;
+        }
         // 时间预算：m_retryClock 是 translate() 开头起的那个钟，整次调用共享一个 deadline，
         // 不再是"每段各自 30s"。第 1 次尝试永远放行——否则预算一用完连一段都翻不出来，
         // 连"部分结果"都没有；已经发出去的请求也无法被打断（由 timeoutMs 兜底）。

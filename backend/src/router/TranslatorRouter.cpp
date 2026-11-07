@@ -137,6 +137,16 @@ QStringList TranslatorRouter::engineIds() const
     return ids;
 }
 
+void TranslatorRouter::cancel()
+{
+    // 只置标志，不碰任何正在使用的 Qt 对象 —— 所以可以从 UI 线程调用。
+    for (const auto &t : m_translators) {
+        if (t) {
+            t->cancel();
+        }
+    }
+}
+
 core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest &req)
 {
     core::TranslateOutcome out;

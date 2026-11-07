@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "contract/ITranslator.h"
 
 namespace studious::translate {
@@ -21,7 +23,7 @@ public:
     void cancel() override;
 
 private:
-    bool m_cancelRequested = false;
+    std::atomic_bool m_cancelRequested{false};
 };
 
 } // namespace studious::translate

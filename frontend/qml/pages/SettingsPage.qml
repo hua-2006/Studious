@@ -40,6 +40,46 @@ Item {
     // 输入框 / 按钮统一行高，同排不齐高会显得歪。
     readonly property int hField: 34
 
+    // ---- 历史对话 ----
+    // 三个来源各一个库（截屏 / 小窗 / 实时），后端把它们合并、按时间倒序给这里。
+    property var historyItems: []
+    // 列表只要最近的这些条；库里的老记录靠「记录库」目录自己清理。
+    readonly property int historyLimit: 50
+
+    function refreshHistory() {
+        historyItems = backend.historyRecords(historyLimit)
+    }
+
+    // 切到「缓存」分区就重读一次：刚在别的页翻过一屏的话，回来要能看到新记录。
+    onCurrentSectionChanged: {
+        if (currentSection === 2)
+            refreshHistory()
+    }
+
+    function historyKindLabel(kind) {
+        if (kind === "mini")
+            return qsTr("小窗翻译")
+        if (kind === "live")
+            return qsTr("实时翻译")
+        return qsTr("截屏翻译")
+    }
+
+    // ISO 时间 → 「MM-dd HH:mm」，历史列表里没人想看秒和时区。
+    function historyTimeText(iso) {
+        const d = new Date(iso)
+        if (isNaN(d.getTime()))
+            return iso
+        const pad = function (n) { return n < 10 ? "0" + n : "" + n }
+        return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes())
+    }
+
+    // 摘要：优先显示译文第一行（没有就退回原文），一行放不下就省略。
+    function historyPreview(item) {
+        const text = (item.translatedText || "").length > 0 ? item.translatedText : item.originalText
+        const first = (text || "").split("\n")[0]
+        return first.length > 0 ? first : qsTr("（空）")
+    }
+
     // ---- 左侧二级导航 ----
     readonly property int navWidth: 190
     // 当前选中的分区下标，同时驱动左栏高亮与右栏 StackLayout。
@@ -53,6 +93,7 @@ Item {
         { icon: "qrc:/qt/qml/Studious/resources/icons/globe.svg",     label: qsTr("网络") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/download.svg",  label: qsTr("资产") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/folder.svg",    label: qsTr("数据") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/screenshot.svg", label: qsTr("截图") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/info.svg",      label: qsTr("关于") }
     ]
 
@@ -77,7 +118,8 @@ Item {
 
     // ---- 资产：分类标签 + 过滤 ----
     // 分类由后端清单决定（AppBackend::assets 的 category 字段）：
-    //   llm = qwen 模型 + llama.cpp 运行时；mt = opus-mt 语言对 + onnxruntime 运行时。
+    //   llm = qwen 模型 + llama.cpp 运行时；mt = opus-mt 语言对 + onnxruntime 运行时；
+    //   ocr = PP-OCRv4 的检测 / 识别模型 + 字典（视觉，跟 LLM 权重无关）。
     property string assetTab: "all"
 
     // 「从文件导入」的中间状态：资产已经选好了，文件选择框还没回结果。
@@ -140,7 +182,7 @@ Item {
     // kind 取 "mt" / "llm" / "all"；空串按 "all" 处理。
     function openAssets(kind) {
         page.currentSection = 4
-        page.assetTab = (kind === "mt" || kind === "llm") ? kind : "all"
+        page.assetTab = (kind === "mt" || kind === "llm" || kind === "ocr") ? kind : "all"
         // 资产卡不折叠，切过去就在最上面；把右栏滚回顶部，免得停在上一分区
         // 留下的滚动位置上、看到一片空白。
         // ScrollBar.position 是只读的，得改内容项的 contentY / 或 contentItem 的 origin。
@@ -168,6 +210,7 @@ Item {
     Component.onCompleted: {
         appliedLanguage = backend.uiLanguage
         backend.refreshCacheStats()
+        refreshHistory()
     }
 
     ColumnLayout {
@@ -192,7 +235,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据。")
+                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据、截图。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -677,6 +720,227 @@ Item {
                                         }
                                     }
                                 }
+
+                                // ---- 历史对话（先立骨架，写入 / 浏览后续接） ----
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 1
+                                    color: Theme.outlineVariant
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s2
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: qsTr("历史对话")
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeBody
+                                        font.weight: Font.DemiBold
+                                        color: Theme.ink
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("保存翻译历史")
+
+                                    AppToggle {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        checked: backend.historyEnabled
+                                        onToggled: {
+                                            backend.historyEnabled = checked
+                                            checked = backend.historyEnabled
+                                        }
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("开启后翻译完成就自动存档，不用再手动点保存。截屏、小窗、实时各存一个库，下面把三个库按时间合并着列出来。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
+
+                                FieldRow {
+                                    label: qsTr("历史对话目录")
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: backend.historyDir
+                                        elide: Text.ElideMiddle
+                                        font.family: Theme.fontMono
+                                        font.pixelSize: Theme.fontSizeBody
+                                        color: Theme.inkVariant
+                                    }
+
+                                    AppButton {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: qsTr("打开目录")
+                                        variant: "outline"
+                                        onClicked: backend.openHistoryDir()
+                                    }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("三个库是 records/capture.db、mini.db、live.db；实时翻译从开启到关闭算一组，写一条记录。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
+
+                                // ---- 合并后的记录列表 ----
+                                RowLayout {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s2
+
+                                    Text {
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: qsTr("最近 %1 条").arg(page.historyItems.length)
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.inkVariant
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    AppButton {
+                                        text: qsTr("刷新")
+                                        variant: "outline"
+                                        onClicked: page.refreshHistory()
+                                    }
+                                }
+
+                                // 表头
+                                Rectangle {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 26
+                                    visible: page.historyItems.length > 0
+                                    color: Theme.surfaceLow
+                                    radius: Theme.rXs
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Theme.s2
+                                        anchors.rightMargin: Theme.s2
+                                        spacing: Theme.s2
+
+                                        Text {
+                                            Layout.preferredWidth: 92
+                                            text: qsTr("时间")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.fontSizeTiny
+                                            color: Theme.inkVariant
+                                        }
+                                        Text {
+                                            Layout.preferredWidth: 72
+                                            text: qsTr("来源")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.fontSizeTiny
+                                            color: Theme.inkVariant
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: qsTr("摘要")
+                                            font.family: Theme.fontUi
+                                            font.pixelSize: Theme.fontSizeTiny
+                                            color: Theme.inkVariant
+                                        }
+                                    }
+                                }
+
+                                // 行间距自己管：外层 ColumnLayout 的 spacing 会把这些行撑得很散
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+
+                                Repeater {
+                                    model: page.historyItems
+
+                                    delegate: Item {
+                                        id: historyRow
+                                        required property var modelData
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 34
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            radius: Theme.rXs
+                                            color: historyHover.hovered ? Theme.surfaceHigh : "transparent"
+                                        }
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: Theme.s2
+                                            anchors.rightMargin: Theme.s2
+                                            spacing: Theme.s2
+
+                                            Text {
+                                                Layout.preferredWidth: 92
+                                                text: page.historyTimeText(historyRow.modelData.createdAt)
+                                                elide: Text.ElideRight
+                                                font.family: Theme.fontMono
+                                                font.pixelSize: Theme.fontSizeSmall
+                                                color: Theme.inkVariant
+                                            }
+                                            Text {
+                                                Layout.preferredWidth: 72
+                                                text: page.historyKindLabel(historyRow.modelData.kind)
+                                                elide: Text.ElideRight
+                                                font.family: Theme.fontUi
+                                                font.pixelSize: Theme.fontSizeSmall
+                                                color: Theme.ink
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: page.historyPreview(historyRow.modelData)
+                                                elide: Text.ElideRight
+                                                font.family: Theme.fontUi
+                                                font.pixelSize: Theme.fontSizeSmall
+                                                color: Theme.inkVariant
+                                            }
+                                        }
+
+                                        HoverHandler { id: historyHover }
+
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            height: 1
+                                            color: Theme.outlineVariant
+                                            opacity: 0.5
+                                        }
+                                    }
+                                }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    visible: page.historyItems.length === 0
+                                    text: backend.historyEnabled
+                                              ? qsTr("还没有记录。翻一屏或译一句就会自动出现在这里。")
+                                              : qsTr("历史关着，不写记录。打开上面的开关后，翻译完成会自动存档。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
                             }
                         }
 
@@ -851,14 +1115,15 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("资产")
-                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对（ONNX Runtime 随应用内置，不在下载清单里）。")
+                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对（ONNX Runtime 随应用内置，不在下载清单里），视觉 / OCR 含 PP-OCRv4 的检测模型、识别模型与字符表。")
 
                                 // 分类标签：全部 / LLM / 本地 MT
                                 Segmented {
                                     items: [
                                         { code: "all", label: qsTr("全部") },
                                         { code: "llm", label: "LLM" },
-                                        { code: "mt", label: qsTr("本地 MT") }
+                                        { code: "mt", label: qsTr("本地 MT") },
+                                        { code: "ocr", label: qsTr("视觉 / OCR") }
                                     ]
                                     current: page.assetTab
                                     onSelected: function (code) { page.assetTab = code }
@@ -1243,6 +1508,118 @@ Item {
                             }
                         }
 
+                        // -------------------------------------------- 截图
+                        ColumnLayout {
+                            spacing: 0
+
+                            SectionCard {
+                                Layout.fillWidth: true
+                                Layout.topMargin: Theme.s4
+                                Layout.bottomMargin: Theme.s4
+                                title: qsTr("截图翻译")
+                                hint: qsTr("框选后的行为、浮层外观、放大镜。这些值只在截屏翻译里生效。")
+
+                                FieldRow {
+                                    label: qsTr("选完直接翻译")
+                                    AppToggle {
+                                        checked: backend.captureAutoRun
+                                        onToggled: {
+                                            backend.captureAutoRun = checked
+                                            checked = backend.captureAutoRun
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("关掉时按设计稿的二次确认走：松手先出工具栏，按「翻译」或 Enter 才发请求。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
+
+                                FieldRow {
+                                    label: qsTr("翻译完自动复制")
+                                    AppToggle {
+                                        checked: backend.captureAutoCopy
+                                        onToggled: {
+                                            backend.captureAutoCopy = checked
+                                            checked = backend.captureAutoCopy
+                                        }
+                                    }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("复制后自动关闭")
+                                    AppToggle {
+                                        checked: backend.captureAutoHide
+                                        onToggled: {
+                                            backend.captureAutoHide = checked
+                                            checked = backend.captureAutoHide
+                                        }
+                                    }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("保留原文标注")
+                                    AppToggle {
+                                        checked: backend.overlayKeepOriginal
+                                        onToggled: {
+                                            backend.overlayKeepOriginal = checked
+                                            checked = backend.overlayKeepOriginal
+                                        }
+                                    }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("浮层不透明度")
+                                    NumStepper {
+                                        from: 40
+                                        to: 100
+                                        step: 4
+                                        unit: "%"
+                                        value: backend.overlayOpacity
+                                        onModified: function (v) { backend.overlayOpacity = v }
+                                    }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("浮层字号")
+                                    NumStepper {
+                                        from: 10
+                                        to: 20
+                                        step: 1
+                                        unit: " px"
+                                        value: backend.overlayFontSize
+                                        onModified: function (v) { backend.overlayFontSize = v }
+                                    }
+                                }
+
+                                FieldRow {
+                                    label: qsTr("放大镜倍率")
+                                    NumStepper {
+                                        from: 2
+                                        to: 8
+                                        step: 1
+                                        unit: "×"
+                                        value: backend.overlayZoom
+                                        onModified: function (v) { backend.overlayZoom = v }
+                                    }
+                                }
+
+                                Text {
+                                    Layout.leftMargin: page.labelWidth + Theme.s3
+                                    Layout.fillWidth: true
+                                    text: qsTr("放大镜只在拖框时出现，收起选区后自动隐藏。")
+                                    wrapMode: Text.WordWrap
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.inkVariant
+                                }
+                            }
+                        }
                         // -------------------------------------------- 关于
                         ColumnLayout {
                             spacing: 0
@@ -1889,6 +2266,55 @@ Item {
                         + qsTr("  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1\n\n")
                         + qsTr("以上组件的完整许可证文本随各自的源分发提供。")
                 }
+            }
+         }
+    }
+
+    // 截图分区的数值控件：− [值] +，比四处复制的 SpinBox 样式块省事，
+    // 也不会因为 Basic 样式的指示器跟主题打架。
+    component NumStepper: RowLayout {
+        id: stepper
+
+        property int from: 0
+        property int to: 100
+        property int step: 1
+        property int value: 0
+        property string unit: ""
+
+        signal modified(int value)
+
+        function clampTo(v) {
+            return Math.max(stepper.from, Math.min(stepper.to, v));
+        }
+
+        spacing: Theme.s2
+
+        AppButton {
+            text: "−"
+            buttonEnabled: stepper.value > stepper.from
+            onClicked: {
+                const v = stepper.clampTo(stepper.value - stepper.step);
+                stepper.value = v;
+                stepper.modified(v);
+            }
+        }
+
+        Text {
+            Layout.preferredWidth: 66
+            horizontalAlignment: Text.AlignHCenter
+            text: stepper.value + stepper.unit
+            font.family: Theme.fontMono
+            font.pixelSize: Theme.fontSizeBody
+            color: Theme.ink
+        }
+
+        AppButton {
+            text: "+"
+            buttonEnabled: stepper.value < stepper.to
+            onClicked: {
+                const v = stepper.clampTo(stepper.value + stepper.step);
+                stepper.value = v;
+                stepper.modified(v);
             }
         }
     }

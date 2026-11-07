@@ -227,6 +227,12 @@ studious::config::LlmConfig llmConfigFromMap(const QVariantMap &map,
 
 QString assetCategory(const QString &id, const QString &family)
 {
+    // 视觉（OCR）是第三个家族：三件套 det/rec/字典，跟 LLM 权重完全无关。
+    // 之前它落到 else 分支被归到 "llm"，于是资产页把 ocr.* 混进了本地 LLM 分组。
+    if (family == QLatin1String("ppocr") || family == QLatin1String("ocr")
+        || id.startsWith(QLatin1String("ocr."))) {
+        return QStringLiteral("ocr");
+    }
     if (family == QLatin1String("opus-mt")
         || id.startsWith(QLatin1String("mt.opus."))
         || id.contains(QLatin1String("onnxruntime"))) {
@@ -446,6 +452,12 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_overlayFontSize = settings.overlayFontSize;
     m_overlayKeepOriginal = settings.overlayKeepOriginal;
     m_overlayZoom = settings.overlayZoom;
+    m_overlayMagnifier = settings.overlayMagnifier;
+    m_magnifierCorner = settings.magnifierCorner;
+    m_overlayDim = settings.overlayDim;
+    m_overlayArrowNudge = settings.overlayArrowNudge;
+    m_overlayAutoHideDelay = settings.overlayAutoHideDelay;
+    m_historyEnabled = settings.historyEnabled;
     m_closeToTray = settings.closeBehavior == QLatin1String("tray");
     m_singleInstance = settings.singleInstance;
     // 开机自启以注册表为准：用户可能在任务管理器 / 别的工具里删过，
@@ -1037,6 +1049,127 @@ void AppBackend::setOverlayZoom(int times)
 
     emit prefsChanged();
 }
+
+void AppBackend::setOverlayMagnifier(bool on)
+{
+    if (m_overlayMagnifier == on) {
+        return;
+    }
+    m_overlayMagnifier = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayMagnifier = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setMagnifierCorner(const QString &corner)
+{
+    // 与 AppSettings::load() 里的白名单一致：只认四个角，别的一律不落盘。
+    static const QStringList kCorners{QStringLiteral("bottomRight"), QStringLiteral("bottomLeft"),
+                                      QStringLiteral("topRight"), QStringLiteral("topLeft")};
+    const QString next = corner.trimmed();
+    if (!kCorners.contains(next) || m_magnifierCorner == next) {
+        return;
+    }
+    m_magnifierCorner = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.magnifierCorner = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayDim(int percent)
+{
+    const int next = std::clamp(percent, 20, 80);
+    if (m_overlayDim == next) {
+        return;
+    }
+    m_overlayDim = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayDim = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayArrowNudge(bool on)
+{
+    if (m_overlayArrowNudge == on) {
+        return;
+    }
+    m_overlayArrowNudge = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayArrowNudge = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setOverlayAutoHideDelay(int seconds)
+{
+    const int next = std::clamp(seconds, 0, 10);
+    if (m_overlayAutoHideDelay == next) {
+        return;
+    }
+    m_overlayAutoHideDelay = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.overlayAutoHideDelay = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setHistoryEnabled(bool on)
+{
+    if (m_historyEnabled == on) {
+        return;
+    }
+    m_historyEnabled = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.historyEnabled = on;
+    settings.save();
+
+    // 打开开关时顺手把目录建好：用户下一步多半就是去「打开目录」看看有没有东西。
+    if (on) {
+        QDir().mkpath(historyDir());
+    }
+
+    emit prefsChanged();
+}
+
+QString AppBackend::historyDir() const
+{
+    // 设置里存的是"用户填过的路径"；空串表示用默认位置。
+    // 默认放在资产目录旁边而不是 %APPDATA%/studious 根，是为了"迁移资产根"时历史能一起搬走。
+    const QString configured = AppSettings::load().historyDir.trimmed();
+    if (!configured.isEmpty()) {
+        return QDir::cleanPath(configured);
+    }
+    return QDir::cleanPath(QDir(assetInstallRootPath()).filePath(QStringLiteral("history")));
+}
+
+void AppBackend::openHistoryDir()
+{
+    const QString dir = historyDir();
+    if (!QDir().mkpath(dir)) {
+        setStatus(studious::i18n::s("建不出历史目录：%1", "Could not create the history folder: %1").arg(dir), true);
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir))) {
+        setStatus(studious::i18n::s("打不开这个目录（可能已被删除，或被系统策略拦住）。",
+                                    "Cannot open the folder (missing, or blocked by policy)."),
+                  true);
+    }
+}
+
 void AppBackend::setCloseToTray(bool on)
 {
     if (m_closeToTray == on) {
@@ -1414,10 +1547,16 @@ void AppBackend::translate()
 
 void AppBackend::cancel()
 {
-    // TranslateJob 没有 cancel 接口；这里只把界面恢复成可再点。
+    if (!m_running && !m_job->isRunning()) {
+        return;
+    }
+    // 真的停：TranslateJob 会置位后端 translator 的 atomic 取消标志，段落循环
+    // 在下一个请求边界退出；已经在飞的那一次 HTTP 请求没法硬打断，最多等它自己返回。
+    // 迟到的结果按"代号"丢弃（见 TranslateJob::start），不会把界面改回去。
+    m_job->cancel();
     m_running = false;
     emit runningChanged();
-    setStatus(i18n::s().translate.cancelHint, false);
+    setStatus(i18n::s().translate.cancelled, false);
 }
 
 void AppBackend::clearSource()
@@ -2547,6 +2686,197 @@ void AppBackend::probeCloudReasoning()
         studious::net::QtHttpClient http;
         return studious::llm::probeReasoning(cfg, http);
     }));
+}
+
+TranslatorRecords *AppBackend::recordsFor(const QString &kind)
+{
+    // 只认三个已知来源，其它（老数据里的空串之类）都归到截屏那一档。
+    const QString key = (kind == QLatin1String("mini") || kind == QLatin1String("live"))
+                            ? kind
+                            : QStringLiteral("capture");
+
+    std::unique_ptr<TranslatorRecords> &slot = key == QLatin1String("mini") ? m_recordsMini
+                                              : key == QLatin1String("live") ? m_recordsLive
+                                                                            : m_recordsCapture;
+
+    if (!slot) {
+        // 三个库放在 <AppData>/records/ 下：clearAll / 备份 / 删库都能按文件来。
+        const QString dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                                .filePath(QStringLiteral("records"));
+        QDir().mkpath(dir);
+        slot = std::make_unique<TranslatorRecords>(
+            QDir(dir).filePath(key + QStringLiteral(".db")));
+    }
+    return slot.get();
+}
+
+bool AppBackend::persistRecord(const QString &kind,
+                               const QString &imagePath,
+                               const QRect &region,
+                               const QVariantList &originals,
+                               const QVariantList &blocks,
+                               const QString &engineLabel)
+{
+    // 历史关着就什么都不写：这个函数的所有调用点都是"自动存档"，
+    // 手动存档入口已经拿掉了，所以开关就是唯一的总闸。
+    const AppSettings settings = AppSettings::load();
+    if (!settings.historyEnabled)
+        return false;
+
+    TranslationRecord rec;
+    rec.source = kind.isEmpty() ? QStringLiteral("capture") : kind;
+    rec.srcLang = settings.srcLang;
+    rec.dstLangs = settings.dstLang;
+    rec.engine = engineLabel.isEmpty() ? m_lastEngineLabel : engineLabel;
+    rec.imagePath = imagePath;
+    rec.region = region;
+
+    QStringList originalLines;
+    originalLines.reserve(originals.size());
+    for (const QVariant &value : originals)
+        originalLines.append(value.toString());
+    rec.originalText = originalLines.join(QLatin1Char('\n'));
+
+    // 译文按块拼回去：没翻出来的块保留原文，这样记录里不会出现空洞。
+    QStringList translated;
+    translated.reserve(blocks.size());
+    for (const QVariant &value : blocks) {
+        const QVariantMap block = value.toMap();
+        const QString text = block.value(QStringLiteral("text")).toString();
+        translated.append(text.isEmpty() ? block.value(QStringLiteral("original")).toString() : text);
+    }
+    rec.translatedText = translated.join(QLatin1Char('\n'));
+    rec.createdAt = QDateTime::currentDateTime();
+
+    TranslatorRecords *store = recordsFor(rec.source);
+    const qint64 id = store->add(rec);
+    if (id <= 0) {
+        setStatus(store->lastError(), true);
+        return false;
+    }
+    setStatus(studious::i18n::s("已保存到记录。", "Saved to records."), false);
+    return true;
+}
+
+bool AppBackend::saveCaptureRecord(const QString &source,
+                                   const QString &imagePath,
+                                   const QRect &region,
+                                   const QVariantList &originals,
+                                   const QVariantList &blocks)
+{
+    return persistRecord(source, imagePath, region, originals, blocks);
+}
+
+bool AppBackend::saveMiniRecord(const QVariantList &originals,
+                                const QVariantList &blocks,
+                                const QString &engineLabel)
+{
+    return persistRecord(QStringLiteral("mini"), QString(), QRect(), originals, blocks, engineLabel);
+}
+
+void AppBackend::beginLiveSession()
+{
+    // 一次会话一行父记录：开的时候清空缓冲，中间的刷新只追加。
+    m_liveSessionActive = true;
+    m_liveOriginals.clear();
+    m_liveTranslated.clear();
+}
+
+void AppBackend::appendLiveSession(const QVariantList &blocks)
+{
+    if (!m_liveSessionActive)
+        return;
+
+    for (const QVariant &value : blocks) {
+        const QVariantMap block = value.toMap();
+        const QString original = block.value(QStringLiteral("original")).toString().trimmed();
+        const QString text = block.value(QStringLiteral("text")).toString().trimmed();
+        if (original.isEmpty() && text.isEmpty())
+            continue;
+        // 实时刷新会一遍遍送回同样的行：跟上一行一样的就跳过，
+        // 只留"第一次看到它的那一刻"，否则一组记录会变成几十份重复。
+        if (!m_liveOriginals.isEmpty() && m_liveOriginals.last() == original)
+            continue;
+        m_liveOriginals.append(original);
+        m_liveTranslated.append(text.isEmpty() ? original : text);
+    }
+}
+
+void AppBackend::finishLiveSession()
+{
+    if (!m_liveSessionActive)
+        return;
+    m_liveSessionActive = false;
+    if (m_liveOriginals.isEmpty())
+        return;
+
+    QVariantList originals;
+    QVariantList blocks;
+    originals.reserve(m_liveOriginals.size());
+    blocks.reserve(m_liveOriginals.size());
+    for (int i = 0; i < m_liveOriginals.size(); ++i) {
+        const QString original = m_liveOriginals.at(i);
+        const QString text = i < m_liveTranslated.size() ? m_liveTranslated.at(i) : original;
+        originals.append(original);
+        QVariantMap block;
+        block.insert(QStringLiteral("original"), original);
+        block.insert(QStringLiteral("text"), text);
+        blocks.append(block);
+    }
+
+    persistRecord(QStringLiteral("live"), QString(), QRect(), originals, blocks);
+    m_liveOriginals.clear();
+    m_liveTranslated.clear();
+}
+
+QVariantList AppBackend::historyRecords(int limit)
+{
+    if (limit <= 0)
+        limit = 100;
+
+    QVariantList merged;
+    const QStringList kinds = {QStringLiteral("capture"), QStringLiteral("mini"), QStringLiteral("live")};
+    for (const QString &kind : kinds) {
+        TranslatorRecords *store = recordsFor(kind);
+        // 每个库都按自己的上限取，最后再整体截断 —— 不能只取前 limit 条，
+        // 否则某个库最近写入很多时，另外两个库的近期记录会被挤出去。
+        const QVector<TranslationRecord> rows = store->list(limit);
+        for (const TranslationRecord &row : rows) {
+            QVariantMap item;
+            item.insert(QStringLiteral("kind"), kind);
+            item.insert(QStringLiteral("id"), row.id);
+            item.insert(QStringLiteral("source"), row.source);
+            item.insert(QStringLiteral("srcLang"), row.srcLang);
+            item.insert(QStringLiteral("dstLangs"), row.dstLangs);
+            item.insert(QStringLiteral("engine"), row.engine);
+            item.insert(QStringLiteral("imagePath"), row.imagePath);
+            item.insert(QStringLiteral("regionX"), row.region.x());
+            item.insert(QStringLiteral("regionY"), row.region.y());
+            item.insert(QStringLiteral("regionW"), row.region.width());
+            item.insert(QStringLiteral("regionH"), row.region.height());
+            item.insert(QStringLiteral("originalText"), row.originalText);
+            item.insert(QStringLiteral("translatedText"), row.translatedText);
+            item.insert(QStringLiteral("createdAt"), row.createdAt.toString(Qt::ISODate));
+            merged.append(item);
+        }
+    }
+
+    std::sort(merged.begin(), merged.end(), [](const QVariant &lhs, const QVariant &rhs) {
+        return lhs.toMap().value(QStringLiteral("createdAt")).toString()
+             > rhs.toMap().value(QStringLiteral("createdAt")).toString();
+    });
+
+    if (merged.size() > limit)
+        merged = merged.mid(0, limit);
+    return merged;
+}
+
+int AppBackend::recordCount()
+{
+    int total = 0;
+    for (const QString &kind : {QStringLiteral("capture"), QStringLiteral("mini"), QStringLiteral("live")})
+        total += recordsFor(kind)->count();
+    return total;
 }
 
 } // namespace studious::ui

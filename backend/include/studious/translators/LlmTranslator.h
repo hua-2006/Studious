@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "config/LlmConfig.h"
 #include "contract/ITranslator.h"
 #include "net/IHttpClient.h"
@@ -108,7 +110,7 @@ private:
 
     config::LlmConfig m_cfg;
     net::IHttpClient *m_http = nullptr;   // 不持有，生命周期由调用方保证
-    bool m_cancelRequested = false;
+    std::atomic_bool m_cancelRequested{false};
 
     // 本次 translate() 的时间基准，retryBudgetExhausted() 用它取 elapsed()。
     // 每次 translate() 开头重置一次，整次调用的所有段 / 所有目标语言共用一个 deadline。

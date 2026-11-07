@@ -51,6 +51,12 @@ public:
     // 可用性类失败（网络/超时/429/5xx/本地服务没起来）自动换下一个，语义类失败立刻返回。
     core::TranslateOutcome translate(const core::TranslateRequest &req);
 
+    // 请求"尽快停下"。可以从**别的线程**调用：内部只是把每个组件的
+    // atomic 取消标志置位，正在飞的那一次 HTTP 请求仍然会跑完（同步实现没有
+    // 打断能力），但段落/分块循环会在下一次检查点退出。
+    // 注意：各组件在每次 translate 入口会自己清标志，所以要持续取消得反复调用。
+    void cancel();
+
     // 列出所有组件状态，供 UI 显示（组件 id + 资产就绪情况）。
     QVector<QPair<QString, core::ResolveResult>> status(const QString &src,
                                                        const QString &dst) const;

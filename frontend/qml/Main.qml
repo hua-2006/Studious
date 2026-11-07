@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Effects
 import Studious
 
-// 主窗口：无边框自绘外壳（左侧导航 + 顶栏 + 五页堆栈）。
+// 主窗口：无边框自绘外壳（左侧导航 + 顶栏 + 六页堆栈）。
 //
 // 为什么用 FramelessWindowHint：
 //   系统标题栏没法改圆角、也没法跟我们的配色统一，只能整条去掉自己画。
@@ -46,9 +46,13 @@ Window {
     // 万一以后有人想走 window.close() 退出时不被上面那条拦下来。
     property bool forceQuit: false
 
+    // 导航顺序 = StackLayout 顺序，两处必须同步改：
+    //   0 翻译 / 1 快捷键 / 2 浮层 / 3 配置 / 4 设置 / 5 外观
+    // 「浮层」插在「快捷键」之后：热键怎么按完，下一页就是按完弹出来的东西长什么样。
     readonly property var navItems: [
         { icon: "qrc:/qt/qml/Studious/resources/icons/translate.svg", label: qsTr("翻译") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/keyboard.svg",  label: qsTr("快捷键") },
+        { icon: "qrc:/qt/qml/Studious/resources/icons/overlay.svg",   label: qsTr("浮层") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/tune.svg",      label: qsTr("配置") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/settings.svg",  label: qsTr("设置") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/palette.svg",   label: qsTr("外观") }
@@ -205,6 +209,7 @@ Window {
                             // 翻译（第 0 项）和快捷键（第 1 项）之间加一条分割线。
                             // 放在下标的 delegate 里而不是单独一条，是因为 Repeater 的
                             // delegate 必须连续排布，插独立节点会破坏 Layout 顺序。
+                            // 下标保持 1：插入「浮层」是往快捷键**之后**加，这条线不该跟着挪。
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: Theme.s3
@@ -405,15 +410,19 @@ Window {
 
                     TranslatePage {
                         objectName: "translatePage"
-                        onNavigateRequested: function (index) { root.currentPage = index }
+                        // TranslatePage 里的「查看引擎状态」还是按插入「浮层」之前的旧顺序
+                        // 发的 2（当时 2 = 配置）。浮层占了 2，配置后移到 3，
+                        // 那页不在这次改动范围内，字面量改不了，只能在这条通道上平移一位。
+                        onNavigateRequested: function (index) { root.currentPage = index >= 2 ? index + 1 : index }
                         // 三张入口卡：小窗与实时的界面还没接（先明确说一句），截图直接进流程。
                         onLaunchRequested: function (kind) { root.launch(kind) }
                     }
                     HotkeysPage { }
+                    OverlayPage { }
                     ConfigPage {
                         // 本地 MT 卡的「下载 / 导入」：切到设置页的资产分区并预选 mt 分类。
                         onOpenAssetsRequested: function (kind) {
-                            root.currentPage = 3
+                            root.currentPage = 4
                             settingsPage.openAssets(kind)
                         }
                     }
@@ -445,10 +454,11 @@ Window {
             }
             // 「去处理」：后端已有的 errorRaised 绝大多数来自资产安装/卸载与本地 LLM 启动，
             // 落点放在设置页（资产分区就在这一页），用户一眼能看到缺什么。
+            // 下标 4 = 设置（0 翻译 / 1 快捷键 / 2 浮层 / 3 配置 / 4 设置 / 5 外观）。
             onActivated: {
                 noticeTimer.stop()
                 noticeBar.shown = false
-                root.currentPage = 3
+                root.currentPage = 4
             }
         }
     }
@@ -495,6 +505,16 @@ Window {
         id: captureOverlay
         // 几何从平台层拿（QML 的 Screen.virtualWidth 在 Qt 6.12 里取不到值，会变 NaN）。
         desktopRect: screenFlow.desktopRect
+
+        // 「设置」小窗是浮层自己的子窗口，摆在哪儿、什么时候收都由浮层管；
+        // 这里只接它页脚那句「更多设置」：收掉这一单、回主界面的「浮层」页。
+        onMoreSettingsRequested: {
+            screenFlow.cancel();
+            root.show();
+            root.raise();
+            root.requestActivate();
+            root.currentPage = 2;
+        }
     }
 
     // 入口分发：三张卡片与全局热键都从这里进来。
@@ -516,5 +536,10 @@ Window {
         // 热键走的是 C++ → QML 这条：capture 已经在 C++ 里直接 begin()，
         // 这里只接过 mini / live。
         function onLaunchRequested(kind) { root.launch(kind) }
+
+        // 「保存」：存储层在 AppBackend（一份 db、一个连接），浮层只交出这一屏的数据。
+        function onSaveRecordRequested(source, imagePath, region, originals, blocks) {
+            backend.saveCaptureRecord(source, imagePath, region, originals, blocks)
+        }
     }
 }

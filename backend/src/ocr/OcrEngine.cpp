@@ -153,17 +153,181 @@ std::vector<float> toChwFloat(const QImage &src, int w, int h, const std::array<
         const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(w);
         for (int x = 0; x < w; ++x) {
             const size_t dst = rowOffset + static_cast<size_t>(x);
-            const float r = static_cast<float>(line[x * 3 + 0]) / 255.0f;
+            // PaddleOCR 的权重是在 **BGR** 上训的（它先 cv2 解码再 `[:, :, ::-1]`）。
+            // 这里 QImage 给的是 RGB，通道顺序必须换过来，否则颜色权重对不上，
+            // 检测出来的多边形会碎、识别会串字（实测「always hear about my friends」
+            // 会变成「awayshearaboutmfresli」）。
+            const float b = static_cast<float>(line[x * 3 + 0]) / 255.0f;
             const float g = static_cast<float>(line[x * 3 + 1]) / 255.0f;
-            const float b = static_cast<float>(line[x * 3 + 2]) / 255.0f;
-            rp[dst] = (r - mean[0]) / stdv[0];
+            const float r = static_cast<float>(line[x * 3 + 2]) / 255.0f;
+            rp[dst] = (b - mean[0]) / stdv[0];
             gp[dst] = (g - mean[1]) / stdv[1];
-            bp[dst] = (b - mean[2]) / stdv[2];
+            bp[dst] = (r - mean[2]) / stdv[2];
         }
     }
     return out;
 }
 
+// 判断一个字符是不是 CJK（中日韩）——切片拼接时中文之间不该插空格。
+bool isCjk(QChar ch)
+{
+    const ushort u = ch.unicode();
+    return (u >= 0x2E80 && u <= 0x9FFF) || (u >= 0xF900 && u <= 0xFAFF)
+           || (u >= 0xFF00 && u <= 0xFFEF) || (u >= 0x3040 && u <= 0x30FF);
+}
+
+// 把切片识别结果拼到累计串上，并去掉重叠部分。
+//
+// 切片之间刻意留了重叠（防止把字母切两半），代价是相邻两片会把同一段字各认一遍：
+// 不做处理时一行会变成「they say their ine is e is such low that th they can' t …」。
+// 这里按"累计串的后缀 == 下一片的前缀"找最长重叠（最多 24 字符），从重叠处接上。
+void appendSlice(QString *acc, const QString &next, bool wordGap)
+{
+    if (next.isEmpty()) {
+        return;
+    }
+    if (acc->isEmpty()) {
+        *acc = next;
+        return;
+    }
+
+    const QChar last = acc->at(acc->size() - 1);
+    const QChar first = next.at(0);
+
+    // 词边界：两片之间本来就有空白，直接补一个空格接上。
+    // **不要在这里做"后缀==前缀"去重** —— 那会把 "make" + "ends" 这种
+    // 尾首相同时被当成重叠吃掉一个字母，拼出 "makends"。
+    if (wordGap) {
+        if (!last.isSpace() && !first.isSpace() && !isCjk(last) && !isCjk(first)) {
+            acc->append(QLatin1Char(' '));
+        }
+        acc->append(next);
+        return;
+    }
+
+    // 硬切（超长单词 / CJK 密排）：没有留白可依，按"后缀 == 前缀"剥掉重复段。
+    const int maxL = std::min(std::min(static_cast<int>(acc->size()), static_cast<int>(next.size())), 24);
+    for (int len = maxL; len >= 2; --len) {
+        if (acc->right(len) == next.left(len)) {
+            acc->append(next.mid(len));
+            return;
+        }
+    }
+    acc->append(next);
+}
+
+// 把超宽的一行切成"字与字之间"的几段，切点必须落在空白列上。
+//
+// 为什么不用带重叠的等距切片：重叠区的两片各自识别结果不完全一致
+// （「work」可能一边认成「worl」、一边认成「orks」），按字符串去重根本对不上，
+// 拼出来就是「he worl orks so hard」。按空白列切就没有重叠区，也不用猜。
+QVector<QRect> sliceAtGaps(const QImage &img, const QRect &box, int sliceW, QVector<int> *gapAfter)
+{
+    QVector<QRect> out;
+    if (gapAfter) {
+        gapAfter->clear();
+    }
+
+    // 先算每一列有没有墨迹（第 0 行以外也算，避免细笔画漏检）。
+    const int columns = box.width();
+    std::array<int, 256> hist{};
+    for (int y = box.top(); y < box.bottom(); y += 2) {
+        const uchar *line = img.constScanLine(y);
+        for (int x = box.left(); x < box.right(); x += 2) {
+            const int l = static_cast<int>(0.299 * line[x * 3] + 0.587 * line[x * 3 + 1]
+                                           + 0.114 * line[x * 3 + 2]);
+            ++hist[static_cast<size_t>(std::clamp(l, 0, 255))];
+        }
+    }
+    const int bg = static_cast<int>(std::distance(hist.begin(),
+                                                  std::max_element(hist.begin(), hist.end())));
+
+    std::vector<int> ink(static_cast<size_t>(columns), 0);
+    for (int y = box.top(); y < box.bottom(); ++y) {
+        const uchar *line = img.constScanLine(y);
+        for (int x = 0; x < columns; ++x) {
+            const int px = (box.left() + x) * 3;
+            const int l = static_cast<int>(0.299 * line[px] + 0.587 * line[px + 1]
+                                           + 0.114 * line[px + 2]);
+            if (std::abs(l - bg) > 48) {
+                ++ink[static_cast<size_t>(x)];
+            }
+        }
+    }
+
+    // 按"墨迹连续段"切出词（中文字符之间通常也有一两列空白，切出来就是单字，没问题）。
+    struct Span { int begin; int end; };
+    std::vector<Span> words;
+    int x = 0;
+    while (x < columns) {
+        while (x < columns && ink[static_cast<size_t>(x)] == 0) {
+            ++x;
+        }
+        if (x >= columns) {
+            break;
+        }
+        const int begin = x;
+        while (x < columns && ink[static_cast<size_t>(x)] > 0) {
+            ++x;
+        }
+        words.push_back(Span{begin, x});
+    }
+    // 把"字母缝"并进同一个词：词间距明显大于字母缝。阈值取字高的 12%
+    // （22px 正文 ≈ 2.6px，Notepad 的词间距是 8~10px），避免把 "anothe r" 切成两段。
+    if (words.size() > 1) {
+        const int mergeGap = std::max(2, static_cast<int>(std::lround(box.height() * 0.12)));
+        std::vector<Span> mergedWords;
+        mergedWords.push_back(words.front());
+        for (size_t k = 1; k < words.size(); ++k) {
+            const int gap = words[k].begin - mergedWords.back().end;
+            if (gap < mergeGap) {
+                mergedWords.back().end = words[k].end;
+            } else {
+                mergedWords.push_back(words[k]);
+            }
+        }
+        words.swap(mergedWords);
+    }
+
+    if (words.empty()) {
+        out.append(box);
+        return out;
+    }
+
+    // 按词边界把若干词装进一片（宽度 <= sliceW ≈ 6 倍字高）。
+    //
+    // 为什么不"一个词一片"：rec 对极小裁剪（"I"、"a"、句号）会乱猜，
+    // 实测置信度掉到 0.15、还会多吐字符（"1 1 always"）。整片识别最准；
+    // 组与组之间由我们补空格，片内部偶尔会粘词（中文行模型不吐空格），
+    // 这是已知限制，用 CTC 列对齐可以再修（见 TODO）。
+    size_t i = 0;
+    while (i < words.size()) {
+        const int startCol = words[i].begin;
+        size_t last = i;
+        while (last + 1 < words.size() && words[last + 1].end - startCol <= sliceW) {
+            ++last;
+        }
+        const int endCol = words[last].end;
+        if (endCol - startCol > sliceW) {
+            int cursor = startCol;
+            while (cursor < endCol) {
+                const int w = std::min(sliceW, endCol - cursor);
+                out.append(QRect(box.left() + cursor, box.top(), w, box.height()));
+                if (gapAfter) {
+                    gapAfter->append(0);
+                }
+                cursor += w;
+            }
+        } else {
+            out.append(QRect(box.left() + startCol, box.top(), endCol - startCol, box.height()));
+            const int gap = (last + 1 < words.size()) ? (words[last + 1].begin - endCol) : 0;
+            if (gapAfter) {
+                gapAfter->append(gap);
+            }
+        }
+        i = last + 1;
+    }    return out;
+}
 // 概率图里的一个连通域（坐标系 = 概率图，不是原图）。
 struct Component {
     int minX = 0;
@@ -320,14 +484,33 @@ float softmaxAt(const float *row, int count, float maxLogit)
     return std::isfinite(p) ? p : 0.0f;
 }
 
+// 资产是「一条资产一个目录」装的（<models>/ocr.det.ppocrv4/det.onnx），而引擎只想收一个目录。
+// 两种布局都认：文件直接放在 dir 下，或躺在 dir 的某个子目录里。都找不到时返回直连路径，
+// 让 missingFiles() 照常报出「缺 det.onnx」这种能看懂的话。
+QString resolveAssetFile(const QString &dir, const QString &fileName)
+{
+    const QString direct = QDir(dir).filePath(fileName);
+    if (QFileInfo(direct).isFile())
+        return direct;
+
+    const QFileInfoList subdirs =
+        QDir(dir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &sub : subdirs) {
+        const QString candidate = QDir(sub.absoluteFilePath()).filePath(fileName);
+        if (QFileInfo(candidate).isFile())
+            return candidate;
+    }
+    return direct;
+}
+
 } // namespace
 
 struct OcrEngine::Session {
     explicit Session(const QString &dir)
         : modelsDir(dir),
-          detPath(QDir(dir).filePath(QString::fromLatin1(kDetFile))),
-          recPath(QDir(dir).filePath(QString::fromLatin1(kRecFile))),
-          dictPath(QDir(dir).filePath(QString::fromLatin1(kDictFile)))
+          detPath(resolveAssetFile(dir, QString::fromLatin1(kDetFile))),
+          recPath(resolveAssetFile(dir, QString::fromLatin1(kRecFile))),
+          dictPath(resolveAssetFile(dir, QString::fromLatin1(kDictFile)))
     {
     }
 
@@ -370,6 +553,9 @@ struct OcrEngine::Session {
                 QString *error);
     bool recognizeBox(const QImage &img, const QRect &box, QString *text, qreal *confidence,
                       QString *error);
+    // 单片的识别（prepare → run → CTC 解码）。recognizeBox 负责按宽度切片后逐片调它。
+    bool recognizeCrop(const QImage &img, const QRect &cropBox, QString *text, qreal *confidence,
+                       QString *error);
 };
 
 QStringList OcrEngine::Session::missingFilesNow() const
@@ -686,21 +872,67 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
     text->clear();
     *confidence = 0.0;
 
+    // 一行很长的文字（截图里是常态：整段正文一行 800~1200 px、字高 30 px）塞进
+    // 320×48 的 rec 输入会被横向压掉三四倍，字母直接糊成一团。PaddleOCR 的做法是
+    // 保持高 48、宽按比例裁到 320；对超宽行必须**按空白列切片**再拼回来。
+    const int sliceW = std::max(64, static_cast<int>(std::lround(box.height() * 6.0)));
+    QVector<int> gapAfter;
+    const QVector<QRect> slices = sliceAtGaps(img, box, sliceW, &gapAfter);
+    if (slices.size() <= 1) {
+        return recognizeCrop(img, box, text, confidence, error);
+    }
+
+    QString merged;
+    qreal minConfidence = 1.0;
+    int counted = 0;
+    for (int i = 0; i < slices.size(); ++i) {
+        const QRect &slice = slices.at(i);
+        if (slice.width() < 4) {
+            continue;
+        }
+        QString part;
+        qreal conf = 0.0;
+        if (!recognizeCrop(img, slice, &part, &conf, error)) {
+            return false;
+        }
+        if (part.isEmpty()) {
+            continue;
+        }
+        // 空白宽到像词间距（> 字高的 1/8）才补空格；字母缝里落下就不补。
+        const int gap = gapAfter.value(i, 0);
+        const bool wordGap = gap > 0;   // 分组边界就是词边界：有间隙就补一个空格
+        appendSlice(&merged, part, wordGap);
+        minConfidence = std::min(minConfidence, conf);
+        ++counted;
+    }
+
+    if (counted == 0) {
+        return true;
+    }
+    *text = merged.simplified();
+    *confidence = minConfidence;
+    return true;
+}
+
+bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QString *text,
+                                       qreal *confidence, QString *error)
+{
+    text->clear();
+    *confidence = 0.0;
+
     const QImage crop = img.copy(box);
     if (crop.isNull() || crop.width() < 1 || crop.height() < 1) {
         return true;   // 空裁剪不算失败，只是这一段没字
     }
 
-    // 高固定 48，宽按比例（上限 320）。太宽的框改成"宽 320 + 高度反算"，
-    // 保证宽高比不变；画不满的右侧 / 下侧补 0（归一化后的黑）。
+    // 高**必须**是 48：PP-OCR 的 rec 是「高度固定 48、宽度按比例裁到 320」训出来的，
+    // 宽度超过 320 时横向压缩（训练里有这类增广），纵向永远不缩。
+    // 早先我们按宽高比反算高度（320/ratio），等于把整行字缩小成十几个像素，
+    // 实测「they say their income is so low...」会被识成「woud pitfn teln」。
     const double ratio =
         static_cast<double>(crop.width()) / static_cast<double>(std::max(1, crop.height()));
-    int drawW = std::max(1, static_cast<int>(std::lround(kRecHeight * ratio)));
-    int drawH = kRecHeight;
-    if (drawW > kRecWidth) {
-        drawW = kRecWidth;
-        drawH = std::clamp(static_cast<int>(std::lround(kRecWidth / ratio)), 1, kRecHeight);
-    }
+    const int drawH = kRecHeight;
+    const int drawW = std::clamp(static_cast<int>(std::lround(kRecHeight * ratio)), 1, kRecWidth);
 
     const QImage scaled = crop.scaled(drawW, drawH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                               .convertToFormat(QImage::Format_RGB888);
@@ -713,7 +945,8 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
         for (int x = 0; x < drawW; ++x) {
             const size_t dst = rowOffset + static_cast<size_t>(x);
             for (int c = 0; c < 3; ++c) {
-                const float v = static_cast<float>(line[x * 3 + c]) / 255.0f;
+                // 同上：rec 也要 BGR（c=0 取蓝通道，即 RGB888 里的第 3 个字节）。
+                const float v = static_cast<float>(line[x * 3 + (2 - c)]) / 255.0f;
                 chw[static_cast<size_t>(c) * plane + dst] = (v - kRecMean) / kRecStd;
             }
         }
@@ -776,6 +1009,25 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
 
         const float *logits = outputs.front().GetTensorData<float>();
 
+        // 输出的到底是 logits 还是已经 softmax 过的概率，取决于导出脚本：
+        // PP-OCR 官方的 rec 导出带 softmax（整行加起来 = 1），有些导出不带。
+        // 直接对已经是概率的行走一遍 softmax 会得到 1/类别数 ≈ 0.0002 的"置信度"，
+        // 看上去像模型坏了。这里按第一行的行和判断一次，两种都支持。
+        bool rowIsProbability = false;
+        {
+            double rowSum = 0.0;
+            bool allFinite = true;
+            for (int c = 0; c < classes; ++c) {
+                const float v = logits[c];
+                if (!std::isfinite(v)) {
+                    allFinite = false;
+                    break;
+                }
+                rowSum += static_cast<double>(v);
+            }
+            rowIsProbability = allFinite && std::abs(rowSum - 1.0) < 0.05;
+        }
+
         // CTC 贪心解码：逐时间步 argmax → 去掉 blank(0) → 去掉连续重复。
         // 注意 prev 连 blank 一起更新，这样 "a blank a" 会输出两个 a（不是 "aa" 折叠成一个）。
         QString result;
@@ -799,7 +1051,8 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
                     result += QLatin1Char(' ');
                 }
                 // 超出字典的类别（字典不配套时）直接丢弃，不猜字。
-                probSum += static_cast<double>(softmaxAt(row, classes, bestLogit));
+                probSum += rowIsProbability ? static_cast<double>(bestLogit)
+                                            : static_cast<double>(softmaxAt(row, classes, bestLogit));
                 ++kept;
             }
             prev = best;

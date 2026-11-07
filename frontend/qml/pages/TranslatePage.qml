@@ -669,14 +669,27 @@ Item {
             spacing: Theme.s1
             visible: backend.statusText.length > 0 || backend.statusWarning.length > 0
 
-            Text {
+            RowLayout {
                 Layout.fillWidth: true
-                visible: text.length > 0
-                text: backend.statusText
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.fontSizeSmall
-                color: backend.statusIsError ? Theme.danger : Theme.inkVariant
+                spacing: Theme.s3
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: text.length > 0
+                    text: backend.statusText
+                    wrapMode: Text.WordWrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: backend.statusIsError ? Theme.danger : Theme.inkVariant
+                }
+
+                // 翻译在跑时给一个出口：点一下立刻停，不必等这一单跑完。
+                AppButton {
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: backend.running
+                    text: qsTr("取消")
+                    onClicked: backend.cancel()
+                }
             }
 
             // .tr-warning：警告提示条

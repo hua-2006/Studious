@@ -42,6 +42,10 @@ Window {
     property bool confirmed: false
     // 引擎下拉是否展开。用窗内面板而不是 Popup —— 见文件末尾 engineMenu 的注释。
     property bool menuOpen: false
+    // 点「设置」弹出的浮层设置小窗是否展开。它是本窗口的子窗口（见文件末尾的实例）。
+    property bool settingsOpen: false
+    // 小窗里点了「更多设置」：交给 Main 收浮层、回主界面的「浮层」页。
+    signal moreSettingsRequested()
     // 松手后的框（还没送去翻译）。ScreenFlow 的 selectionRect 要等 confirmSelection 才有值，
     // 所以「已选、等确认」这个阶段必须自己留一份。
     property rect localRect: Qt.rect(0, 0, 0, 0)
@@ -78,6 +82,48 @@ Window {
         { code: "llm-local", label: qsTr("本地 LLM") },
         { code: "local-mt", label: qsTr("本地 MT") }
     ]
+
+    // 后端报的引擎状态（id → "ready" / "not-ready" / "missing-assets"）。
+    // 做成绑定而不是一次性拷贝：菜单开着的时候下次刷新、或者切了引擎，圆点自己会变。
+    readonly property var engineStatusMap: {
+        const map = ({})
+        const rows = backend.engineStatuses || []
+        for (let i = 0; i < rows.length; ++i) {
+            const row = rows[i]
+            if (row && row.id)
+                map[row.id] = row.state || (row.ready ? "ready" : "not-ready")
+        }
+        return map
+    }
+
+    // 空串（自动）看全体：只要还有一个能用的引擎，自动就是绿的；全废才红。
+    function engineStateOf(code) {
+        const map = overlay.engineStatusMap
+        if (code === "") {
+            let best = "missing-assets"
+            for (const key in map) {
+                if (key === "")
+                    continue
+                if (map[key] === "ready")
+                    return "ready"
+                if (map[key] === "not-ready")
+                    best = "not-ready"
+            }
+            return best
+        }
+        return map[code] || "not-ready"
+    }
+
+    // 缺资产的（红）不能选；「未就绪」（黄）可以选 —— 本地服务会按需拉起。
+    function engineUsable(code) {
+        return overlay.engineStateOf(code) !== "missing-assets"
+    }
+
+    function engineDotColor(code) {
+        const state = overlay.engineStateOf(code)
+        return state === "ready" ? Theme.good
+             : (state === "not-ready" ? Theme.caution : Theme.danger)
+    }
 
     x: desktopRect.x
     y: desktopRect.y
@@ -123,7 +169,9 @@ Window {
     // ---------------------------------------------------------------- 压暗（四块，中间镂空）
     // 不能用一个半透明大矩形 + 选区反色：那样选区里的原图会被压暗两次，
     // 而设计稿要求「选框露出原图」。
-    readonly property color dimColor: Qt.rgba(0, 0, 0, 0.45)
+    // 压暗浓度来自设置 backend.overlayDim（20~80，百分比）：0.45 那种写死的值
+    // 在浅色截图和暗色截图上观感差太远，交给用户自己调。
+    readonly property color dimColor: Qt.rgba(0, 0, 0, backend.overlayDim / 100)
     Rectangle { // 上
         x: 0; y: 0
         width: overlay.width
@@ -157,7 +205,8 @@ Window {
     }
 
     // ---------------------------------------------------------------- 放大镜（微信截图那种）
-    // 框选时贴在光标右下方：上面是放大视图 + 十字线，下面是坐标、色值和 RGB。
+    // 框选时贴在光标旁边（哪个角由设置决定，默认右下方）：
+    // 上面是放大视图 + 十字线，下面是坐标、色值和 RGB。
     // 放大是把整屏底图按倍率缩放后用 clip 露出光标附近一块（Qt 6 的 Image 没有 sourceRect）。
     // 倍率来自设置 backend.overlayZoom（2~8 倍），不写死在这里。
     Rectangle {
@@ -171,8 +220,18 @@ Window {
         readonly property var info: screenFlow.pixelInfoAt(px, py)
         readonly property color swatch: info.ok ? info.hex : Theme.surfaceHighest
 
+        // 贴在光标的哪个角，来自设置 backend.magnifierCorner（默认右下）。
+        // 拆成「左右」「上下」两个布尔，x/y 才能各自独立翻折 ——
+        // 比如靠右但下面还有地方时，只翻水平方向，不该整个跑到左上方去。
+        readonly property bool placeRight: backend.magnifierCorner === "bottomRight"
+                                           || backend.magnifierCorner === "topRight"
+        readonly property bool placeBelow: backend.magnifierCorner === "bottomRight"
+                                           || backend.magnifierCorner === "bottomLeft"
+
         // 只在「正在拖框」时出现：松开手、选区定了就收起来，别一直挡着画面。
-        visible: overlay.dragging && overlay.cursorPos.x >= 0 && overlay.cursorPos.y >= 0
+        // backend.overlayMagnifier 关掉就整块不出现（十字光标还在，只是不放大）。
+        visible: overlay.dragging && backend.overlayMagnifier
+                 && overlay.cursorPos.x >= 0 && overlay.cursorPos.y >= 0
         // z 压到工具栏（5）之下：放大镜跟着光标跑，难免压到工具栏上，
         // 让「翻译」这类主按钮永远压在它上面，别把操作挡了。
         z: 4
@@ -184,18 +243,35 @@ Window {
         border.width: 1
         border.color: Theme.outlineVariant
 
-        // 贴着光标右下角；右边 / 下边放不下就翻到另一侧，始终留在屏内。
+        // 先按设置的方向贴；那一侧放不下（贴屏幕边）就翻到对面，始终留在屏内。
+        // 水平、垂直分开判：右下设置碰到底边时只往上翻，仍然在光标右侧。
         x: {
-            const right = overlay.cursorPos.x + Theme.s3;
-            return right + width + Theme.s2 <= overlay.width
-                    ? right
-                    : Math.max(Theme.s2, overlay.cursorPos.x - width - Theme.s3);
+            const gap = Theme.s3;
+            if (magnifier.placeRight) {
+                const right = overlay.cursorPos.x + gap;
+                return right + width + Theme.s2 <= overlay.width
+                        ? right
+                        : Math.max(Theme.s2, overlay.cursorPos.x - width - gap);
+            }
+            const left = overlay.cursorPos.x - width - gap;
+            return left >= Theme.s2
+                    ? left
+                    : Math.max(Theme.s2,
+                               Math.min(overlay.width - width - Theme.s2, overlay.cursorPos.x + gap));
         }
         y: {
-            const down = overlay.cursorPos.y + Theme.s3;
-            return down + height + Theme.s2 <= overlay.height
-                    ? down
-                    : Math.max(Theme.s2, overlay.cursorPos.y - height - Theme.s3);
+            const gap = Theme.s3;
+            if (magnifier.placeBelow) {
+                const down = overlay.cursorPos.y + gap;
+                return down + height + Theme.s2 <= overlay.height
+                        ? down
+                        : Math.max(Theme.s2, overlay.cursorPos.y - height - gap);
+            }
+            const up = overlay.cursorPos.y - height - gap;
+            return up >= Theme.s2
+                    ? up
+                    : Math.max(Theme.s2,
+                               Math.min(overlay.height - height - Theme.s2, overlay.cursorPos.y + gap));
         }
 
         // ---- 放大区 ----
@@ -447,6 +523,12 @@ Window {
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSmall
             }
+            // 取消：只打断这一单，选区保留，可以换个引擎马上再翻（Esc 也是这个动作）。
+            OverlayButton {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: qsTr("取消 Esc")
+                onClicked: screenFlow.cancelTranslation()
+            }
         }
     }
 
@@ -630,7 +712,31 @@ Window {
                 objectName: "engineSlot"
                 text: overlay.engineShortName() + " ▾"
                 primary: false
-                onClicked: overlay.menuOpen = !overlay.menuOpen
+                onClicked: {
+                    // 打开前刷一次状态：菜单右边那几个圆点要反映"现在"能不能用
+                    // （刚下完资产、刚起停本地服务，都可能在两单之间变）。
+                    backend.refreshEngineStatuses()
+                    overlay.menuOpen = !overlay.menuOpen
+                }
+            }
+
+            // 设置：打开「浮层设置」子窗口（截图翻译这一单怎么翻）。再点一下收起。
+            // 它必须是浮层的子窗口：跟着浮层一起出现、一起关，位置也恒在浮层之上。
+            OverlayButton {
+                id: gearSlot
+                objectName: "gearSlot"
+                text: qsTr("设置")
+                primary: false
+                onClicked: {
+                    overlay.menuOpen = false;
+                    overlay.settingsOpen = !overlay.settingsOpen;
+                    if (overlay.settingsOpen) {
+                        settingsPanel.openAt(overlay.x + ovbar.x + barRow.x + gearSlot.x,
+                                             overlay.y + ovbar.y + barRow.y + gearSlot.y,
+                                             gearSlot.width,
+                                             gearSlot.height);
+                    }
+                }
             }
 
             Rectangle {
@@ -738,6 +844,47 @@ Window {
         const y = Math.max(0, Math.min(base.y + dy, overlay.height - base.height));
         overlay.localRect = Qt.rect(Math.round(x), Math.round(y), Math.round(base.width), Math.round(base.height));
     }
+    // 方向键微调：整块选区平移，尺寸不变（改大小还是拖手柄）。
+    // 只有「框已定、还没翻译」这段才接 —— 结果已经出来时挪框，用户没法判断
+    // 是重跑还是保留，索性不给动。返回 true 表示这手确实吃掉了。
+    function nudgeSelection(dx, dy) {
+        if (!overlay.selecting || overlay.dragging)
+            return false;
+        const base = overlay.liveRect;
+        if (base.width < 3 || base.height < 3)
+            return false;   // 还没框出来，方向键没意义
+        const x = Math.max(0, Math.min(base.x + dx, overlay.width - base.width));
+        const y = Math.max(0, Math.min(base.y + dy, overlay.height - base.height));
+        overlay.localRect = Qt.rect(Math.round(x), Math.round(y),
+                                    Math.round(base.width), Math.round(base.height));
+        return true;
+    }
+
+    // 方向键的键位判定 + 修饰键（Shift = 10px，否则 1px）。
+    //
+    // 为什么不在那个 Item 上写 `Keys.enabled: backend.overlayArrowNudge`：
+    // Keys.enabled 是整份 Keys 的开关，会把同一个 Item 上的 Esc / Enter 一起关掉 ——
+    // 用户一关「方向键微调」，浮层就只剩鼠标能退出。所以门控放在函数第一行。
+    function handleArrowKey(event) {
+        if (!backend.overlayArrowNudge)
+            return;
+        let dx = 0;
+        let dy = 0;
+        if (event.key === Qt.Key_Left)
+            dx = -1;
+        else if (event.key === Qt.Key_Right)
+            dx = 1;
+        else if (event.key === Qt.Key_Up)
+            dy = -1;
+        else if (event.key === Qt.Key_Down)
+            dy = 1;
+        else
+            return;
+        const step = (event.modifiers & Qt.ShiftModifier) ? 10 : 1;
+        if (overlay.nudgeSelection(dx * step, dy * step))
+            event.accepted = true;
+    }
+
     function applyResize(dx, dy) {
         const base = overlay.resizeRect;
         const edge = overlay.resizeEdge;
@@ -832,12 +979,18 @@ Window {
         }
     }
 
-    // Esc 关闭、Enter 确认（设计稿：方向键微调暂不做，先保证有键盘出口）
+    // Esc 关闭、Enter 确认、方向键微调选区
     Item {
         anchors.fill: parent
         focus: overlay.engaged
-        Keys.onEscapePressed: overlay.menuOpen ? (overlay.menuOpen = false) : screenFlow.cancel()
+        // Esc 分四档：收设置小窗 → 收引擎菜单 → 取消当前这一单（选区留着）→ 整体退出。
+        // 直接整体退出会让"翻到一半发现选错引擎"的人重框一遍，很烦。
+        Keys.onEscapePressed: overlay.settingsOpen ? (overlay.settingsOpen = false)
+                             : (overlay.menuOpen ? (overlay.menuOpen = false)
+                                : (overlay.working ? screenFlow.cancelTranslation() : screenFlow.cancel()))
         Keys.onReturnPressed: if (overlay.selecting && !overlay.confirmed) screenFlow.confirmSelection(overlay.liveRect)
+        // 只认方向键，别的键原样放行；开关与修饰键在 handleArrowKey 里判。
+        Keys.onPressed: function (event) { overlay.handleArrowKey(event) }
     }
 
     // Window 上没有 forceActiveFocus；顶置窗口要自己抢一次激活才能收键盘。
@@ -847,10 +1000,17 @@ Window {
     Connections {
         target: screenFlow
         function onPhaseChanged() {
+            // 每次重新进入框选都要再抢一次焦点：窗口是 WS_EX_NOACTIVATE 的，
+            // 光靠启动时那一次 requestActivate，热键第二次就不一定有键盘了（方向键会失效）。
+            if (screenFlow.phase === "Selecting")
+                overlay.requestActivate();
+
+
             if (screenFlow.phase === "Idle") {
                 overlay.dragging = false;
                 overlay.confirmed = false;
                 overlay.menuOpen = false;
+                overlay.settingsOpen = false;
                 overlay.localRect = Qt.rect(0, 0, 0, 0);
                 // 放大镜也要归零，否则下次热键会先闪一下上一轮的坐标。
                 overlay.cursorPos = Qt.point(-1, -1);
@@ -858,13 +1018,15 @@ Window {
         }
     }
 
-    // 点空白处收起引擎下拉。z 低于工具栏（5）高于内容，所以工具栏按钮照样能点，
-    // 菜单本身 z=20 在它上面。
+    // 点空白处收起引擎下拉 / 设置小窗。z 低于工具栏（5）高于内容，所以工具栏按钮照样能点。
     MouseArea {
         anchors.fill: parent
         z: 4
-        visible: overlay.menuOpen
-        onClicked: overlay.menuOpen = false
+        visible: overlay.menuOpen || overlay.settingsOpen
+        onClicked: {
+            overlay.menuOpen = false;
+            overlay.settingsOpen = false;
+        }
     }
 
     // 工具栏引擎槽的下拉。
@@ -878,7 +1040,7 @@ Window {
         objectName: "engineMenu"
         z: 20
         visible: overlay.menuOpen
-        width: 176
+        width: 196
         height: engineMenuColumn.implicitHeight + Theme.s1 * 2
         // 引擎槽在窗口里的位置：跟着工具栏（工具栏跟着选区）。
         // 注意不能用 mapToItem —— 它在绑定里是 C++ 调用，内部读的 x/y 不会产生依赖，
@@ -906,28 +1068,54 @@ Window {
             Repeater {
                 model: overlay.engineChoices
                 delegate: Rectangle {
+                    id: engineRow
                     required property var modelData
+                    readonly property bool usable: overlay.engineUsable(modelData.code)
+                    readonly property bool picked: (backend.engineId || "") === modelData.code
                     width: engineMenuColumn.width
                     height: 32
                     radius: Theme.rXs
-                    color: (backend.engineId || "") === modelData.code
+                    color: picked && usable
                                ? Theme.primaryContainer
-                               : (itemHover.hovered ? Theme.surfaceHighest : "transparent")
+                               : (usable && itemHover.hovered ? Theme.surfaceHighest : "transparent")
+                    opacity: usable ? 1.0 : 0.45
+
                     Text {
+                        id: engineLabel
                         anchors.left: parent.left
                         anchors.leftMargin: Theme.s2
+                        anchors.right: statusDot.left
+                        anchors.rightMargin: Theme.s2
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.label
-                        color: (backend.engineId || "") === modelData.code
+                        elide: Text.ElideRight
+                        color: engineRow.picked
                                    ? Theme.primaryContainerText
                                    : Theme.ink
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
                     }
-                    HoverHandler { id: itemHover; cursorShape: Qt.PointingHandCursor }
+
+                    // 右边的状态点：绿 = 就绪可直用，黄 = 未就绪（会按需拉起），红 = 缺资产（点不动）。
+                    Rectangle {
+                        id: statusDot
+                        width: 8
+                        height: 8
+                        radius: 4
+                        anchors.right: parent.right
+                        anchors.rightMargin: Theme.s2
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: overlay.engineDotColor(engineRow.modelData.code)
+                    }
+
+                    HoverHandler {
+                        id: itemHover
+                        cursorShape: engineRow.usable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    }
                     TapHandler {
+                        enabled: engineRow.usable
                         onTapped: {
-                            backend.engineId = modelData.code
+                            backend.engineId = engineRow.modelData.code
                             overlay.menuOpen = false
                         }
                     }
@@ -936,7 +1124,22 @@ Window {
         }
     }
 
+
+
     // 内联按钮：跟主界面同款 —— 主按钮用强调色实心，次按钮透明底 + 悬浮高亮。
+    // 「设置」小窗：本窗口的子窗口（owner = 浮层），可见性由 settingsOpen 一处决定 ——
+    // 浮层一收它跟着收，不用再和各处清理逻辑对着改。
+    CaptureSettingsPanel {
+        id: settingsPanel
+        objectName: "captureSettingsPanel"
+        visible: overlay.settingsOpen && overlay.engaged
+        onClosed: overlay.settingsOpen = false
+        onMoreSettingsRequested: {
+            overlay.settingsOpen = false;
+            overlay.moreSettingsRequested();
+        }
+    }
+
     component OverlayButton: Rectangle {
         id: ob
         property string text: ""

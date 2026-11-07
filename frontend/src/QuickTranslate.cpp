@@ -469,11 +469,14 @@ void QuickTranslate::cancel()
         return;
     }
 
-    // TranslateJob 没有 cancel()（工作线程里的 TranslatorRouter / ITranslator 也没有对外
-    // 的取消入口），所以这里只能做「逻辑取消」：立刻把调用方放出来，
-    // 真结果回来时在 onJobFinished 里丢弃，不会二次发 finished。
-    // 真要硬中断，得先给 TranslateJob 加 cancel()（并在 Router 里往 translator 传取消标志）。
+    // 两层取消：
+    //   1) TranslateJob::cancel() 把后端各 translator 的 atomic 标志置位，工作线程在
+    //      下一次请求边界退出（正在飞的那一次 HTTP 请求仍然会跑完，没法硬打断）；
+    //   2) 这里立刻发一个「已取消」结果并解锁 isBusy()，界面不用等收尾。
+    // 真结果回来时代号已经变了，TranslateJob 会直接丢掉，不会再发 finished。
+    m_job->cancel();
     m_cancelled = true;
+    m_busy = false;
 
     QuickTranslateResult out;
     out.ok = false;
@@ -492,7 +495,7 @@ void QuickTranslate::onJobFinished(const TranslateJobResult &result, qint64 elap
 {
     const bool cancelled = m_cancelled;
     m_cancelled = false;
-    m_busy = false;   // isBusy() 只在这里复位
+    m_busy = false;   // cancel() 也会复位；这里兜住"正常跑完"的那条路
 
     if (cancelled) {
         return;   // cancel() 已经给过结果了

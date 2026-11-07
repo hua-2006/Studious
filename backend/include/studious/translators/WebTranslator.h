@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "contract/ITranslator.h"
 #include "net/IHttpClient.h"
 #include "translators/IWebAdapter.h"
@@ -46,7 +48,7 @@ public:
 private:
     net::IHttpClient &m_http;
     QVector<std::shared_ptr<IWebAdapter>> m_adapters;
-    bool m_cancelRequested = false;
+    std::atomic_bool m_cancelRequested{false};
 };
 
 } // namespace studious::translate

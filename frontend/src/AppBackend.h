@@ -12,6 +12,7 @@
 
 #include "LocalEngine.h"
 #include "platform/Desktop.h"
+#include "TranslatorRecords.h"
 
 #include <studious/contract/Types.h>
 
@@ -190,6 +191,15 @@ class AppBackend : public QObject {
     Q_PROPERTY(bool overlayKeepOriginal READ overlayKeepOriginal WRITE setOverlayKeepOriginal NOTIFY prefsChanged)
     // 选区放大镜的倍率（2~8 倍），设置页以后直接改这个值。
     Q_PROPERTY(int overlayZoom READ overlayZoom WRITE setOverlayZoom NOTIFY prefsChanged)
+    Q_PROPERTY(bool overlayMagnifier READ overlayMagnifier WRITE setOverlayMagnifier NOTIFY prefsChanged)
+    Q_PROPERTY(QString magnifierCorner READ magnifierCorner WRITE setMagnifierCorner NOTIFY prefsChanged)
+    Q_PROPERTY(int overlayDim READ overlayDim WRITE setOverlayDim NOTIFY prefsChanged)
+    Q_PROPERTY(bool overlayArrowNudge READ overlayArrowNudge WRITE setOverlayArrowNudge NOTIFY prefsChanged)
+    Q_PROPERTY(int overlayAutoHideDelay READ overlayAutoHideDelay WRITE setOverlayAutoHideDelay NOTIFY prefsChanged)
+
+    // 翻译历史目前只有框架：开关 + 目录。写入与浏览界面在后面批次接上。
+    Q_PROPERTY(bool historyEnabled READ historyEnabled WRITE setHistoryEnabled NOTIFY prefsChanged)
+    Q_PROPERTY(QString historyDir READ historyDir NOTIFY prefsChanged)
 
 public:
     explicit AppBackend(studious::cache::TranslationCache *cache, QObject *parent = nullptr);
@@ -342,6 +352,22 @@ public:
     void setOverlayKeepOriginal(bool on);
     int overlayZoom() const { return m_overlayZoom; }
     void setOverlayZoom(int times);
+    bool overlayMagnifier() const { return m_overlayMagnifier; }
+    void setOverlayMagnifier(bool on);
+    QString magnifierCorner() const { return m_magnifierCorner; }
+    void setMagnifierCorner(const QString &corner);
+    int overlayDim() const { return m_overlayDim; }
+    void setOverlayDim(int percent);
+    bool overlayArrowNudge() const { return m_overlayArrowNudge; }
+    void setOverlayArrowNudge(bool on);
+    int overlayAutoHideDelay() const { return m_overlayAutoHideDelay; }
+    void setOverlayAutoHideDelay(int seconds);
+
+    bool historyEnabled() const { return m_historyEnabled; }
+    void setHistoryEnabled(bool on);
+    // 只读：设置里存的空串会解析成 <AppData>/studious/history；解析结果不写回设置，
+    // 这样换机器、改 assetRoot 之后目录还能跟着走。
+    QString historyDir() const;
     bool minimizeToTray() const { return m_minimizeToTray; }
     void setMinimizeToTray(bool on);
     bool closeToTray() const { return m_closeToTray; }
@@ -385,7 +411,45 @@ public slots:
     // 重新读一次本地引擎实况（端口 / pid / 日志尾部都要重新取）。
     Q_INVOKABLE void refreshLocalState();
 
+    // 截屏翻译自动存档：把一次框选的结果落到记录库（开启「保存翻译历史」时才写）。
+    // originals 是 OCR 出来的逐行原文，blocks 是浮层上的逐块数据（原文 + 译文 + 框）。
+    Q_INVOKABLE bool saveCaptureRecord(const QString &source,
+                                       const QString &imagePath,
+                                       const QRect &region,
+                                       const QVariantList &originals,
+                                       const QVariantList &blocks);
+
+    // 三个来源各一个库（capture.db / mini.db / live.db），这里返回合并后按时间倒序的列表。
+    // 每项：kind / id / source / srcLang / dstLangs / engine / imagePath / region /
+    //       originalText / translatedText / createdAt（ISO 8601 字符串）。
+    Q_INVOKABLE QVariantList historyRecords(int limit = 100);
+    // 三个库的行数之和（界面上的「共 N 条」）。
+    Q_INVOKABLE int recordCount();
+
+    // ---- 实时翻译的会话分组 ----
+    // 一次会话（开启实时翻译 → 关闭）算一组：中间每轮刷新只往缓冲里追加，
+    // 关闭时合成**一条**记录写进 live.db。会话没开始就调 append 会被忽略。
+    Q_INVOKABLE void beginLiveSession();
+    Q_INVOKABLE void appendLiveSession(const QVariantList &blocks);
+    Q_INVOKABLE void finishLiveSession();
+
+    // 小窗翻译一条一存（跟截屏同一套字段，只是落进 mini.db）。
+    Q_INVOKABLE bool saveMiniRecord(const QVariantList &originals,
+                                    const QVariantList &blocks,
+                                    const QString &engineLabel = QString());
+
 private:
+    // 按来源取记录库（kind：capture / mini / live，其它值当 capture）。
+    // 三个库各开一条连接、各有自己的文件 —— 这样清理或导出某一种不会牵动另一种。
+    TranslatorRecords *recordsFor(const QString &kind);
+    // 一次翻译结果 → 一条记录并写库；historyEnabled 关着的时候直接返回 false。
+    bool persistRecord(const QString &kind,
+                       const QString &imagePath,
+                       const QRect &region,
+                       const QVariantList &originals,
+                       const QVariantList &blocks,
+                       const QString &engineLabel = QString());
+
     // 重启空闲计时器。本地请求进来时调一次；localIdleStop 关着就什么都不做。
     void touchLocalIdle();
     // 停掉本地服务并按需给一句状态（reason 为空 = 安静地停）。
@@ -424,6 +488,9 @@ public:
     // ---- 设置页：数据 ----
     // 用系统文件管理器打开一个路径（目录或文件所在目录）。空路径直接忽略。
     Q_INVOKABLE void openPath(const QString &path);
+    // 打开（必要时创建）历史目录。跟 openPath 分开：这个目录归我们所有，
+    // 用户第一次点就应该有东西弹出来，而不是"路径不存在"的报错。
+    Q_INVOKABLE void openHistoryDir();
     // 删掉日志目录里 N 天前的 *.log，返回删掉的个数。
     Q_INVOKABLE int clearOldLogs(int days);
     // 清配置 + 清翻译缓存（保留已装资产），然后重启进程。
@@ -556,6 +623,12 @@ private:
     int m_overlayFontSize = 13;
     bool m_overlayKeepOriginal = false;
     int m_overlayZoom = 3;
+    bool m_overlayMagnifier = true;
+    QString m_magnifierCorner = QStringLiteral("bottomRight");
+    int m_overlayDim = 45;
+    bool m_overlayArrowNudge = true;
+    int m_overlayAutoHideDelay = 0;
+    bool m_historyEnabled = false;
     bool m_minimizeToTray = false;
     bool m_closeToTray = false;
     bool m_singleInstance = true;
@@ -564,6 +637,17 @@ private:
     // 托盘 / 开机自启 / 单实例。放在 AppBackend 里而不是 main()：
     // 三者的开关都在设置页，改完立刻要生效，需要一个活着的 QObject 承载体。
     studious::platform::Desktop m_desktop;
+
+    // 记录库：三种来源各一个库、各一条连接，懒打开（第一次保存/查询时才连）。
+    // 分开存是为了「截屏」「小窗」「实时」能各自清理 / 各自导出，互不牵连。
+    std::unique_ptr<TranslatorRecords> m_recordsCapture;
+    std::unique_ptr<TranslatorRecords> m_recordsMini;
+    std::unique_ptr<TranslatorRecords> m_recordsLive;
+
+    // 实时翻译的会话缓冲：begin → append* → finish 合成一条记录。
+    bool m_liveSessionActive = false;
+    QStringList m_liveOriginals;
+    QStringList m_liveTranslated;
 
     QVariantList m_engineStatuses;
     QStringList m_enginePriority;

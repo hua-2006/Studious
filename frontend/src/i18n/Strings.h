@@ -52,7 +52,7 @@ struct Strings {
         QString engine, engineAuto, engineWeb, engineLlmCloud, engineLlmLocal, engineMt;
         QString originalPane, translatedPane;
         QString originalCompare, cacheKeyHasEngine;
-        QString run, runHint, running, cancelHint;
+        QString run, runHint, running, cancelHint, cancelled;
         QString passthroughBadge, copySelection;
         QString statusLine, engineStatus, viewEngineStatus;
         QString emptyOriginal, emptyTranslated;
