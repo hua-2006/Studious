@@ -117,8 +117,23 @@ QString AssetRegistry::resolveTarget(const QString &id, QString *error) const
                              {id, idError}));
     }
 
-    const QString category = entry->isRuntime() ? QStringLiteral("runtime")
-                                                : QStringLiteral("models");
+    // 布局：
+    //   <root>/runtime/<id>         llama-server / onnxruntime
+    //   <root>/models/llm/<id>      本地 LLM 的 GGUF
+    //   <root>/models/mt/<id>       本地 MT 的 opus-mt 语言包
+    //   <root>/models/ocr/<id>      OCR 三件套原文（运行时副本在 models/ocr/run/）
+    // 以前全平铺在 models/ 下，16 个条目混在一起，光看名字分不清谁能被 llama-server 打开。
+    QString category;
+    if (entry->isRuntime()) {
+        category = QStringLiteral("runtime");
+    } else if (id.startsWith(QLatin1String("mt."))) {
+        category = QStringLiteral("models/mt");
+    } else if (id.startsWith(QLatin1String("ocr."))) {
+        category = QStringLiteral("models/ocr");
+    } else {
+        category = QStringLiteral("models/llm");
+    }
+
     const QString categoryDir = QDir::cleanPath(joinPath(m_root, category));
     const QString target = QDir::cleanPath(joinPath(categoryDir, id));
 

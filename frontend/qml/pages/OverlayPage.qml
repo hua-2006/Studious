@@ -216,7 +216,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("边框颜色跟随强调色，不单独暴露。")
+                    text: qsTr("边界颜色跟着强调色走。")
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
@@ -271,7 +271,7 @@ Item {
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
                 title: qsTr("按功能设置")
-                hint: qsTr("小窗口、截图翻译、实时翻译各自的开关；和浮层里那颗「设置」是同一份值。")
+                hint: qsTr("小窗口、截图翻译、实时翻译各自的开关，和浮层里「设置」里的是同一套。")
 
                 Segmented {
                     Layout.fillWidth: true
@@ -290,6 +290,8 @@ Item {
                     Layout.topMargin: Theme.s2
                     spacing: Theme.s3
                     visible: page.funcTab === "mini"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
                     FieldRow {
                         label: qsTr("固定在最前")
@@ -340,6 +342,8 @@ Item {
                     Layout.topMargin: Theme.s2
                     spacing: Theme.s3
                     visible: page.funcTab === "capture"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
                     FieldRow {
                         label: qsTr("选完直接翻译")
@@ -477,6 +481,8 @@ Item {
                     Layout.topMargin: Theme.s2
                     spacing: Theme.s3
                     visible: page.funcTab === "live"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
 
                     FieldRow {
                         label: qsTr("刷新间隔")
@@ -494,7 +500,7 @@ Item {
                     Text {
                         Layout.leftMargin: 132 + Theme.s3
                         Layout.fillWidth: true
-                        text: qsTr("每帧之间等多久。太小会把引擎压满，太大会看不出是实时的。")
+                        text: qsTr("每帧之间等多久。太短会让引擎一直忙，太长就不像实时了。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
@@ -515,7 +521,7 @@ Item {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("画面没变就不重翻。关掉会每帧重发一次请求，只适合验证引擎。")
+                            text: qsTr("画面没变就不重新翻译。关掉后每帧都会重新请求，比较费。")
                             wrapMode: Text.WordWrap
                             verticalAlignment: Text.AlignVCenter
                             font.family: Theme.fontUi

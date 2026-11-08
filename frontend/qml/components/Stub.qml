@@ -20,7 +20,7 @@ Rectangle {
     Text {
         id: stubLabel
         anchors.centerIn: parent
-        text: qsTr("未实现")
+        text: qsTr("即将支持")
         font.family: Theme.fontUi
         font.pixelSize: Theme.fontSizeTiny
         color: Theme.caution

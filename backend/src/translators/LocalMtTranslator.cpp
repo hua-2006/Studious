@@ -5,6 +5,7 @@
 #include "i18n/LanguageDetector.h"
 #include "mt/MtModel.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -15,10 +16,33 @@ namespace {
 // 一个语言对目录里必须具备的文件清单见 LocalMtTranslator::requiredFiles()（唯一来源），
 // 缺任何一个都视为该对不可用。
 
+// 数据根与前端一致：从 exe 往上最多四层找 version.json，命中就用 <根>/data/assets/models/<kind>。
+// 找不到（老的 AppData 部署、backend_selftest 这种自测程序）才退回 AppData 旧路径。
+QString dataRootCandidate()
+{
+    QDir dir(QCoreApplication::applicationDirPath());
+    for (int i = 0; i < 5; ++i) {
+        if (QFileInfo::exists(dir.filePath(QStringLiteral("version.json"))))
+            return dir.filePath(QStringLiteral("data"));
+        if (!dir.cdUp())
+            break;
+    }
+    return QString();
+}
+
+QString modelsRootFor(const QString &kind)
+{
+    const QString base = dataRootCandidate();
+    if (!base.isEmpty())
+        return QDir(base).filePath(QStringLiteral("assets/models/") + kind);
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+        .filePath(QStringLiteral("assets/models/") + kind);
+}
+
 QString defaultModelsRoot()
 {
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("assets/models"));
+    // 语言包在 models/mt；llm 与 ocr 各有自己的目录，互不干扰。
+    return modelsRootFor(QStringLiteral("mt"));
 }
 
 // 多语言资产目录里的伪语言标签：mt.opus.mul-en / mt.opus.en-mul。

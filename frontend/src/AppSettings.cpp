@@ -61,6 +61,8 @@ AppSettings AppSettings::defaults()
     s.localIdleStop = false;        // 空闲不停：默认关
     s.localIdleMinutes = 10;        // 打开「空闲自动停」时的默认阈值
     s.uiLanguage.clear();   // 空 = 跟随系统语言
+    s.fontUi = QStringLiteral("软件默认-思源黑体");        // 界面默认就是项目自带的思源黑体
+    s.fontContent = QStringLiteral("软件默认-霞鹜文楷");   // 译文默认就是项目自带的霞鹜文楷
     s.accentSeed.clear();   // 空 = 默认紫 #6750A4
     s.autoStart = false;            // 别替用户改系统启动项
     s.minimizeToTray = false;       // 默认老老实实待在任务栏
@@ -230,6 +232,18 @@ AppSettings AppSettings::load()
     s.readingFontSize =
         clampedInt(store.value(key("ui/readingFontSize"), def.readingFontSize).toInt(), 11, 24);
 
+    // 字体：空串 = 项目自带字体，__system__ = 跟随系统，其余按字体族名原样用。
+    s.fontUi = store.value(key("ui/fontUi"), def.fontUi).toString().trimmed();
+    s.fontContent = store.value(key("ui/fontContent"), def.fontContent).toString().trimmed();
+    // 老版本把"空串 = 跟随项目字体"写进了注册表，现在默认值就是自带的两个族名，
+    // 空串统一折回默认，免得升级后界面上显示「(auto)」而实际用的是默认。
+    if (s.fontUi.isEmpty()) {
+        s.fontUi = def.fontUi;
+    }
+    if (s.fontContent.isEmpty()) {
+        s.fontContent = def.fontContent;
+    }
+
     // 桌面集成：bool 一律 toBool()，注册表被写成 "true"/"1" 也能认。
     s.autoStart = store.value(key("desktop/autoStart"), def.autoStart).toBool();
     s.minimizeToTray = store.value(key("desktop/minimizeToTray"), def.minimizeToTray).toBool();
@@ -339,6 +353,8 @@ void AppSettings::save() const
     store.setValue(key("ui/theme"), themeMode);       // system / light / dark
     store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小
     store.setValue(key("ui/readingFontSize"), readingFontSize);   // 11~24，译文正文字号
+    store.setValue(key("ui/fontUi"), fontUi);           // 空 = 自带字体，__system__ = 系统默认
+    store.setValue(key("ui/fontContent"), fontContent);
     store.setValue(key("ui/accent"), accentSeed);     // 空 = 默认紫 #6750A4
     store.setValue(key("desktop/autoStart"), autoStart);
     store.setValue(key("desktop/minimizeToTray"), minimizeToTray);

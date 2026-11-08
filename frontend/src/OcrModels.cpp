@@ -1,11 +1,10 @@
 #include "OcrModels.h"
 
-#include "AppSettings.h"
+#include "AssetPaths.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
 #include <QStringList>
 
 namespace studious::ui::ocr {
@@ -30,26 +29,29 @@ const Item kItems[] = {
 
 QString stageModels()
 {
-    // 与 AppBackend::assetInstallRootPath() 同一套规则（settings.assetRoot 优先）。
-    const AppSettings settings = AppSettings::load();
-    const QString root = settings.assetRoot.isEmpty()
-                             ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                   .filePath(QStringLiteral("assets"))
-                             : settings.assetRoot;
-    const QString modelsDir = QDir(root).filePath(QStringLiteral("models"));
-    const QString stagedDir = QDir(modelsDir).filePath(QStringLiteral("ocr"));
+    // 与 paths::assetsRoot() 同一套规则（settings.assetRoot 优先）。
+    const QString ocrDir = studious::ui::paths::modelsOcrDir();
+    // 原件留在 models/ocr/<assetId>，收拢后的运行时副本单独放 models/ocr/run/，
+    // 免得"下载下来的资产"和"给 OcrEngine 读的固定文件名"混在一个目录里分不清。
+    const QString stagedDir = QDir(ocrDir).filePath(QStringLiteral("run"));
 
-    // 三种布局都认：models/ocr/det.onnx、models/ocr.det.ppocrv4（单文件资产）、
-    // models/ocr.det.ppocrv4/det.onnx（压缩包资产）。
+    // 老布局（全平铺在 models/ 下）也认，用户升级后不用重下。
+    const QString legacyDir = QDir(studious::ui::paths::assetsRoot()).filePath(QStringLiteral("models"));
+
     bool anyStaged = false;
     for (const Item &item : kItems) {
         const QString staged = QDir(stagedDir).filePath(QString::fromLatin1(item.fileName));
 
         QString source;
         for (const QString &assetName : item.assetIds) {
+            // 新布局：models/ocr/<id>（单文件）或 models/ocr/<id>/<file>（压缩包）。
+            // 旧布局：models/<id>。
             const QString candidates[] = {
-                QDir(modelsDir).filePath(assetName),
-                QDir(QDir(modelsDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
+                QDir(ocrDir).filePath(assetName),
+                QDir(QDir(ocrDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
+                QDir(legacyDir).filePath(assetName),
+                QDir(QDir(legacyDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
+                QDir(ocrDir).filePath(QString::fromLatin1(item.fileName)),
             };
             for (const QString &candidate : candidates) {
                 if (QFileInfo(candidate).isFile()) {

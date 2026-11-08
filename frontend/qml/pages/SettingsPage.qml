@@ -52,6 +52,11 @@ Item {
 
     // 切到「缓存」分区就重读一次：刚在别的页翻过一屏的话，回来要能看到新记录。
     onCurrentSectionChanged: {
+        sectionHover = -1
+        // 换分区一律回到顶部：否则在长分区滚到底再切过去，contentY 还停在
+        // 旧位置，短分区就是一片空白（看着像没渲染）。
+        if (contentScroll.contentItem)
+            contentScroll.contentItem.contentY = 0
         if (currentSection === 2)
             refreshHistory()
     }
@@ -84,6 +89,8 @@ Item {
     readonly property int navWidth: 190
     // 当前选中的分区下标，同时驱动左栏高亮与右栏 StackLayout。
     property int currentSection: 0
+    // 鼠标停在左栏第几项（-1 = 不在）。整列只有一个 HoverHandler 在算它。
+    property int sectionHover: -1
 
     // 七个分区：图标用 qrc 里的 SVG，文字保持中文。
     readonly property var sections: [
@@ -123,6 +130,9 @@ Item {
 
     // 「从文件导入」的中间状态：资产已经选好了，文件选择框还没回结果。
     property string pendingImportId: ""
+
+    // 「全部」栏点导入时那个「装哪一类」的弹窗开着没有。
+    property bool importCategoryOpen: false
 
     readonly property var filteredAssets: {
         var out = []
@@ -177,6 +187,88 @@ Item {
         return s
     }
 
+    // ---- 从文件导入：先定「装到哪一条」，再挑本地文件 ----
+    // 一类只认一个目标：优先占位条目（例如 7B 那种「需自行导入」的），
+    // 其次第一个还没装的，最后才落到同类的第一条（覆盖已装的）。
+    // 运行时（llama-server / onnxruntime）不在导入范围内，跳过。
+    function importTargetFor(category) {
+        var list = backend.assets
+        var placeholder = ""
+        var missing = ""
+        var first = ""
+        for (var i = 0; i < list.length; ++i) {
+            var a = list[i]
+            if (a.category !== category || a.type !== "model")
+                continue
+            if (first === "")
+                first = a.id
+            if (a.placeholder && placeholder === "")
+                placeholder = a.id
+            if (!a.installed && missing === "")
+                missing = a.id
+        }
+        if (placeholder !== "")
+            return placeholder
+        if (missing !== "")
+            return missing
+        // 都装齐了：挑这一类里最可能要换的那条。
+        // MT 换的是某个语言对（拿 en-zh 举例），OCR 换的是识别模型。
+        if (category === "ocr" && page.hasAsset("ocr.rec.ppocrv5"))
+            return "ocr.rec.ppocrv5"
+        if (category === "mt" && page.hasAsset("mt.opus.en-zh"))
+            return "mt.opus.en-zh"
+        return first
+    }
+
+    function hasAsset(id) {
+        var list = backend.assets
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].id === id)
+                return true
+        }
+        return false
+    }
+
+    function assetInstalled(id) {
+        var list = backend.assets
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].id === id)
+                return list[i].installed === true
+        }
+        return false
+    }
+
+    function beginImport(category) {
+        page.pendingImportId = page.importTargetFor(category)
+        page.importCategoryOpen = false
+        if (page.pendingImportId === "") {
+            // 这一类清单里一条都没有：退回逐条挑选的老界面，至少能看到是空的。
+            importPicker.open()
+            return
+        }
+        page.openImportDialog()
+    }
+
+    // 文件选择框默认打开「这条资产所在的目录」，而不是每次从 C:\ 开始翻。
+    // 后端 assets 每项带 path（安装路径），取它的父目录就是这一类的位置。
+    function assetFolder(id) {
+        var list = backend.assets
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].id !== id)
+                continue
+            var p = "" + (list[i].path || "")
+            var cut = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"))
+            return cut > 0 ? p.substring(0, cut) : p
+        }
+        return ""
+    }
+
+    function openImportDialog() {
+        var folder = page.assetFolder(page.pendingImportId)
+        importFileDialog.folder = folder !== "" ? "file:///" + encodeURI(folder) : ""
+        importFileDialog.open()
+    }
+
     // 外部跳转入口：配置页「本地 MT → 下载 / 导入」直接落到资产分区的 mt 分类。
     // kind 取 "mt" / "llm" / "all"；空串按 "all" 处理。
     function openAssets(kind) {
@@ -189,19 +281,22 @@ Item {
             contentScroll.contentItem.contentY = 0
     }
 
-    // ---- 安装根目录树（等宽块里逐行排版，├─ / └─ 是纯文本）----
+    // ---- 数据目录树（等宽块里逐行排版，├─ / └─ 是纯文本）----
     // 分支名后面补空格对齐到同一列说明；中文是全角，视觉上会差半个字宽，不用较真。
     readonly property string dirTree: [
         // 根目录用后端给的真实路径，迁移过的用户也能看到自己那份。
         backend.assetInstallRoot + "/",
-        "├─ models/                         " + qsTr("MT 语言对 + LLM 模型（.gguf）"),
-        "│  ├─ mt.opus.en-zh/",
-        "│  ├─ mt.opus.zh-en/",
-        "│  └─ model.qwen2.5-3b-instruct.q4km/",
+        "├─ models/                         " + qsTr("模型，按用途分三格"),
+        "│  ├─ llm/                        " + qsTr("本地 LLM 的 GGUF"),
+        "│  │  └─ model.qwen2.5-3b-instruct.q4km",
+        "│  ├─ mt/                         " + qsTr("本地 MT 语言包"),
+        "│  │  └─ mt.opus.en-zh/",
+        "│  └─ ocr/                        " + qsTr("OCR 三件套"),
+        "│     ├─ ocr.rec.ppocrv5",
+        "│     └─ run/                     " + qsTr("收拢后的 det.onnx / rec.onnx / 字典"),
         "├─ runtime/                        " + qsTr("运行时"),
         "│  └─ runtime.llama.cpu.win-x64/",
         "├─ downloads/                      " + qsTr(".part 临时文件（可续传）"),
-        "├─ dist/                           " + qsTr("打包产物"),
         "└─ logs/                           " + qsTr("运行日志")
     ].join("\n")
 
@@ -234,7 +329,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据。")
+                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、下载、数据。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -251,72 +346,115 @@ Item {
             spacing: Theme.s6
 
             // -------------------------------------------------- 左栏：二级导航
-            Column {
+            Item {
                 Layout.preferredWidth: page.navWidth
                 Layout.fillHeight: true
-                spacing: Theme.s1
 
-                Repeater {
-                    model: page.sections
+                // 选中块：跟着分区往下滑的胶囊。原来每项各自涂底色，切页时是"闪一下"，
+                // 现在整块滑过去，眼睛能看出是从哪一项移到哪一项。
+                Rectangle {
+                    id: sectionPill
+                    width: page.navWidth
+                    height: 40
+                    radius: Theme.rMd
+                    color: Theme.primaryContainer
+                    y: page.currentSection * (40 + Theme.s1)
+                    visible: false
 
-                    delegate: Rectangle {
-                        id: navItem
-                        required property int index
-                        required property var modelData
+                    Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-                        // Column 不管子项尺寸，宽高必须自己给。
-                        width: page.navWidth
-                        height: 40
-                        radius: Theme.rMd
-                        color: page.currentSection === navItem.index
-                               ? Theme.primaryContainer
-                               : (navHover.hovered ? Theme.surfaceHigh : "transparent")
+                    Component.onCompleted: visible = true
+                }
 
-                        Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                // 悬浮块：跟随鼠标的那一项。逐项各挂 HoverHandler 时，鼠标划过去
+                // 每一项都会各起一次颜色动画（半透明残影一串，看着像闪烁）；
+                // 整列只留一个 handler，坐标一次算完。
+                Rectangle {
+                    id: sectionHoverPill
+                    width: page.navWidth
+                    height: 40
+                    radius: Theme.rMd
+                    color: Theme.surfaceHigh
+                    y: Math.max(0, page.sectionHover) * (40 + Theme.s1)
+                    opacity: (page.sectionHover >= 0 && page.sectionHover !== page.currentSection) ? 1 : 0
 
-                        Row {
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.leftMargin: Theme.s3
-                            anchors.rightMargin: Theme.s2
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: Theme.s2
+                    Behavior on y { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                    Behavior on opacity { NumberAnimation { duration: 120 } }
+                }
 
-                            Image {
+                Column {
+                    id: sectionNav
+                    width: page.navWidth
+                    spacing: Theme.s1
+
+                    // 整列共用一个悬浮检测：鼠标落在哪一行就报哪一行的下标。
+                    HoverHandler {
+                        id: navHover
+                        onPointChanged: page.sectionHover = navHover.hovered
+                                                  ? Math.floor(point.position.y / (40 + Theme.s1))
+                                                  : -1
+                        onHoveredChanged: if (!navHover.hovered) page.sectionHover = -1
+                    }
+
+                    Repeater {
+                        model: page.sections
+    
+                        delegate: Rectangle {
+                            id: navItem
+                            required property int index
+                            required property var modelData
+    
+                            // Column 不管子项尺寸，宽高必须自己给。
+                            width: page.navWidth
+                            height: 40
+                            radius: Theme.rMd
+                            // 选中与悬浮都由外层那两颗胶囊表示，这里保持透明。
+                            color: "transparent"
+    
+                            Row {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: Theme.s3
+                                anchors.rightMargin: Theme.s2
                                 anchors.verticalCenter: parent.verticalCenter
-                                source: navItem.modelData.icon
-                                sourceSize.width: 16
-                                sourceSize.height: 16
-                                // SVG 描边写死成深紫，换主题不会变，这里按调色板重新上色。
-                                layer.enabled: true
-                                layer.effect: MultiEffect {
-                                    colorizationColor: page.currentSection === navItem.index
-                                                       ? Theme.primaryContainerText
-                                                       : Theme.inkVariant
-                                    colorization: 1.0
+                                spacing: Theme.s2
+    
+                                Image {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    source: navItem.modelData.icon
+                                    sourceSize.width: 16
+                                    sourceSize.height: 16
+                                    // SVG 描边写死成深紫，换主题不会变，这里按调色板重新上色。
+                                    layer.enabled: true
+                                    layer.effect: MultiEffect {
+                                        colorizationColor: page.currentSection === navItem.index
+                                                           ? Theme.primaryContainerText
+                                                           : Theme.inkVariant
+                                        colorization: 1.0
+                                    }
+                                }
+    
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width - 16 - Theme.s2
+                                    text: navItem.modelData.label
+                                    elide: Text.ElideRight
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeBody
+                                    font.weight: page.currentSection === navItem.index
+                                                 ? Font.DemiBold : Font.Normal
+                                    color: page.currentSection === navItem.index
+                                           ? Theme.primaryContainerText : Theme.inkVariant
+                                    Behavior on color { ColorAnimation { duration: 220 } }
                                 }
                             }
-
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: parent.width - 16 - Theme.s2
-                                text: navItem.modelData.label
-                                elide: Text.ElideRight
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.fontSizeBody
-                                font.weight: page.currentSection === navItem.index
-                                             ? Font.DemiBold : Font.Normal
-                                color: page.currentSection === navItem.index
-                                       ? Theme.primaryContainerText : Theme.inkVariant
+    
+    
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: page.currentSection = navItem.index
                             }
-                        }
-
-                        HoverHandler { id: navHover }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: page.currentSection = navItem.index
                         }
                     }
                 }
@@ -338,8 +476,31 @@ Item {
 
                     // 一次只显示一张卡；currentIndex 直接绑左栏选中项。
                     StackLayout {
+                        id: sectionStack
                         Layout.fillWidth: true
+                        // StackLayout 默认按**所有**子项里最高的那个撑开 —— 缓存那张卡
+                        // （带历史列表）比别的长得多，于是切到短分区后底下多出一大片
+                        // 空白，滚到底再切换还会停在越界的 contentY 上、整页看着像空的。
+                        // 高度只跟当前项走。
+                        // 高度只跟当前项走（StackLayout 没有 currentItem，用 itemAt()）。
+                        Layout.preferredHeight: {
+                            var it = itemAt(currentIndex)
+                            return it ? it.implicitHeight : 0
+                        }
                         currentIndex: page.currentSection
+
+                        // 和主界面切页用同一套：淡入 + 8px 上浮。
+                        onCurrentIndexChanged: sectionFade.restart()
+
+                        NumberAnimation {
+                            id: sectionFade
+                            target: sectionStack
+                            property: "opacity"
+                            from: 0
+                            to: 1
+                            duration: 380
+                            easing.type: Easing.OutCubic
+                        }
 
                         // -------------------------------------------- 通用
                         ColumnLayout {
@@ -436,7 +597,7 @@ Item {
                                         Layout.fillWidth: true
                                         text: backend.trayAvailable
                                               ? qsTr("点最小化时收进系统托盘，而不是留在任务栏。")
-                                              : qsTr("当前会话装载不了托盘图标。")
+                                              : qsTr("现在无法显示托盘图标。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -467,7 +628,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: qsTr("选「最小化到托盘」后主窗口只是隐藏，进程还在跑；从托盘菜单可以退出。")
+                                        text: qsTr("主窗口只是收起来，软件仍在后台运行；从托盘图标可以重新打开或退出。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -498,7 +659,7 @@ Item {
                                     Text {
                                         Layout.leftMargin: page.labelWidth + Theme.s3
                                         Layout.fillWidth: true
-                                        text: qsTr("重复启动时只把已有窗口叫到前面，不再开第二个进程。改完需要重启软件生效。")
+                                        text: qsTr("再次打开时只会把已有窗口叫到前面，不会开第二份。改完需要重启生效。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -623,7 +784,7 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("缓存")
-                                hint: qsTr("按 引擎 + 源语言 + 目标语言 + 原文 命中。")
+                                hint: qsTr("同一句原文、同样的语言和引擎，才会直接复用已有译文。")
 
                                 headerActions: [
                                     AppButton {
@@ -654,7 +815,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: qsTr("条数")
+                                    label: qsTr("已缓存译文")
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
@@ -668,7 +829,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: qsTr("命中 / 未命中")
+                                    label: qsTr("复用 / 新翻译")
 
                                     Text {
                                         Layout.alignment: Qt.AlignVCenter
@@ -682,7 +843,7 @@ Item {
                                 }
 
                                 FieldRow {
-                                    label: qsTr("数据库路径")
+                                    label: qsTr("缓存文件")
 
                                     AppTextField {
                                         id: cacheDbField
@@ -952,7 +1113,7 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("网络")
-                                hint: qsTr("代理与超时对本程序的外网请求生效。")
+                                hint: qsTr("只影响本软件联网时使用的代理与等待时间。")
 
                                 FieldRow {
                                     label: qsTr("代理")
@@ -995,7 +1156,7 @@ Item {
                                 Text {
                                     Layout.leftMargin: page.labelWidth + Theme.s3
                                     Layout.fillWidth: true
-                                    text: qsTr("留空 = 跟随系统环境变量（HTTPS_PROXY / HTTP_PROXY / ALL_PROXY）。改完下一次网络请求生效。")
+                                    text: qsTr("留空表示跟随系统代理设置。改完下次联网生效。")
                                     wrapMode: Text.WordWrap
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeSmall
@@ -1096,7 +1257,7 @@ Item {
                                 Text {
                                     Layout.leftMargin: page.labelWidth + Theme.s3
                                     Layout.fillWidth: true
-                                    text: qsTr("毫秒。只作用于外网请求，本地 llama-server 探测不受影响。")
+                                    text: qsTr("毫秒。只影响联网请求，本地引擎不受影响。")
                                     wrapMode: Text.WordWrap
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeSmall
@@ -1114,7 +1275,7 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("资产")
-                                hint: qsTr("模型 / 运行时管理。分类来自后端清单：LLM 含 qwen 模型与 llama.cpp 运行时，本地 MT 含 OPUS-MT 语言对（ONNX Runtime 随应用内置，不在下载清单里），视觉 / OCR 含 PP-OCRv4 的检测模型、识别模型与字符表。")
+                                hint: qsTr("在这里下载或导入模型与组件。分三类：本地 AI 模型、翻译模型、图像识别组件。")
 
                                 // 分类标签：全部 / LLM / 本地 MT
                                 Segmented {
@@ -1122,7 +1283,7 @@ Item {
                                         { code: "all", label: qsTr("全部") },
                                         { code: "llm", label: "LLM" },
                                         { code: "mt", label: qsTr("本地 MT") },
-                                        { code: "ocr", label: qsTr("视觉 / OCR") }
+                                        { code: "ocr", label: qsTr("图像识别") }
                                     ]
                                     current: page.assetTab
                                     onSelected: function (code) { page.assetTab = code }
@@ -1155,14 +1316,21 @@ Item {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: qsTr("从文件导入")
                                         variant: "tonal"
-                                        onClicked: importPicker.open()
+                                        // 「全部」栏里说不清要装哪一类，先问一句；
+                                        // 已经在某个分类栏里就直接挑文件。
+                                        onClicked: {
+                                            if (page.assetTab === "all")
+                                            page.importCategoryOpen = true
+                                            else
+                                                page.beginImport(page.assetTab)
+                                        }
                                     }
                                 }
 
                                 Text {
                                     Layout.leftMargin: page.labelWidth + Theme.s3
                                     Layout.fillWidth: true
-                                    text: qsTr("导入的文件会先按资产清单校验 sha256，不匹配直接拒绝。")
+                                    text: qsTr("自己导入的文件来自本地，没有可信来源，只确认文件在、能读；校验哈希只针对线上下载的那份。")
                                     wrapMode: Text.WordWrap
                                     font.family: Theme.fontUi
                                     font.pixelSize: Theme.fontSizeSmall
@@ -1176,7 +1344,7 @@ Item {
 
                                     Text {
                                         Layout.preferredWidth: page.colId
-                                        text: qsTr("资产 id")
+                                        text: qsTr("标识")
                                         elide: Text.ElideRight
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1238,7 +1406,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         visible: page.filteredAssets.length === 0
-                                        text: qsTr("该分类下暂无资产")
+                                        text: qsTr("这一分类下还没有内容")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.inkVariant
@@ -1345,7 +1513,7 @@ Item {
                                                             uninstallConfirm.open()
                                                         } else if (assetRow.modelData.placeholder) {
                                                             page.pendingImportId = assetRow.assetId
-                                                            importFileDialog.open()
+                                                            page.openImportDialog()
                                                         } else {
                                                             backend.downloadAsset(assetRow.assetId)
                                                         }
@@ -1367,9 +1535,9 @@ Item {
                                 Layout.topMargin: Theme.s4
                                 Layout.bottomMargin: Theme.s4
                                 title: qsTr("数据")
-                                hint: qsTr("安装根目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。")
+                                hint: qsTr("数据目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。")
 
-                                // ---- 安装根目录 ----
+                                // ---- 数据目录 ----
                                 ColumnLayout {
                                     Layout.fillWidth: true
                                     spacing: Theme.s2
@@ -1380,7 +1548,7 @@ Item {
 
                                         Text {
                                             Layout.alignment: Qt.AlignVCenter
-                                            text: qsTr("安装根目录")
+                                            text: qsTr("数据目录")
                                             font.family: Theme.fontUi
                                             font.pixelSize: Theme.fontSizeBody
                                             font.weight: Font.DemiBold
@@ -1496,7 +1664,7 @@ Item {
                                     Text {
                                         Layout.fillWidth: true
                                         Layout.alignment: Qt.AlignVCenter
-                                        text: qsTr("重置会清掉配置与缓存（保留已装资产）；迁移把整个安装根目录搬到新位置，新目录必须是空目录或不存在，搬完会自动重新扫描资产。")
+                                        text: qsTr("重置会清掉配置与缓存，已安装的模型保留；迁移会把整个数据目录搬到新位置，目标必须是空目录或不存在。")
                                         wrapMode: Text.WordWrap
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1640,10 +1808,10 @@ Item {
                                     // backend/third_party/<name>/LICENSE 与版本号文件，
                                     // 不要凭印象填（这里以前把 onnxruntime 写成 Apache-2.0）。
                                     model: [
-                                        { name: "onnxruntime",  version: "1.31.1", use: qsTr("本地 MT 推理运行时"), license: "MIT" },
+                                        { name: "onnxruntime",  version: "1.31.1", use: qsTr("本地翻译推理组件"), license: "MIT" },
                                         { name: "sentencepiece", version: "0.2.0",  use: qsTr("分词"),               license: "Apache-2.0" },
-                                        { name: "monocypher",   version: "4.0.2",  use: qsTr("清单验签 / 加密"),     license: "BSD-2-Clause" },
-                                        { name: "miniz",        version: "11.0.2", use: qsTr("资产 zip 解压"),       license: "MIT" },
+                                        { name: "monocypher",   version: "4.0.2",  use: qsTr("下载校验 / 加密"),     license: "BSD-2-Clause" },
+                                        { name: "miniz",        version: "11.0.2", use: qsTr("压缩包解压"),       license: "MIT" },
                                         { name: "Qt",           version: "6.12.0", use: qsTr("界面框架（动态链接）"), license: "LGPL-3.0" },
                                         { name: qsTr("内置字体"), version: "—",      use: qsTr("思源黑体 / 霞鹜文楷"), license: "OFL-1.1" }
                                     ]
@@ -1731,8 +1899,15 @@ Item {
     Popup {
         id: uninstallConfirm
         property string assetId: ""
+        // OCR 三件套是唯一"删了就彻底不能干活"的资产：det 找框、rec 认字、
+        // dict 查表，缺任何一个，截图翻译与实时翻译都会直接报「缺少 OCR 模型」。
+        // 模型/运行时的删除都能靠重新下载恢复，且不影响其它功能，所以只对 OCR 加这句。
+        readonly property bool isOcr: assetId.startsWith("ocr.")
+        // 挂到窗口覆盖层上居中：直接 centerIn 父项时，页内 StackLayout 里的
+        // 坐标会把弹窗顶到左上角（出过一次半截在窗外的图）。
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
         modal: true
-        anchors.centerIn: parent
         width: 440
         padding: Theme.s5
 
@@ -1747,7 +1922,7 @@ Item {
             spacing: Theme.s3
 
             Text {
-                text: qsTr("卸载资产")
+                text: qsTr("卸载")
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSection
                 font.weight: Font.DemiBold
@@ -1761,6 +1936,28 @@ Item {
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
                 color: Theme.inkVariant
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                visible: uninstallConfirm.isOcr
+                implicitHeight: ocrWarning.implicitHeight + Theme.s3 * 2
+                radius: Theme.rMd
+                color: Theme.dangerContainer
+                border.width: 1
+                border.color: Theme.danger
+
+                Text {
+                    id: ocrWarning
+                    anchors.fill: parent
+                    anchors.margins: Theme.s3
+                    visible: parent.visible
+                    text: qsTr("删掉之后就没法识别图像了：截图翻译和实时翻译都会停在「缺少 OCR 模型」，直到你把这三个组件重新下载回来。")
+                    wrapMode: Text.Wrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeBody
+                    color: Theme.dangerContainerText
+                }
             }
 
             RowLayout {
@@ -1780,6 +1977,104 @@ Item {
                     onClicked: {
                         backend.uninstallAsset(uninstallConfirm.assetId)
                         uninstallConfirm.close()
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 从文件导入（「全部」栏）：先问装哪一类，再直接挑文件 ----
+    Popup {
+        visible: page.importCategoryOpen
+        onClosed: page.importCategoryOpen = false
+        id: importCategoryPicker
+        modal: true
+        anchors.centerIn: parent
+        width: 460
+        padding: Theme.s5
+
+        background: Rectangle {
+            radius: Theme.rLg
+            color: Theme.surfaceHigh
+            border.width: 1
+            border.color: Theme.outlineVariant
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.s3
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.s2
+
+                Text {
+                    text: qsTr("要导入哪一类？")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSection
+                    font.weight: Font.DemiBold
+                    color: Theme.ink
+                }
+
+                Item { Layout.fillWidth: true }
+
+                AppButton {
+                    text: qsTr("取消")
+                    variant: "text"
+                    onClicked: page.importCategoryOpen = false
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("选好类别再挑本地文件；装到哪一条写在按钮下面。")
+                wrapMode: Text.WordWrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.inkVariant
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.outlineVariant
+            }
+
+            Repeater {
+                model: [
+                    { code: "llm", label: qsTr("本地 LLM") },
+                    { code: "mt", label: qsTr("本地 MT") },
+                    { code: "ocr", label: qsTr("OCR") }
+                ]
+
+                delegate: ColumnLayout {
+                    id: categoryRow
+                    required property var modelData
+                    readonly property string target: page.importTargetFor(categoryRow.modelData.code)
+
+                    Layout.fillWidth: true
+                    spacing: Theme.s1
+
+                    AppButton {
+                        Layout.fillWidth: true
+                        text: categoryRow.modelData.label
+                        variant: "tonal"
+                        buttonEnabled: categoryRow.target !== ""
+                        onClicked: page.beginImport(categoryRow.modelData.code)
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Theme.s2
+                        text: categoryRow.target !== ""
+                              ? (page.assetInstalled(categoryRow.target)
+                                 ? qsTr("装到 %1（已安装，会覆盖）").arg(categoryRow.target)
+                                 : qsTr("装到 %1").arg(categoryRow.target))
+                              : qsTr("这一类还没有可装的条目，先去下载。")
+                        elide: Text.ElideMiddle
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeTiny
+                        color: Theme.inkVariant
                     }
                 }
             }
@@ -1829,7 +2124,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("先选资产，再挑本地文件。已安装的也可以覆盖重装。")
+                text: qsTr("先选要装的条目，再挑本地文件；已安装的也可以覆盖。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSmall
@@ -1855,7 +2150,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         visible: page.filteredAssets.length === 0
-                        text: qsTr("当前分类下没有可选资产。")
+                        text: qsTr("这一分类下暂时没有可下载的内容。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
@@ -1910,7 +2205,7 @@ Item {
                                 onClicked: {
                                     page.pendingImportId = importRow.modelData.id
                                     importPicker.close()
-                                    importFileDialog.open()
+                                    page.openImportDialog()
                                 }
                             }
                         }
@@ -1923,7 +2218,9 @@ Item {
     // 原生文件选择框：选完把 url 换成本地路径再交给后端。
     FileDialog {
         id: importFileDialog
-        title: qsTr("选择资产文件")
+        title: page.pendingImportId !== ""
+               ? qsTr("选择要装进 %1 的文件").arg(page.pendingImportId)
+               : qsTr("选择文件")
         fileMode: FileDialog.OpenFile
         onAccepted: backend.importAssetFromFile(page.pendingImportId,
                                                 page.localPath(importFileDialog.selectedFile))
@@ -1957,7 +2254,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("会清掉全部设置与翻译缓存，已下载的资产保留，随后程序自动重启。")
+                text: qsTr("会清掉全部设置与翻译缓存，已下载的模型保留，随后自动重启。")
                 wrapMode: Text.Wrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -1987,10 +2284,10 @@ Item {
         }
     }
 
-    // 原生目录选择框：迁移安装根目录。
+    // 原生目录选择框：迁移数据目录。
     FolderDialog {
         id: migrateDialog
-        title: qsTr("选择新的安装根目录")
+        title: qsTr("选择新的数据目录")
         onAccepted: backend.migrateAssetRoot(page.localPath(migrateDialog.selectedFolder))
     }
 
@@ -2157,19 +2454,19 @@ Item {
                     text:
                         qsTr("本程序包含以下第三方开源组件，各自遵循其原始许可证。完整许可证文本随各自源码分发，也能在仓库的 backend/third_party/<组件名>/LICENSE 里读到。\n\n")
                         + "onnxruntime 1.31.1 — Microsoft — MIT License\n"
-                        + qsTr("  本地 MT（OPUS-MT / Marian）推理运行时；编译期链接，随包分发 onnxruntime.dll\n")
+                        + qsTr("  本地翻译推理组件；随包分发，无需另外下载\n")
                         + "  https://github.com/microsoft/onnxruntime\n\n"
                         + "sentencepiece 0.2.0 — Google — Apache License 2.0\n"
                         + qsTr("  源文本 / 译文分词（SentencePiece 模型）；静态编入，随附其 vendored 子库：\n")
                         + qsTr("  absl（Apache-2.0）、darts-clone（BSD-3-Clause）、esaxx（MIT）、protobuf-lite（BSD-3-Clause）\n")
                         + "  https://github.com/google/sentencepiece\n\n"
                         + "monocypher 4.0.2 — Loup Vaillant — BSD-2-Clause OR CC0-1.0\n"
-                        + qsTr("  资产清单的 ed25519 签名校验；本项目按 BSD-2-Clause 使用\n")
+                        + qsTr("  下载内容的签名校验；本项目按 BSD-2-Clause 使用\n")
                         + "  https://monocypher.org\n\n"
                         + "miniz 11.0.2 — Rich Geldreich / RAD Game Tools / Valve — MIT License\n"
-                        + qsTr("  资产 zip 包解压\n")
+                        + qsTr("  压缩包解压\n")
                         + "  https://github.com/richgel999/miniz\n\n"
-                        + "Qt 6.12.0 — The Qt Company — LGPL-3.0（动态链接使用）\n"
+                        + "Qt 6.12.0 — The Qt Company — LGPL-3.0\n"
                         + qsTr("  桌面界面框架；以动态链接方式分发，允许替换 Qt 库文件\n")
                         + "  https://www.qt.io\n\n"
                         + qsTr("字体：\n")

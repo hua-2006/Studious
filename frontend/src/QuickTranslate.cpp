@@ -1,6 +1,7 @@
 #include "QuickTranslate.h"
 
 #include "AppSettings.h"
+#include "AssetPaths.h"
 #include "LocalEngine.h"
 #include "EngineIds.h"
 #include "Languages.h"
@@ -135,7 +136,7 @@ bool localMtUsable(const QString &srcLang, const QString &dstLang)
 {
     // ctor 只存路径，installedPairs()/supports() 是几次 stat，探测足够便宜。
     // 注意命名空间是 studious::translate（不是 include 路径里的 translators）。
-    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    const studious::translate::LocalMtTranslator mt(paths::modelsMtDir());
     return mt.supports(srcLang, dstLang);
 }
 
@@ -218,9 +219,7 @@ studious::cache::TranslationCache *processCache()
 {
     static studious::cache::TranslationCache *instance = nullptr;
     if (instance == nullptr) {
-        const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                 .filePath(QStringLiteral("cache.db"));
-        instance = new studious::cache::TranslationCache(path);
+        instance = new studious::cache::TranslationCache(studious::ui::paths::cacheDbPath());
     }
     return instance;
 }
@@ -287,7 +286,7 @@ studious::translate::LocalMtTranslator &sharedMt()
     // 旧实例随之析构，内存也一起还回去。
     static QString root;
     static std::unique_ptr<studious::translate::LocalMtTranslator> instance;
-    const QString wanted = LocalEngine::modelsDir();
+    const QString wanted = paths::modelsMtDir();
     if (!instance || root != wanted) {
         instance = std::make_unique<studious::translate::LocalMtTranslator>(wanted);
         root = wanted;

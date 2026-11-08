@@ -162,7 +162,6 @@ Item {
         required property string iconSource
         required property string title
         required property string description
-        required property string tags
         // 底部那行小字：做完了的入口说"点一下开始"，没做的老实说"接口已预留"。
         required property string footer
         required property string kind
@@ -172,8 +171,11 @@ Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         Layout.minimumWidth: 240
-        Layout.minimumHeight: 156
-        Layout.preferredHeight: 200
+        Layout.minimumHeight: 104
+        Layout.preferredHeight: 176
+
+        // 窗口压矮时卡片里的文字会超出边框，裁掉比漏到卡片外面好看。
+        clip: true
 
         radius: Theme.rXl
         color: hover.hovered ? Theme.surfaceHigh : Theme.surface
@@ -214,6 +216,9 @@ Item {
                     Image {
                         anchors.fill: parent
                         source: card.iconSource
+                        // 按 2 倍光栅化再缩到 32：DPR 1.5 下描边才不会发糊。
+                        sourceSize.width: 64
+                        sourceSize.height: 64
                         fillMode: Image.PreserveAspectFit
                         smooth: true
                         // 图标源文件是纯白描边（不是深紫），所以这里的着色等于
@@ -246,32 +251,24 @@ Item {
                 Layout.fillWidth: true
                 text: card.description
                 wrapMode: Text.WordWrap
+                // 卡片被压矮时先砍行数，别让文字顶穿底边。
+                maximumLineCount: card.height >= 190 ? 3 : (card.height >= 150 ? 2 : 1)
+                elide: Text.ElideRight
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.inkVariant
                 lineHeight: 1.25
             }
 
-            // 一行要点，填住卡片中段，也把「这个入口大概长什么样」提前交代清楚。
-            Text {
-                Layout.fillWidth: true
-                text: card.tags
-                wrapMode: Text.WordWrap
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.fontSizeTiny
-                color: hover.hovered ? Theme.primary : Theme.inkVariant
-                opacity: hover.hovered ? 1.0 : 0.7
-
-                Behavior on color { ColorAnimation { duration: Theme.durFast } }
-            }
-
             Item { Layout.fillHeight: true }
 
             // 卡高了之后中间会空一大块，给底部一条分隔线 + 一行页脚，
             // 视觉上收住，也把「→」放到该在的位置（悬浮才浮现）。
+            // 太矮时这半截直接藏起来，免得挤成一团。
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
+                visible: card.height >= 140
                 color: hover.hovered ? Theme.outline : Theme.outlineVariant
 
                 Behavior on color { ColorAnimation { duration: Theme.durFast } }
@@ -279,6 +276,7 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
+                visible: card.height >= 140
                 spacing: Theme.s2
 
                 Text {
@@ -583,24 +581,19 @@ Item {
                 color: page.sameLangNotice.length > 0 ? Theme.caution : Theme.inkVariant
             }
 
-            Badge {
-                Layout.alignment: Qt.AlignVCenter
-                text: qsTr("缓存键含引擎")
-            }
         }
 
         // -------------------------------------------------------- 三个入口
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumHeight: 176
+            Layout.minimumHeight: 104
             spacing: Theme.s4
 
             LauncherCard {
                 iconSource: "qrc:/qt/qml/Studious/resources/icons/mini.svg"
                 title: qsTr("小窗口")
                 description: qsTr("一个置顶小窗，随手输入随手出译文，不打断你正在做的事。")
-                tags: qsTr("全局热键　·　置顶不抢焦点　·　回车即译")
                 objectName: "cardMini"
                 footer: qsTr("点一下打开小窗")
                 kind: "mini"
@@ -611,7 +604,6 @@ Item {
                 iconSource: "qrc:/qt/qml/Studious/resources/icons/screenshot.svg"
                 title: qsTr("截图翻译")
                 description: qsTr("框选屏幕任意区域，识别文字后直接给译文，图片不外传。")
-                tags: qsTr("框选即译　·　本地 OCR　·　自动复制")
                 objectName: "cardCapture"
                 footer: qsTr("点一下开始框选")
                 kind: "capture"
@@ -622,7 +614,6 @@ Item {
                 iconSource: "qrc:/qt/qml/Studious/resources/icons/realtime.svg"
                 title: qsTr("实时翻译")
                 description: qsTr("盯住一块屏幕，字幕和对话边说边翻，只翻变化的部分。")
-                tags: qsTr("锁定区域　·　增量翻译　·　悬浮字幕")
                 objectName: "cardLive"
                 footer: qsTr("点一下开始框选")
                 kind: "live"

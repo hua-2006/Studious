@@ -180,6 +180,12 @@ class AppBackend : public QObject {
     // 译文正文字号（11~24）。只影响正文，左上角浮层/主界面的控件字号由 fontScale 统一缩放。
     Q_PROPERTY(int readingFontSize READ readingFontSize WRITE setReadingFontSize NOTIFY fontScaleChanged)
 
+    // 字体选择：空 = 项目自带的「软件默认-*」字体，__system__ = 跟随系统，其余按字体族名用。
+    Q_PROPERTY(QString uiFont READ uiFont WRITE setUiFont NOTIFY fontsChanged)
+    Q_PROPERTY(QString contentFont READ contentFont WRITE setContentFont NOTIFY fontsChanged)
+    // 可选字体清单：[{ code, label }]，code 同上；label 已按界面语言翻好。
+    Q_PROPERTY(QVariantList fontChoices READ fontChoices CONSTANT)
+
     // ---- 三个全局热键（文本形式，例如 "Ctrl+Alt+S"；空 = 不注册）----
     // 注册动作在 main.cpp（平台层归它管）。这里只负责校验、落盘、发信号，
     // 由 main.cpp 收到 hotkeysChanged 后重新注册，再把结果写回 hotkeyStatus。
@@ -311,6 +317,12 @@ public:
     void setFontScale(int percent);
     int readingFontSize() const { return m_readingFontSize; }
     void setReadingFontSize(int px);
+
+    QString uiFont() const { return m_uiFont; }
+    QString contentFont() const { return m_contentFont; }
+    void setUiFont(const QString &family);
+    void setContentFont(const QString &family);
+    QVariantList fontChoices() const;
 
     QString hotkeyCapture() const { return m_hotkeyCapture; }
     QString hotkeyMini() const { return m_hotkeyMini; }
@@ -636,6 +648,7 @@ signals:
     void activeDstChanged();
     void themeModeChanged();
     void fontScaleChanged();
+    void fontsChanged();
     void hotkeysChanged();
     void hotkeyStatusChanged();
     void uiLanguageChanged();
@@ -719,6 +732,8 @@ private:
     QString m_themeMode = QStringLiteral("system");
     int m_fontScale = 100;
     int m_readingFontSize = 13;
+    QString m_uiFont;
+    QString m_contentFont;
     QString m_hotkeyCapture;
     QString m_hotkeyMini;
     QString m_hotkeyLive;

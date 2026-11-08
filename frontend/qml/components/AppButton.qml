@@ -23,7 +23,9 @@ Rectangle {
     radius: Theme.rSm
     color: !buttonEnabled ? "transparent"
                           : isPrimary ? (hover.hovered ? Theme.primaryContainer : Theme.primary)
-                          : isTonal ? Theme.surfaceHighest
+                          // tonal 以前压根没有 hover 分支 —— 弹出层底色就是 surfaceHigh，
+                          // 按钮悬停不变色，看起来像"死的"。统一抬到强调色容器。
+                          : isTonal ? (hover.hovered ? Theme.primaryContainer : Theme.surfaceHighest)
                           : isText ? (hover.hovered ? Theme.surfaceHigh : "transparent")
                           : isDanger ? (hover.hovered ? Theme.dangerContainer : "transparent")
                           : (hover.hovered ? Theme.surfaceHigh : Theme.surface)

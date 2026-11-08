@@ -52,6 +52,13 @@ ui_*.h
 /models/
 /downloads/
 
+# 应用数据（2026-11-09 起从 %APPDATA%\studious 搬进仓库根的 data/）：
+#   assets/{models,runtime,state,downloads}、logs/、records/、cache.db
+# 全是可再生的运行时数据，5.6 GB，绝不入库。
+# 只放行 data/README.md —— 里面写清目录结构，克隆下来不用猜。
+/data/*
+!/data/README.md
+
 # 字体：整套 260 MB，不入库。缺失时程序回落到系统字体。
 /font/
 

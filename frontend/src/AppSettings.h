@@ -232,6 +232,14 @@ struct AppSettings {
     // 这个只管译文/原文正文，读长文时单独放大，不动控件。默认 13。
     int readingFontSize = 13;
 
+    // 字体选择（QSettings 键 ui/fontUi、ui/fontContent）。
+    // 默认值就是项目自带的「软件默认-思源黑体」/「软件默认-霞鹜文楷」；
+    // "__system__" = 跟随系统默认字体；其余按系统里已安装的字体族名原样用。
+    // 空串只为兼容老配置：读回来按默认值处理。
+    // 其它值是具体字体族名。
+    QString fontUi;
+    QString fontContent;
+
     // 强调色种子（QSettings 键 ui/accent），形如 "#RRGGBB"。
     // 空 = 用默认紫 #6750A4；load() 里非法值同样按空处理。
     // 整套调色板由 Theme 单例在 OKLab 空间从这个种子混出来。

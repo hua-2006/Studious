@@ -50,17 +50,15 @@ State &state()
     return *s;
 }
 
-// 与 paths::assetsRoot() 同口径：默认资产根是 <AppData>/studious/assets，
-// 日志放它的父目录下的 logs/，即 <AppData>/studious/logs。
-// assetRoot 被用户改到别处时，资产和日志一起搬走（历史目录 historyDir() 也是这个思路）。
+// 路径口径统一走 paths::logsDir()（默认 <dataRoot>/logs）。
+// 以前是"资产根的父目录 /logs"，资产根一改成自定义路径，日志就跟着跑到别处。
 void resolvePathsLocked()
 {
     State &s = state();
     if (!s.filePath.isEmpty()) {
         return;
     }
-    const QDir dataRoot = QFileInfo(studious::ui::paths::assetsRoot()).absoluteDir();
-    const QDir logDir(dataRoot.filePath(QStringLiteral("logs")));
+    const QDir logDir(studious::ui::paths::logsDir());
     QDir().mkpath(logDir.absolutePath());
     s.filePath = logDir.filePath(QLatin1String(kLogFileName));
     s.rotatedPath = logDir.filePath(QLatin1String(kRotatedFileName));

@@ -77,24 +77,22 @@ struct FontSet {
 
 FontSet loadBundledFonts()
 {
-    const QString root = QStringLiteral(STUDIOUS_FONT_DIR);
-    const QString uiDir = root + QStringLiteral("/UI_OTF/SimplifiedChinese");
-    const QString contentDir = root + QStringLiteral("/centent-v1.530");
-
+    // 字体编在 qrc 里（见 CMake 的 fonts 资源）：发行包里没有 font/ 目录，
+    // 从磁盘读会在用户机器上静默失败，然后整界面掉回系统字体。
     FontSet fonts;
 
-    // 界面：思源黑体 SC。Regular + Medium + Bold 三个字重，
-    // 让 QML 里的 Font.Normal / DemiBold / Bold 都能落到真字形上。
-    fonts.ui = loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Regular.otf"));
-    loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Medium.otf"));
-    loadFontFamily(uiDir + QStringLiteral("/SourceHanSansSC-Bold.otf"));
+    // 界面：思源黑体 SC（改名成「软件默认-思源黑体」，见 resources/fonts/README.md）。
+    // Regular + Medium + Bold 三个字重，让 QML 里的 Font.Normal / DemiBold / Bold
+    // 都能落到真字形上。
+    fonts.ui = loadFontFamily(QStringLiteral(":/fonts/StudiousSans-Regular.otf"));
+    loadFontFamily(QStringLiteral(":/fonts/StudiousSans-Medium.otf"));
+    loadFontFamily(QStringLiteral(":/fonts/StudiousSans-Bold.otf"));
 
     // 译文：霞鹜文楷。
-    fonts.content = loadFontFamily(contentDir + QStringLiteral("/LXGWWenKai-Regular.ttf"));
-    loadFontFamily(contentDir + QStringLiteral("/LXGWWenKai-Medium.ttf"));
+    fonts.content = loadFontFamily(QStringLiteral(":/fonts/StudiousWenKai-Regular.ttf"));
 
     // 等宽：霞鹜文楷 Mono。
-    fonts.mono = loadFontFamily(contentDir + QStringLiteral("/LXGWWenKaiMono-Regular.ttf"));
+    fonts.mono = loadFontFamily(QStringLiteral(":/fonts/StudiousWenKaiMono-Regular.ttf"));
 
     if (fonts.ui.isEmpty()) {
         fonts.ui = QStringLiteral("Segoe UI Variable");
@@ -128,9 +126,8 @@ studious::cache::TranslationCache *sharedCache()
 {
     static studious::cache::TranslationCache *instance = nullptr;
     if (instance == nullptr) {
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        const QString cachePath = dir + QStringLiteral("/cache.db");
-        instance = new studious::cache::TranslationCache(cachePath);
+        // 路径口径统一在 AssetPaths 里（默认 <dataRoot>/cache.db）。
+        instance = new studious::cache::TranslationCache(studious::ui::paths::cacheDbPath());
     }
     return instance;
 }
@@ -374,8 +371,8 @@ void printUsage()
     say(QStringLiteral("  studious.exe --asset-download <manifest.json> <assetId>"));
     say(QStringLiteral("                                     # 真实下载一个资产（含续传/校验/安装），不开 GUI"));
     say(QStringLiteral("  studious.exe --asset-verify <assetId>"));
-    say(QStringLiteral("  studious.exe --capture-probe <x,y,w,h,out.png>   （诊断：抓一块物理像素区域）"));
     say(QStringLiteral("                                     # 按启动前规则校验一条已安装资产（导入的不校验哈希）"));
+    say(QStringLiteral("  studious.exe --capture-probe <x,y,w,h,out.png>   （诊断：抓一块物理像素区域）"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -1003,10 +1000,8 @@ int runAssetsCli(const QStringList &args)
         return 1;
     }
 
-    // 安装根目录与 GUI 完全一致（QStandardPaths::AppDataLocation + /assets）。
-    const QString installRoot =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-            .filePath(QStringLiteral("assets"));
+    // 安装根目录与 GUI 完全一致（paths::assetsRoot()：默认 <dataRoot>/assets）。
+    const QString installRoot = studious::ui::paths::assetsRoot();
 
     studious::asset::AssetRegistry registry(installRoot, parsed.manifest);
     registry.refresh();
@@ -1121,9 +1116,7 @@ int runAssetDownload(const QStringList &args)
         return 1;
     }
 
-    const QString installRoot =
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-            .filePath(QStringLiteral("assets"));
+    const QString installRoot = studious::ui::paths::assetsRoot();
 
     studious::asset::AssetRegistry registry(installRoot, parsed.manifest);
     studious::net::QtHttpClient http;
@@ -1474,6 +1467,9 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    // 字体必须在 AppBackend 之前注册：构造时会按族名核对「选中的字体是否真的装了」，
+    // 顺序反了就会把自带的两个族名报成 (MISSING)。
+    const FontSet fonts = loadBundledFonts();
     auto *backend = new studious::ui::AppBackend(sharedCache(), &app);
 
     // --ui-shot 是自动化工具：允许和已开着的界面并存，也不应该去 ping 已有实例抢焦点。
@@ -1587,8 +1583,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("platformCanHotkey"),
                                              platformCaps.hotkey.available);
 
-    // 字体：必须在 QML 加载前注册好，否则首帧会用系统默认字体渲染再跳变。
-    const FontSet fonts = loadBundledFonts();
+    // 字体在第 1474 行附近（AppBackend 之前）就注册好了：见那里的注释。
     engine.rootContext()->setContextProperty(QStringLiteral("bundledFontUi"), fonts.ui);
     engine.rootContext()->setContextProperty(QStringLiteral("bundledFontContent"), fonts.content);
     engine.rootContext()->setContextProperty(QStringLiteral("bundledFontMono"), fonts.mono);

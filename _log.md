@@ -1817,3 +1817,306 @@ ormalizeSource(code)：「自动」唯一编码 = "auto"；
 - `version.json` 升到 `1.0.0`（codename 仍是 `Erstling`，channel `separate` / `test`），README 两处版号同步。
 - 本次发布的实质内容：LogSink + 独立日志窗口、本地 MT 常驻（自启/空闲释放/无语言库禁用）、本地 LLM 单实例与启动风暴防护、DXGI 抓屏兜底、OCR 换 PP-OCRv5 多语种、实时/截图对「原文原样退回」按未翻译处理、本地 MT 长段按句切、缓存与端口竞态修复、资产来源选择性校验与 API Key 加密。
 - 发布后仍未做：真实双击之外的按键录制自动化、4000 行日志压力、跨 8 MB 的写中轮转、模型文件的启动前校验。
+## 页面切换过渡动画（2026-11-09）
+
+需求：给所有跳转 / 页面切换加过渡（"简单动画有过度就行"）。
+
+### 改了什么
+- `frontend/qml/Main.qml` 的 `StackLayout`（主界面六页）：加 `id: pageStack`，`onCurrentIndexChanged` 重启两条 `NumberAnimation` —— 透明度 `0 → 1`（420 ms，`OutCubic`）+ `Translate.y` 从 `Theme.s2`（8px）回到 0（480 ms）。位移刻意做小，正文在长距离滑动里会糊。首版是 250 ms，用户要求「动画时间长一点」后统一放慢：设置页 380 ms、卡片淡入 320 ms、导航高亮 220 ms。
+- `frontend/qml/pages/SettingsPage.qml` 右栏 `StackLayout`：同一套淡入（只做透明度，不做位移，因为卡片本身有上下边距，浮起来像抖动）。
+- `frontend/qml/pages/ConfigPage.qml` 四张引擎配置卡、`frontend/qml/pages/OverlayPage.qml` 三张功能卡：它们靠 `visible: page.xxxTab === "..."` 切换，各加 `opacity: visible ? 1.0 : 0.0` + `Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }` —— 切到即淡入，切走时立即不可见（不拖泥带水）。
+- 导航高亮：`Main.qml` 左侧 rail 的选中底色与文字色、`SettingsPage.qml` 左栏同两处，加 `Behavior on color { ColorAnimation { duration: 220 } }`。
+
+### 踩的坑
+1. **多行三元绑定中间不能插属性**。第一版用脚本在 `color: root.currentPage === railItem.index` 这一行后面直接插 `Behavior on color`，而它的值在下一行（`? Theme.primaryContainer : "transparent"`）→ `qmlcachegen` 报 `Unexpected token '?'`（`Main.qml:249`、`SettingsPage.qml:273`）。正确位置在整个绑定结束之后。
+2. **同一个属性不能挂两个 `Behavior`**。`SettingsPage.qml` 的导航项原本已有一个 `Behavior on color`，我又加了一个 → 运行时刷 7 条 `Attempting to set another interceptor on QQuickRectangle_QML_107 property color - unsupported`（7 = 设置页左栏 7 个分区）。删掉重复那条即归零。
+
+### 验证
+- 构建 `[13/13] Linking`。
+- `--ui-shot docs/ui-shots-qml/anim_page3.png --ui-page 3` 与 `anim_page4.png --ui-page 4`：页面正常渲染，stderr 里 `interceptor` / `ReferenceError` / `Unable` 全为零（只剩既有的清单未验签、`local-mt` 未选源语言、CLI 阶段 `QSqlDatabase requires a QCoreApplication` 三类老噪声）。
+- 动画本身是运动过程，截图只能证明"终点正确、无 QML 报错"；手感需要肉眼过一遍。
+
+## 导航与分段控件改成滑块（2026-11-09）
+
+需求：「给左侧的导航栏和设置里的导航栏和那些多项选择，改成滑块设计」。
+
+### 做法
+- **主界面左栏**（`frontend/qml/Main.qml`）：不再让每个导航项自己涂选中底色。rail 里新增一颗 `railPill`（`Theme.rMd` + `Theme.primaryContainer`），`root.syncRailPill()` 用 `railRepeater.itemAt(currentPage).bodyItem.mapToItem(railPill.parent, 0, 0)` 量出当前项的真实位置再赋给胶囊；`Behavior on y / height` 240 ms `OutCubic` 滑过去。触发点：`onCurrentPageChanged`、`Component.onCompleted`（`Qt.callLater`，等首帧布局）、`railColumn.onWidthChanged`（切语言改字宽时重新对位）。delegate 加了 `property alias bodyItem: railItemBody` 供外部量尺寸。
+  - 为什么不能按「下标 × 行高」硬算：第 1 项（快捷键）里夹着一条 1px 分割线，行距不是等距的。
+- **设置页左栏**（`frontend/qml/pages/SettingsPage.qml`）：原来的 `Column` 外面包了一层 `Item`，里面先放 `sectionPill`（`y: page.currentSection * (40 + Theme.s1)`，`Behavior on y` 220 ms），再放 `Column { id: sectionNav }`。设置页的左栏高度固定 40、间距固定 `Theme.s1`，所以这里可以用算式，不必 `mapToItem`。导航项自身只保留悬浮反馈（`navHover.hovered ? surfaceHigh : transparent`）。
+- **所有分段控件**（`frontend/qml/components/Segmented.qml`，界面语言、关闭时、引擎模式、引擎 tab、浮层功能 tab 全走它）：`Rectangle pill` 放到 `seg` 里、`RowLayout` 之前（垫在按钮下面）。`syncPill()` 遍历 `row.children`，按 `modelData.code === seg.current` 找到当前按钮，`mapToItem(seg, 0, 0)` 取坐标后赋 `x/y/width/height`；`Behavior on x / width` 220 ms。触发点：`onCurrentChanged`、`Component.onCompleted`、`Connections { target: row; onWidthChanged }`（父容器变宽或切语言改文字宽度都要重新对位）。按钮本身 `color: "transparent"`，文字仍按选中改色/加粗。
+
+### 踩坑
+1. **换容器时漏了一行**。把设置页 `Column` 包进 `Item` 时按行号切片，起始行取成 259（实际 `Repeater {` 在 258），重建后 `model:` 直接挂在 `Column` 下 → `SettingsPage.qml:1763: Syntax error`。补回 `Repeater {` 即通过。
+2. **`mapToItem()` 不能写在绑定里**（不产生依赖，永远拿到 (0,0)），必须放在函数里、由事件触发调用。
+3. 布局完成前 `itemAt(i)` 的量是 0，所以首次对位要 `Qt.callLater`。
+
+### 验证
+- 构建 `[11/11] Linking`（中途一次 `ld.exe: cannot open output file studious.exe: Permission denied`，是上一次 `--ui-shot` 的进程还没退，`Stop-Process` 后重链即过）。
+- `--ui-shot` 拍 0/3/4/5 四页：`docs/ui-shots-qml/pill_0.png`（左栏「翻译」有胶囊、引擎分段「自动」有胶囊）、`pill_3.png`（「自动选择」「云端 LLM」胶囊位置正确）、`pill_4.png`（设置左栏「通用」+「跟随系统」「退出程序」胶囊）、`pill_5.png`；stderr 里 `ReferenceError` / `Unable` / `is not defined` / `Syntax` 全为零。
+- 滑动过程本身截图拍不到，静态位置与动画参数已按上面写死。
+
+## 悬浮残影 / 闪烁：改成整列单 handler + 悬浮胶囊（2026-11-09）
+
+用户反馈（附截图，设置页左栏约 5 项带灰底）：「这个阴影是啥,鼠标在上面滑动会闪烁」。
+
+### 根因
+上一轮把左栏改成滑块时，每个导航 delegate 各自绑了 `color: navHover.hovered ? Theme.surfaceHigh : "transparent"` + `Behavior on color` 150 ms。鼠标快速划过时，途经的每一项都各起一次淡入淡出，截屏正好抓到一串不同透明度的灰块 —— 看起来像闪烁的残影，其实只是没人等的动画尾巴。
+
+### 改法
+- `SettingsPage.qml`：删掉 delegate 里的 `HoverHandler` 与颜色绑定（`color: "transparent"`）；整列 `Column` 上只留一个 `HoverHandler`，按 `point.position.y / (40 + Theme.s1)` 算出 `page.sectionHover`；根页加 `property int sectionHover: -1`，切分区时清零；新增 `sectionHoverPill`（surfaceHigh，`y`/`opacity` 各带 Behavior，停在当前分区时不显示）。
+- `Main.qml`：主栏原本完全没有悬浮反馈，同法补一颗 `railHoverPill`。delegate 里只上报 `root.railHover = railItem.index`（离开时只有「还是自己」才清），胶囊位置由 `syncRailHoverPill()` 用 `mapToItem` 量真实坐标（第 1 项夹分割线，行高不等距，不能按下标乘行高算）；`onWidthChanged` 与 `Component.onCompleted` 都重新对位。
+
+### 验证
+- 构建 `[9/9] Linking`；`--smoke "Hello, world!" --engine llm-cloud` → exit 0。
+- `docs/ui-shots-qml/hover_off.png`（默认 `sectionHover = -1`）：设置页左栏只剩选中项「通用」一颗胶囊，没有残影。
+- 临时把 `sectionHover` 置 2 出 `hover_pill.png`（「缓存」一行有灰底、与选中胶囊同宽同高、文字对齐）；把 `railHover` 置 3 出 `rail_hover.png`（主栏「配置」有灰底）。两处都已改回 -1 并重新构建。
+- stderr 无 `ReferenceError` / `Unable` / `Syntax` / `interceptor`。
+
+### 教训
+- 悬浮态不要用「每项一个 handler + 颜色动画」：鼠标扫过时动画会一段段残留。要么瞬时变色，要么一颗胶囊跟着走。
+- `mapToItem()` 写在绑定里不产生依赖，位置要显式调用函数更新。
+## 关闭确认弹窗（2026-11-09）
+
+需求：右上角 ✕ 点了以后先问一句 —— 收进托盘还是关闭软件。
+
+### 实现
+- `frontend/qml/Main.qml`：新增 `property bool closePromptOpen`、`quitApplication()`（置 `forceQuit = true` 后 `close()`，绕过 `onClosing` 里「收进托盘」的拦截）、`minimizeToTray()`（`hide()`）。
+- 遮罩 `closeScrim`：铺满窗口的 38% 黑，`opacity` 带 140 ms 过渡，点空白处或按 Esc 取消；卡片 `closeCard` 420 宽、居中、`scale 0.96 → 1`。
+- 按钮：`最小化到托盘`（primary，`buttonEnabled: backend.trayAvailable` —— 装不上托盘就不给藏，否则点完就找不回来了）、`关闭软件`（danger 描边）。
+- ✕ 的 `onClicked` 从 `root.close()` 改成 `root.closePromptOpen = true`。
+
+### 验证
+- 临时把 `closePromptOpen` 默认置 `true` → `docs/ui-shots-qml/close_prompt.png`：遮罩、卡片、标题「关闭 Studious」、说明、两个按钮都正确，`stderr` 无 `ReferenceError` / `Unable`。
+- 改回 `false` 重新构建 `[13/13] Linking`；`--smoke` exit 0。
+- `update_translations` → 741 条，4 条新串补齐（Close Studious / Keep running in the tray, or quit the app? / Quit app / Minimize to tray），`unfinished = 0`。
+### 追加条件（同日）
+- 用户要求：设置·通用里勾了「最小化到托盘」时，点 ✕ 不再弹确认。
+- `Main.qml` 的 ✕ 分支改成三路：`minimizeToTray && trayAvailable` → `root.hide()`；否则 `closePromptOpen = true`。托盘装不上时仍走弹窗（弹窗里那颗按钮会置灰，至少还能选「关闭软件」）。
+- 构建 `[9/9] Linking`；`--ui-shot docs/ui-shots-qml/close_prompt_off.png` 确认默认不弹、无 QML 报错。
+## 字体内置与外观页字体选择（2026-11-09）
+
+**做了什么**
+
+- `font/` 里只挑真正用到的 5 个字重，用 fontTools 改写 `name` 表（1/4/16 族名、2/17 字重名、6 PostScript 名必须是 ASCII），存到 `frontend/resources/fonts/`：
+  - `StudiousSans-{Regular,Medium,Bold}.otf` → 族名「软件默认-思源黑体」
+  - `StudiousWenKai-Regular.ttf` → 「软件默认-霞鹜文楷」
+  - `StudiousWenKaiMono-Regular.ttf` → 「软件默认-霞鹜文楷等宽」
+- 新增独立静态库 `studious_fonts` 挂 qrc（`:/fonts/...`），`studious` 链接它；`loadBundledFonts()` 改成从 qrc 装载，删掉 `STUDIOUS_FONT_DIR` 宏。
+- 外观页：「界面字体」「译文字体」两个 `AppComboBox`（`backend.fontChoices`），`ui/fontUi`、`ui/fontContent` 落注册表；`Main.qml` 的 `Binding` 改成「空 = 自带 / `__system__` = 系统 / 否则按族名」。
+- 外观页删掉「主窗口」「语言显示名」两张卡（里面只有占位符）。
+
+**为什么字体放在独立静态库**
+
+`qt_add_resources(studious ... FILES fonts...)` 会把字体文件挂进目标的 `SOURCES`；`update_translations` 时 lupdate 照这份清单解析，25 MB 的 TTF 直接把它卡死（实测 422 s CPU 仍在跑，`--target update_translations` 两分钟超时）。`QT_EXCLUDE_SOURCES_FROM_TRANSLATION` 生成的排除正则带上了源码目录前缀，实测不生效。拆成 `studious_fonts` 之后 lupdate 只扫 `studious` 自己的源文件，恢复 1 秒内完成（559 条，0 new）。
+
+**验证**
+
+- `[font] ui=软件默认-思源黑体 content=软件默认-霞鹜文楷 mono=软件默认-霞鹜文楷等宽`（启动日志，来自 qrc）。
+- 外观页截图 `docs/ui-shots-qml/font_lib_crop.png`：字体卡两个下拉都是「跟随项目字体」，下面是字号缩放 100%、翻译字号 13 px；卡后直接结束，两张删掉的卡不再出现。
+- 字体切换实测：`ui/fontUi=__system__` 与默认渲染差 226,844 px；`ui/fontUi=软件默认-霞鹜文楷` 差 192,563 px，截图里正文/标题明显变成文楷（`font_wenkai_crop.png`）。
+- 构建 `[92/92] Linking`；`lrelease` 559 条 0 unfinished；`exe` 146,512,419 B。
+
+**坑**
+
+- `i18n::s("中", "英")` 在 `studious::ui` 命名空间里会解析成 `studious::ui::i18n::s()`（返回 `Strings`），编译报 `no known conversion`；要写全限定 `studious::i18n::s(...)`（那是 `const char*` 版本）。
+- 改 `qt_add_resources` 之后必须重新 `cmake -S frontend -B frontend/build`，只 `--build` 不会重新生成 qrc。
+## 字体下拉改成「自带默认 + 系统字体」（2026-11-09）
+
+**用户口径**：界面字体本来就是思源黑体、译文本来就是霞鹜文楷，那就把默认值做成这两个（不是"跟随项目字体"）；下拉里其余项读系统已装字体。
+
+**改了什么**
+
+- `AppSettings::defaults()`：`fontUi = "软件默认-思源黑体"`、`fontContent = "软件默认-霞鹜文楷"`（原来都是空串）。
+- `AppSettings::load()`：老配置里写进去的空串统一折回默认值，升级后不会显示成空。
+- `AppBackend::fontChoices()`：前两项是自带的两套，第三项「系统默认字体」，其余用 `QFontDatabase::families()` 全量枚举并按名字排序（本机 350 项 = 2 自带 + 1 系统默认 + 347 系统族名）；`knownFontChoice()` 白名单同步放开到「系统里真实存在的族名」，等宽那份不进下拉（界面/正文用等宽没意义）。
+- `main.cpp`：`loadBundledFonts()` 从 1589 行提到 `AppBackend` 构造之前 —— 构造函数现在会核对「选中的族名是不是真的装了」，顺序反了会把自带的两个报成 `(MISSING)`。
+- 新增两条诊断日志：`[font] selected ui=… content=…`（带 `(system)` / `(MISSING)` 标注）与 `[font] choices: N`。
+
+**验证**
+
+- 默认启动：`[font] selected ui=软件默认-思源黑体 content=软件默认-霞鹜文楷`，无 `(MISSING)`。
+- `STUDIOUS_UI_SET="uiFont=__system__"` → 日志 `ui=(system)`，与默认截图差 106,751 px。
+- `STUDIOUS_UI_SET="uiFont=Consolas"` → 设置被接受（`set uiFont = Consolas -> 1`），与默认截图差 96,140 px，证明系统族名可以直接用。
+- 测完把注册表 `ui/fontUi`、`ui/fontContent` 写回两个默认值，再拍 `docs/ui-shots-qml/font_final.png` 确认。
+
+**等宽字体的结论**：`Theme.fontMono` 全仓 53 处引用（日志窗口正文、截图浮层尺寸标、热键键位框、资产路径），**在用**，所以「霞鹜文楷等宽」继续留在包里，只是不进下拉。要省那 24.8 MB 只能改成系统等宽，等用户决定。
+## 字体子集化（2026-11-09）
+
+**目标**：exe 里的 97.2 MB 字体压下来，界面观感不能变。
+
+**字符集**（`frontend/resources/fonts/subset.py` 生成，脚本入库）：ASCII / Latin-1 / Latin Ext-A、General Punctuation / Currency / Arrows / Math / Geometric / Dingbats（`✓ ✕ × ▾ ≈`）、CJK 标点 + 假名 + 全角半角、**GB2312 全量 6763 字**、**JIS X 0208 的汉字**（日文 OCR 原文）、**KS X 1001 的 2350 个音节**（韩语译文），再加项目源码/翻译文件里实际出现过的字。共 14,524 个字符。
+
+**结果**（fontTools 4.68 subset，保留 `--layout-features=*`、name 表）：
+
+| 字体 | 前 | 后 |
+| --- | --- | --- |
+| 思源黑体 Bold | 16.2 MB | 6.0 MB |
+| 思源黑体 Medium | 15.8 MB | 5.8 MB |
+| 思源黑体 Regular | 15.8 MB | 5.8 MB |
+| 霞鹜文楷 Regular | 24.7 MB | 6.5 MB |
+| 霞鹜文楷等宽 Regular | 24.8 MB | 6.3 MB |
+| 合计 | 97.2 MB | **30.4 MB** |
+
+exe：146.5 MB → **73 MB**。
+
+**验证**
+
+- 逐字查 cmap：日文样例（`【カジュアル】ストーリーを…`）、繁体样例、韩语样例 **0 缺字**；`✕ ▾ ⠿` 三字原字体本来就没有（一直靠系统回退），子集前后一致。
+- 界面截图逐像素比对：子集前后 `docs/ui-shots-qml/font_default5.png` vs `subset_appearance2.png` **差异 0 px**。
+- 构建 `[4/4] Linking`，`[font] selected` 仍是两个默认族名、无 `(MISSING)`。
+
+**保留的兜底**：包里没有的字（生僻字、GB18030 扩展、全量谚文）走 Windows 字体回退，显示成系统字体，不出豆腐块。
+
+**产物**：`frontend/resources/fonts/subset.py`（可重跑）、`README.md` 重写（字重表、字符集口径、覆盖自测、许可证、加字重五步、以及"别把字体挂回 studious 目标否则 lupdate 卡死"的警告）。
+## 文案面向用户 + 卡片防溢出 + 快捷键页图标（2026-11-09）
+
+**卡片溢出（`frontend/qml/pages/TranslatePage.qml`）**
+
+- `LauncherCard` 加 `clip: true`；`Layout.minimumHeight` 156 → 104、`preferredHeight` 200 → 176；外层 `RowLayout.minimumHeight` 176 → 104 —— 窗口压矮时卡片先缩，内容被裁在圆角内，不再顶出去。
+- 描述文字 `maximumLineCount` 按卡高三档（≥190 三行 / ≥150 两行 / 其余一行）+ `elide: Text.ElideRight`；分隔线与页脚那行 `visible: card.height >= 140`，太矮时整块收掉。
+- 删掉三张卡的 `required property string tags` 与「全局热键 · 置顶不抢焦点 · 回车即译」那行（含三处赋值）。
+
+**文案：开发者口气 → 用户口气（约 70 条，QML + 一处 C++）**
+
+- 参数名直接露英文的：`Base URL`→「服务地址」、`API Key`→「密钥」、`timeoutMs`→「等待上限」、`maxTokens`→「最长回复」、`temperature`→「发散程度」、`systemPrompt`→「风格要求」。
+- 内部术语：`后端`→「运行方式」（值 vulkan 显示「显卡加速」）、`PID`→「进程号」、`实际路径`→「保存位置」、`运行时`→「加速组件」、`运算线程`→「线程数」、`附加参数`→「附加选项」。
+- 重写的长句：本地 LLM 的启动/预热/空闲三段说明、MT 常驻与空闲释放、缓存（`命中/未命中`→「复用 / 新翻译」、`条数`→「已缓存译文」、`数据库路径`→「缓存文件」）、代理与超时、资产的下载/导入/分类、`管「应用怎么跑」…` 副标题。
+- 删掉 `qsTr("缓存键含引擎")` 徽章；`Stub` 的「未实现」→「即将支持」；OverlayPage 的「边框颜色跟随强调色，不单独暴露」「和浮层里那颗『设置』是同一份值」等改成口语；MiniWindow 的「自动检测 (auto)」「自动存进 mini.db」去掉内部标识。
+- `frontend/src/AppBackend.cpp` 的本地 MT 副标题：不再用 `routeDescription()`（会露出 `mt.opus.en-zh`），改成 `英语 → 中文 · 本地语言包`（走 `LanguageRegistry::displayName`）；诊断细节仍留在状态栏与日志。
+
+**快捷键页图标（`frontend/qml/pages/HotkeysPage.qml`）**
+
+- 三张卡原本是 `translate.svg / translate.svg / overlay.svg`（复制粘贴留下的错），改成与翻译页一致：`mini.svg` / `screenshot.svg` / `realtime.svg`。
+- 两页卡片图标都加 `sourceSize.width/height: 64`（先 2 倍光栅化再缩到 32），DPR 1.5 下描边不再发虚。
+
+**翻译**
+
+- `lupdate` 后 563 条，逐条补英文，`unfinished = 0`；`lrelease` → `Generated 563 translation(s) (563 finished and 0 unfinished)`。
+- 坑：想清 `vanished` 条目时用「`<message>…</message>` + `re.S`」整块删除，正则跨块吞掉了正常条目，`studious_en.ts` 从 801 条被删到 172 条；`git checkout` 还原后重新 `lupdate` + 脚本逐条填。以后清 obsolete 交给 `lupdate -no-obsolete`，别自己写正则。
+
+**验证**
+
+- 构建 `[11/11] Linking`；`lrelease` 563/0。
+- 截图：`docs/ui-shots-qml/cards_small.png`（1120×620，卡片不再溢出）、`cards_normal.png`（1120×720，页脚与分隔线正常）、`text_cards_cfg.png`（配置页新标签）、`hotkeys_icons.png`（三卡图标与翻译页一致）、`translate_icons.png`。
+
+## 数据目录内迁 + OCR 卸载确认（2026-11-09）
+
+**用户口径**：① OCR 三件套的删除要有提示（删了就不能识别图像）；② 资产目录从系统目录搬进项目目录，顺手把结构整理干净，多余文件（含 `docs/`）挪到 `C:\Code\code\project\doc`。
+
+**① 路径统一到一个根**
+- `AssetPaths.h/.cpp` 新增 `dataRoot()`：从 exe 目录往上找 `version.json`（最多四层）当「应用目录」，默认数据根是它下面的 `data/`；找不到就用 exe 目录 —— 宁可放 exe 边上，也不再散回 AppData。
+- 新增 `logsDir()` / `recordsDir()` / `cacheDbPath()`；`assetsRoot()` 默认值从 `<AppData>/studious/assets` 改成 `<dataRoot>/assets`（设置里的自定义资产根仍然优先）。
+- 接线四处：`LogSink` 走 `logsDir()`（原来是「资产根的父目录/logs」，资产根一改日志就乱跑）；`main.cpp` 与 `QuickTranslate` 的 cache 走 `cacheDbPath()`；`AppBackend` 的 records 走 `recordsDir()`；`OcrModels` 与 `--assets-cli/--asset-download` 的安装根走 `assetsRoot()`。
+- llama-server 的日志仍在 `<资产根>/logs/llama-server.log`（后端按运行时目录倒推，不依赖界面层）。
+- `.gitignore` 加 `/data/`（5.6 GB 可再生数据，绝不入库）。
+
+**② 文件搬迁（robocopy /MOVE，秒级、不复制）**
+- `%APPDATA%\studious\assets|logs|records` + `cache.db` + 旧 `records.db` → `Studious\data\{assets,logs,records}` 与 `data\{cache.db,records.db}`；旧目录已空。
+- `data/assets/dist`（639 MB 的 opus zip，代码里零引用）→ `doc\studious-old-cache\dist`。
+- 仓库根杂物 `b2.log`/`b4.log`/`b_test.log`/`mt_warm.log`/`_tmp_smoke.log` → `doc\logs-archive\`；整个 `docs/` → `doc\docs\`（本来就没入库，`git ls-files docs` 为 0）。
+
+**③ OCR 卸载确认**
+- `frontend/qml/pages/SettingsPage.qml` 的 `uninstallConfirm` 加 `readonly property bool isOcr: assetId.startsWith("ocr.")`：仅 OCR 三件套显示红框警告「删掉之后就没法识别图像了：截图翻译和实时翻译都会停在「缺少 OCR 模型」，直到你把这三个组件重新下载回来。」
+- 顺手修好弹窗定位：`parent: Overlay.overlay` + `anchors.centerIn: Overlay.overlay`（原来 `anchors.centerIn: parent` 会按页内 StackLayout 坐标算，出过一次弹窗被顶到左上、半截在窗外的图）。
+- 缺文件时的错误处理本来就有：`ScreenFlow`/`LiveSession` 都返回「缺少 OCR 模型：%1，去资产页下载。」（这次把 ScreenFlow 那条补上了「去资产页下载」），`OcrEngine` 侧是「OCR 模型缺失：%1（目录 %2）」，无降级、不会崩。
+
+**验证**
+- 构建 `[9/9] Linking`；`[logsink] installed, file=C:/Code/code/project/Studious/data/logs/studious.log`（新根生效）。
+- `--asset-verify model.qwen2.5-3b-instruct.q4km` → `origin=download -> ok`；`--asset-verify ocr.rec.ppocrv5` → `origin=unknown -> ok`（读到的是 `data/assets`）。
+- `--smoke "Hello, world!" --from en --to zh --local --local-model model.qwen2.5-0.5b-instruct.q4km` → 你好，世界！、`[local] 已停止 llama-server（耗时 61 ms）`、`[DONE] exit 0`。
+- 新增两处译文补齐，`unfinished = 0`；截图 `doc/docs/ui-shots-qml/ocr_uninstall_confirm.png`（1680×1350，弹窗居中、红框警告完整）。
+- 坑：给 Popup 加 `anchors.centerIn` 前要删掉原来那条，否则 `Property value set multiple times`（qmlcachegen 直接编译失败）。
+
+## 快捷键页按钮闪烁 + 界面字体按实际用字裁剪（2026-11-09）
+
+**① 按钮闪烁**
+- 现象：快捷键页把鼠标移到「录制」/「清除」上时，按钮底色一闪一闪的，像是残留的阴影。
+- 根因：卡片上抄了翻译页入口卡的 `scale: hover.hovered ? 1.012 : 1.0`。翻译页那三张卡里没有按钮，放大无害；快捷键卡里有按钮，放大后按钮跟着位移，指针正好压在按钮边缘时 `HoverHandler` 在"进/出"之间反复翻，按钮的 `Behavior on color` 就一遍遍重放。
+- 修法：快捷键卡删掉 `scale` 与对应的 `Behavior on scale`，只留 `color` / `border.color` 的过渡；注释写明「这张卡里放着按钮，绝不能做缩放/位移」。
+- 验证：构建 `[12/12] Linking`；截图 `doc/docs/ui-shots-qml/font_ui_subset.png`（快捷键页三卡正常）。
+
+**② 界面字体裁到实际用字**
+- `subset.py` 加 `--ui` 模式：扫 `frontend/qml`、`frontend/src`、`backend/{src,include}`、`frontend/translations` 里出现过的非 ASCII 字（含后端 `i18n::s/sf` 的中文），加 ASCII / Latin-1 / 通用标点 / 箭头符号 / CJK 标点 / 全角半角整段，只处理 `StudiousSans-*`。
+- 结果：**2,835 字（汉字 1,308）**；三份字体各 0.7 MB（原 5.8~6.0 MB），exe **73 → 57 MB**。
+- 覆盖自测：拿原字体 cmap 逐字比对，介面字符集里原本存在的 2,093 字**一个没丢**；两张截图（快捷键页 / 设置·资产）逐字检查无异常字形。
+- 译文用霞鹜文楷仍是宽口径（GB2312 + JIS 汉字 + 韩语音节），不许跟着裁 —— 译文是任意文本。
+- `TODO.md` 顶部新增「0. 置顶：加界面文案就要重裁界面字体」，写清触发条件与命令；`frontend/resources/fonts/README.md` 补 `--ui` 模式、两张字符集口径与体积对比。
+- 临时产物 `_fontbuild/`、`_charset*.txt`、`_check_subset.py` 已删。
+
+## 资产「从文件导入」按分类分派（2026-11-09）
+
+**问题**：资产卡的「从文件导入」原来直接弹一张 16 条的长列表让人挑条目，用户不知道
+本地 LLM / 本地 MT / OCR 各自该选哪一条，也分不清哪些是运行时（不能导入）。
+
+**改法（rontend/qml/pages/SettingsPage.qml）**
+- 「全部」栏点「从文件导入」→ 先弹 importCategoryPicker：三个按钮，每颗下面用等宽字
+  写清「装到哪一条」（已安装的补「（已安装，会覆盖）」），点类别直接进系统文件选择框。
+- 已经在某个分类栏（LLM / 本地 MT / OCR）里 → 一次点击直接开文件选择框，不再多问。
+- 行内「导入文件」（占位模型，例如 7B）保持原样：那条的 id 是明确的，直接选文件。
+- 目标条目怎么定：importTargetFor(category) —— 占位条目优先（LLM 落到
+  model.qwen2.5-7b-instruct.q4km），其次第一个未安装的，都装齐了才落到该类代表条目
+  （MT 用 mt.opus.en-zh、OCR 用 ocr.rec.ppocrv5）；运行时（	ype: runtime）一律跳过。
+- 文件框标题改成「选择要装进 <assetId> 的文件」，避免选完才猜装到哪儿去了。
+- 顺带修掉资产卡下面那句误导文案：原来写「导入的文件会先校验完整性，对不上会拒绝」，
+  实际用户导入的文件不过哈希（记 Import 来源），改成如实描述。
+
+**验证**：构建 `[9/9]`；临时把 importCategoryOpen 默认置 true 截图
+`doc/docs/ui-shots-qml/import_category.png`，沿弹窗中线做像素带扫描确认三颗 tonal
+按钮分别在 y=530/625/719，弹窗到 y≈820 结束、没有溢出；随后改回 false 重新构建；
+`--smoke "Hello, world!"` → 你好，世界！；`studious_en.ts` 571 条、unfinished = 0。
+## 资产目录分格（models/llm|mt|ocr）+ 导入按钮hover/目录 + MT 默认根（2026-11-09）
+
+**问题**：`data/assets/models` 平铺了 16 个条目（3 个 GGUF、6 个 `mt.opus.*` 目录、5 个
+`ocr.*` 文件 + 一个 `ocr/` staging 目录），肉眼分不清谁能被 llama-server 打开、谁会被
+OCR 直接读；资产卡的「从文件导入」按钮在弹出层里没有悬浮反馈；点它总是从 C:\ 开始翻。
+
+**改法**
+- `frontend/src/AssetPaths.h/.cpp`：新增 `modelsLlmDir()` / `modelsMtDir()` / `modelsOcrDir()`。
+- `backend/src/asset/AssetRegistry.cpp` 的 `resolveTarget()` 按 id 前缀分派：
+  `runtime` → `runtime/`；`mt.` → `models/mt`；`ocr.` → `models/ocr`；其余 → `models/llm`。
+- `backend/src/runtime/LlamaServer.cpp` 的 `installRoot()`：模型路径往上推根时，先判断末级
+  目录是不是 `llm|mt|ocr`，是就多 `cdUp()` 一层（否则会把 `models/llm` 当成根）。
+- `frontend/src/LocalEngine.cpp` 的 `modelsDir()` 指向 `models/llm`；`frontend/src/QuickTranslate.cpp`
+  的 MT 两处改指 `modelsMtDir()`；`frontend/src/OcrModels.cpp` 的 staging 目标改成 `models/ocr/run/`，
+  候选路径同时兼容新的 `models/ocr/<id>`、旧的平铺 `models/<id>` 和已收拢的 `models/ocr/<file>`。
+- 磁盘已按新布局搬好：`llm/` 三个 GGUF，`mt/` 六个语言包，`ocr/` 五个资产文件 + `run/` 收拢副本。
+- `frontend/qml/components/AppButton.qml`：`tonal` 以前**没有** hover 分支（恒 `surfaceHighest`），
+  弹出层底色本来就是 `surfaceHigh` → 看起来像"死的"；改成 hover 抬到 `primaryContainer`。
+- `frontend/qml/pages/SettingsPage.qml`：新增 `assetFolder(id)`（取安装路径的父目录）与
+  `openImportDialog()`，把 `beginImport()`、行内「导入文件」、`importPicker` 选中三处统一走它，
+  文件框默认落在该类资产所在目录；数据目录树文案同步成 `models/{llm,mt,ocr}` + `ocr/run/`。
+- `backend/src/translators/LocalMtTranslator.cpp` 的 `defaultModelsRoot()`：不再写死
+  `%APPDATA%/studious/assets/models`，改成从 exe 往上找 `version.json` → `<根>/data/assets/models/mt`，
+  找不到才退回旧路径。此前 CLI / `TranslateJob` 走的是工厂默认值，指向早已废弃的 AppData。
+
+**验证**
+- 构建 `[26/26] Linking`、`[4/4] Linking`。
+- `--asset-verify` 三条都 `ok`（新布局能定位到实际文件）。
+- `--smoke "Hello, world!" --engine local-mt` → 你好,世界观! exit 0；`--local` → 你好，世界！+ 68 ms 停服务。
+- OCR 走新 staging 路径实测：`[ocr] staged models into …/models/ocr/run`，同一张日文测试图
+  识别 0.980「こんにちは、世界。」/ 0.910「今日はいい天気ですね。」。
+- `update_translations` 574 条（5 new）→ 补齐 → `lrelease` 574/0；`--ui-shot` 资产分区截图
+  `doc/docs/ui-shots-qml/assets_split.png`。
+
+**坑**
+- `--assets-cli` 仍然需要显式 manifest 路径（`backend/asset/manifest.json`），不传会打印用法。
+- `main.cpp` 的 usage 里 `--asset-verify` 的说明行被插到了 `--capture-probe` 后面，已调回。
+
+## 设置页「滚到底再切分区变空白」（2026-11-09）
+
+**现象**：设置右栏滚到最底部（缓存那张卡最长），再点别的分区，右侧一片空白；往上滚能看到内容。
+
+**根因**：右栏是 `ScrollView > ColumnLayout > StackLayout`，`StackLayout` 的隐式高度取的是
+**所有子项里最高的那个**（缓存卡带历史列表，比别的高出一大截）。于是短分区底下多出一大片
+空滚动区；`ScrollView` 切分区时又不会把 `contentY` 归零，停在旧的越界位置 → 看着像没渲染。
+
+**改法（`frontend/qml/pages/SettingsPage.qml`）**
+- `sectionStack` 加 `Layout.preferredHeight`，只跟当前项走：
+  `{ var it = itemAt(currentIndex); return it ? it.implicitHeight : 0 }`
+  （StackLayout 没有 `currentItem`，先写 `currentItem` 会报 `ReferenceError`。）
+- `onCurrentSectionChanged` 里把 `contentScroll.contentItem.contentY = 0`，换分区一律回顶部。
+
+**验证**：构建 `[9/9]`；`--ui-shot` 拍 1/2/3/6 四个分区，逐行扫右栏像素求内容范围 ——
+内容分别止于 y=682 / 1313 / 649 / 979（物理像素），短分区不再带一大片空滚动区；
+运行时无 `ReferenceError`/`Unable`。

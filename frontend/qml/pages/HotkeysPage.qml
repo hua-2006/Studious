@@ -19,21 +19,21 @@ Item {
     readonly property var cards: [
         {
             key: "mini",
-            iconSource: "qrc:/qt/qml/Studious/resources/icons/translate.svg",
+            iconSource: "qrc:/qt/qml/Studious/resources/icons/mini.svg",
             title: qsTr("小窗翻译"),
             description: qsTr("敲一下就弹出小窗，取剪贴板里的文字直接翻。"),
             combo: backend.hotkeyMini
         },
         {
             key: "capture",
-            iconSource: "qrc:/qt/qml/Studious/resources/icons/translate.svg",
+            iconSource: "qrc:/qt/qml/Studious/resources/icons/screenshot.svg",
             title: qsTr("截图翻译"),
             description: qsTr("敲一下就进入框选，框完按工具栏上的「翻译」。"),
             combo: backend.hotkeyCapture
         },
         {
             key: "live",
-            iconSource: "qrc:/qt/qml/Studious/resources/icons/overlay.svg",
+            iconSource: "qrc:/qt/qml/Studious/resources/icons/realtime.svg",
             title: qsTr("实时翻译"),
             description: qsTr("敲一下就框选一块区域，之后它会按刷新间隔自己翻。"),
             combo: backend.hotkeyLive
@@ -291,13 +291,13 @@ Item {
                     border.color: hotkeyCard.recording
                                   ? Theme.primary
                                   : (hover.hovered ? Theme.primary : Theme.outlineVariant)
-                    scale: hover.hovered && !hotkeyCard.recording ? 1.012 : 1.0
+                    // 这张卡里放着按钮，绝不能做缩放/位移：放大后按钮跟着挪，
+                    // 指针正好压在按钮边缘时 hover 会在"进/出"之间反复翻，
+                    // 按钮底色随之闪（实测『录制』『清除』两颗最明显）。
+                    // 翻译页的入口卡没有按钮，才允许 scale 1.012。
 
                     Behavior on color { ColorAnimation { duration: Theme.durFast } }
                     Behavior on border.color { ColorAnimation { duration: Theme.durFast } }
-                    Behavior on scale {
-                        NumberAnimation { duration: Theme.durFast; easing.type: Easing.OutCubic }
-                    }
 
                     HoverHandler {
                         id: hover
@@ -325,6 +325,9 @@ Item {
                                 Image {
                                     anchors.fill: parent
                                     source: hotkeyCard.modelData.iconSource
+                                    // 按 2 倍光栅化再缩到 32：DPR 1.5 下描边才不会发糊。
+                                    sourceSize.width: 64
+                                    sourceSize.height: 64
                                     fillMode: Image.PreserveAspectFit
                                     smooth: true
                                     layer.enabled: true

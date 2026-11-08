@@ -538,7 +538,7 @@ Window {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("改完立刻生效，不用重开这一单。")
+                    text: qsTr("改完立刻生效，不用重开。")
                     wrapMode: Text.WordWrap
                     color: Theme.inkVariant
                     font.family: Theme.fontUi

@@ -46,6 +46,58 @@ Window {
     // 万一以后有人想走 window.close() 退出时不被上面那条拦下来。
     property bool forceQuit: false
 
+    // 导航选中块：量一次当前项的真实位置再让胶囊滑过去。
+    // 不能按「下标 × 行高」硬算 —— 第 1 项里还夹着一条分割线，行高不是等距的。
+    function syncRailPill() {
+        if (railRepeater.count <= 0)
+            return
+        const i = Math.max(0, Math.min(root.currentPage, railRepeater.count - 1))
+        const item = railRepeater.itemAt(i)
+        if (!item || !item.bodyItem)
+            return
+        const p = item.bodyItem.mapToItem(railPill.parent, 0, 0)
+        railPill.x = p.x
+        railPill.y = p.y
+        railPill.width = item.bodyItem.width
+        railPill.height = item.bodyItem.height
+        railPill.visible = true
+    }
+
+    // 悬浮块：鼠标停在哪个导航项上，就在那儿铺一层淡底色。
+    // 以前是每个 delegate 自己按 hovered 改颜色，鼠标快速划过时每一项都会
+    // 各起一次颜色动画，看着像一串残影在闪；现在只有一颗胶囊跟着走。
+    property int railHover: -1
+
+    function syncRailHoverPill() {
+        if (railRepeater.count <= 0 || root.railHover < 0 || root.railHover >= railRepeater.count) {
+            railHoverPill.visible = false
+            return
+        }
+        // 停在当前页上时不用再铺一层：选中胶囊已经在脚下了。
+        if (root.railHover === root.currentPage) {
+            railHoverPill.visible = false
+            return
+        }
+        const item = railRepeater.itemAt(root.railHover)
+        if (!item || !item.bodyItem) {
+            railHoverPill.visible = false
+            return
+        }
+        const p = item.bodyItem.mapToItem(railHoverPill.parent, 0, 0)
+        railHoverPill.x = p.x
+        railHoverPill.y = p.y
+        railHoverPill.width = item.bodyItem.width
+        railHoverPill.height = item.bodyItem.height
+        railHoverPill.visible = true
+    }
+
+    onRailHoverChanged: Qt.callLater(root.syncRailHoverPill)
+
+    onCurrentPageChanged: {
+        Qt.callLater(root.syncRailPill)
+        Qt.callLater(root.syncRailHoverPill)
+    }
+
     // 导航顺序 = StackLayout 顺序，两处必须同步改：
     //   0 翻译 / 1 快捷键 / 2 浮层 / 3 配置 / 4 设置 / 5 外观
     // 「浮层」插在「快捷键」之后：热键怎么按完，下一页就是按完弹出来的东西长什么样。
@@ -60,8 +112,21 @@ Window {
 
     // 字体：main.cpp 注册完字体文件后注入族名，这里绑进 Theme 单例。
     // 用 Binding 而不是 onCompleted 赋值，是为了在子项创建前就生效，避免首帧跳字。
-    Binding { target: Theme; property: "fontUi"; value: bundledFontUi }
-    Binding { target: Theme; property: "fontContent"; value: bundledFontContent }
+    // 字体：空 = 项目自带（qrc 里的「软件默认-*」），__system__ = 跟随系统，其余按族名用。
+    Binding {
+        target: Theme
+        property: "fontUi"
+        value: backend.uiFont === "" ? bundledFontUi
+               : backend.uiFont === "__system__" ? Qt.application.font.family
+                                                 : backend.uiFont
+    }
+    Binding {
+        target: Theme
+        property: "fontContent"
+        value: backend.contentFont === "" ? bundledFontContent
+               : backend.contentFont === "__system__" ? Qt.application.font.family
+                                                      : backend.contentFont
+    }
     Binding { target: Theme; property: "fontMono"; value: bundledFontMono }
     // 字号缩放：后端存的是百分比，Theme 用的是倍数。
     Binding { target: Theme; property: "fontScale"; value: backend.fontScale / 100.0 }
@@ -97,6 +162,9 @@ Window {
         syncInterfacePalette()
         // 先把日志窗口造出来（隐藏），双击 logo 时只是 show，不用等首帧。
         ensureLogWindow()
+        // 首帧布局完成后给导航胶囊对位（这时 itemAt() 才有真实坐标）。
+        Qt.callLater(root.syncRailPill)
+        Qt.callLater(root.syncRailHoverPill)
     }
 
     Connections {
@@ -152,6 +220,7 @@ Window {
 
             // ---------------- 左侧导航 ----------------
             Rectangle {
+                id: railBar
                 Layout.fillHeight: true
                 Layout.preferredWidth: 88
                 color: Theme.railSurface
@@ -166,8 +235,37 @@ Window {
                     color: Theme.outlineVariant
                 }
 
+                // 选中块：一颗跟着当前页上下滑的胶囊。原来每项各自涂底色，
+                // 切页是"这边灭、那边亮"；滑过去能看出方向。
+                Rectangle {
+                    id: railPill
+                    visible: false
+                    radius: Theme.rMd
+                    color: Theme.primaryContainer
+
+                    Behavior on y { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
+                    Behavior on height { NumberAnimation { duration: 240; easing.type: Easing.OutCubic } }
+                }
+
+                // 悬浮块：只跟着鼠标走，切页时不会闪一下。
+                Rectangle {
+                    id: railHoverPill
+                    visible: false
+                    radius: Theme.rMd
+                    color: Theme.surfaceHigh
+
+                    Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                    Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                }
+
                 ColumnLayout {
+                    id: railColumn
                     anchors.fill: parent
+                    // 语言切换会改文字宽度、窗口缩放会改整栏宽度，胶囊都得重新对位。
+                    onWidthChanged: {
+                        Qt.callLater(root.syncRailPill)
+                        Qt.callLater(root.syncRailHoverPill)
+                    }
                     anchors.topMargin: Theme.s4
                     anchors.bottomMargin: Theme.s4
                     anchors.leftMargin: Theme.s2
@@ -213,12 +311,16 @@ Window {
                     Item { Layout.preferredHeight: Theme.s3 }
 
                     Repeater {
+                        id: railRepeater
                         model: root.navItems
 
                         delegate: ColumnLayout {
                             id: railItem
                             required property int index
                             required property var modelData
+
+                            // 外层要量这个块的位置来摆选中胶囊，不能在别处再猜一遍布局。
+                            property alias bodyItem: railItemBody
 
                             Layout.fillWidth: true
                             spacing: 0
@@ -244,8 +346,18 @@ Window {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 60
                                 radius: Theme.rMd
-                                color: root.currentPage === railItem.index
-                                       ? Theme.primaryContainer : "transparent"
+                                // 选中态由外层那颗滑动胶囊表示，这里保持透明。
+                                color: "transparent"
+
+                                // 只上报一个下标，具体怎么画由外层的悬浮胶囊负责。
+                                HoverHandler {
+                                    onHoveredChanged: {
+                                        if (hovered)
+                                            root.railHover = railItem.index
+                                        else if (root.railHover === railItem.index)
+                                            root.railHover = -1
+                                    }
+                                }
 
                                 Column {
                                     anchors.centerIn: parent
@@ -289,6 +401,7 @@ Window {
                                                      ? Font.DemiBold : Font.Normal
                                         color: root.currentPage === railItem.index
                                                ? Theme.railIconActive : Theme.railIconIdle
+                                        Behavior on color { ColorAnimation { duration: 220 } }
                                     }
                                 }
 
@@ -410,8 +523,11 @@ Window {
                                             }
                                         } else if (winBtn.index === 1) {
                                             root.maximized ? root.showNormal() : root.showMaximized()
+                                        } else if (backend.minimizeToTray && backend.trayAvailable) {
+                                            // 设置里勾了「最小化到托盘」就照它走，不再多问一句。
+                                            root.hide()
                                         } else {
-                                            root.close()
+                                            root.closePromptOpen = true
                                         }
                                     }
                                 }
@@ -421,9 +537,43 @@ Window {
                 }
 
                 StackLayout {
+                    id: pageStack
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: root.currentPage
+
+                    // 切页过渡：淡入 + 从下往上 8px。距离很短，只是让"换页"这件事
+                    // 有个着落，别做位移大的滑动（正文会在动画里糊成一片）。
+                    onCurrentIndexChanged: {
+                        pageFade.restart()
+                        pageRise.restart()
+                    }
+
+                    NumberAnimation {
+                        id: pageFade
+                        target: pageStack
+                        property: "opacity"
+                        from: 0
+                        to: 1
+                        // 换页比一般交互慢一点：眼睛要跟着"整页换掉"这件事走。
+                        duration: 420
+                        easing.type: Easing.OutCubic
+                    }
+
+                    NumberAnimation {
+                        id: pageRise
+                        target: pageShift
+                        property: "y"
+                        from: Theme.s2
+                        to: 0
+                        duration: 480
+                        easing.type: Easing.OutCubic
+                    }
+
+                    transform: Translate {
+                        id: pageShift
+                        y: 0
+                    }
 
                     TranslatePage {
                         objectName: "translatePage"
@@ -669,6 +819,106 @@ Window {
         // 「保存」：存储层在 AppBackend（一份 db、一个连接），浮层只交出这一屏的数据。
         function onSaveRecordRequested(source, imagePath, region, originals, blocks) {
             backend.saveCaptureRecord(source, imagePath, region, originals, blocks)
+        }
+    }
+
+    // ---- 关闭确认 ----
+    // 点右上角 ✕ 先问一句：收进托盘还是真退。原来直接照设置里的「关闭时」走，
+    // 想临时换个行为还得先跑一趟设置页。
+    property bool closePromptOpen: false
+
+    function quitApplication() {
+        closePromptOpen = false
+        // 绕过 onClosing 里「收进托盘」那条拦截：这一步是用户明确要退出。
+        root.forceQuit = true
+        root.close()
+    }
+
+    function minimizeToTray() {
+        closePromptOpen = false
+        root.hide()
+    }
+
+    Rectangle {
+        id: closeScrim
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.38)
+        opacity: root.closePromptOpen ? 1 : 0
+        visible: opacity > 0
+        focus: root.closePromptOpen
+
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        Keys.onEscapePressed: root.closePromptOpen = false
+
+        // 点空白处算取消。
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.closePromptOpen = false
+        }
+
+        Rectangle {
+            id: closeCard
+            anchors.centerIn: parent
+            width: Math.min(420, parent.width - Theme.s6 * 2)
+            height: closeColumn.implicitHeight + Theme.s5 * 2
+            radius: Theme.rXl
+            color: Theme.surface
+            border.width: 1
+            border.color: Theme.outlineVariant
+            scale: root.closePromptOpen ? 1.0 : 0.96
+
+            Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+            // 卡片自身吃掉点击，别让下面的遮罩把「点哪里都算取消」算到卡片上。
+            MouseArea { anchors.fill: parent }
+
+            Column {
+                id: closeColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: Theme.s5
+                spacing: Theme.s3
+
+                Text {
+                    width: parent.width
+                    text: qsTr("关闭 Studious")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSection
+                    font.weight: Font.DemiBold
+                    color: Theme.ink
+                }
+
+                Text {
+                    width: parent.width
+                    text: qsTr("是要收进托盘继续在后台跑，还是直接关掉程序？")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeBody
+                    color: Theme.inkVariant
+                    wrapMode: Text.WordWrap
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: Theme.s2
+                    layoutDirection: Qt.RightToLeft
+
+                    AppButton {
+                        text: qsTr("关闭软件")
+                        variant: "danger"
+                        onClicked: root.quitApplication()
+                    }
+
+                    AppButton {
+                        // 装不上托盘就别给这个选项：藏起来之后用户就再也点不到它了。
+                        text: qsTr("最小化到托盘")
+                        variant: "primary"
+                        buttonEnabled: backend.trayAvailable
+                        onClicked: root.minimizeToTray()
+                    }
+                }
+            }
         }
     }
 }

@@ -229,7 +229,7 @@ QString ScreenFlow::ocrMissingText() const
     const QStringList missing = self->m_ocr->missingFiles();
     if (missing.isEmpty())
         return self->m_ocr->lastError();
-    return tr("缺少 OCR 模型：%1").arg(missing.join(QStringLiteral("、")));
+    return tr("缺少 OCR 模型：%1，去资产页下载。").arg(missing.join(QStringLiteral("、")));
 }
 
 QString ScreenFlow::ocrTest(const QString &imagePath)

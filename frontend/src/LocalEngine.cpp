@@ -166,7 +166,9 @@ QString LocalEngine::installRoot()
 
 QString LocalEngine::modelsDir()
 {
-    return QDir(installRoot()).filePath(QStringLiteral("models"));
+    // 只有本地 LLM 的 GGUF 在这里；模型目录按用途分了三格（llm / mt / ocr），
+    // 平铺在一起时 llama-server、opus-mt 和 OCR 的条目互相看起来都像"模型"。
+    return studious::ui::paths::modelsLlmDir();
 }
 
 QStringList LocalEngine::availableModels()

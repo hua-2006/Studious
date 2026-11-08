@@ -19,12 +19,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QFutureWatcher>
 #include <QGuiApplication>
 #include <QPalette>
 #include <QPointer>
 #include <QProcess>
 #include <QSettings>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -306,6 +308,21 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_themeMode = settings.themeMode;
     m_fontScale = settings.fontScale;
     m_readingFontSize = settings.readingFontSize;
+    m_uiFont = settings.fontUi;
+    m_contentFont = settings.fontContent;
+    // 启动时把选择打出来：查"字体没生效"这类问题时，先看这一行和 [font] choices。
+    {
+        const QStringList installed = QFontDatabase::families();
+        const auto mark = [&installed](const QString &family) {
+            if (family.isEmpty())
+                return QStringLiteral("(auto)");
+            if (family == QLatin1String("__system__"))
+                return QStringLiteral("(system)");
+            return installed.contains(family) ? family : family + QStringLiteral(" (MISSING)");
+        };
+        qInfo("[font] selected ui=%s content=%s",
+              qUtf8Printable(mark(m_uiFont)), qUtf8Printable(mark(m_contentFont)));
+    }
     // 热键默认空：装了就用默认组合键会跟别人的软件打架，宁可让用户自己录。
     m_hotkeyCapture = settings.hotkeyCapture;
     m_hotkeyMini = settings.hotkeyMini;
@@ -758,6 +775,90 @@ void AppBackend::setReadingFontSize(int px)
 
     // 和 fontScale 共用同一个通知：QML 里两者都是"字号变了要重排"。
     emit fontScaleChanged();
+}
+
+// 字体族名白名单：项目自带的两个（界面默认 / 译文默认）+ 系统默认 + 空（等于界面默认）
+// + 系统里真实存在的族名。枚举系统族名是用户明确要求的：字体下拉里除自带那两个，
+// 其余都应该是这台机器上装了的字体。
+static bool knownFontChoice(const QString &code)
+{
+    if (code.isEmpty() || code == QLatin1String("__system__")
+        || code == QLatin1String("软件默认-思源黑体")
+        || code == QLatin1String("软件默认-霞鹜文楷")) {
+        return true;
+    }
+    // 等宽那份仍在项目里（热键框、日志窗口、路径都用它），但不放进下拉：
+    // 界面/译文正文用等宽字体没有意义。
+    static const QSet<QString> families = [] {
+        QSet<QString> set;
+        const QStringList all = QFontDatabase::families();
+        for (const QString &family : all) {
+            set.insert(family);
+        }
+        return set;
+    }();
+    return families.contains(code);
+}
+
+QVariantList AppBackend::fontChoices() const
+{
+    QVariantList list;
+    auto add = [&list](const QString &code, const QString &label) {
+        QVariantMap entry;
+        entry.insert(QStringLiteral("code"), code);
+        entry.insert(QStringLiteral("label"), label);
+        list.append(entry);
+    };
+
+    // 前两项是项目自带的两套（界面 = 思源黑体，译文 = 霞鹜文楷），也就是默认值。
+    add(QStringLiteral("软件默认-思源黑体"), studious::i18n::s("软件默认-思源黑体", "Software default - Source Han Sans SC"));
+    add(QStringLiteral("软件默认-霞鹜文楷"), studious::i18n::s("软件默认-霞鹜文楷", "Software default - LXGW WenKai"));
+    add(QStringLiteral("__system__"), studious::i18n::s("系统默认字体", "System default font"));
+
+    // 其余全部来自系统已安装字体，按名字排序，方便找。
+    QStringList families = QFontDatabase::families();
+    families.sort(Qt::CaseInsensitive);
+    for (const QString &family : families) {
+        if (family == QLatin1String("软件默认-思源黑体")
+            || family == QLatin1String("软件默认-霞鹜文楷")
+            || family == QLatin1String("软件默认-霞鹜文楷等宽")) {
+            continue;
+        }
+        add(family, family);
+    }
+    qInfo("[font] choices: %lld (2 bundled + system default + %lld system families)",
+          static_cast<long long>(list.size()), static_cast<long long>(list.size() - 3));
+    return list;
+}
+
+void AppBackend::setUiFont(const QString &family)
+{
+    const QString next = family.trimmed();
+    if (!knownFontChoice(next) || m_uiFont == next) {
+        return;
+    }
+    m_uiFont = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.fontUi = next;
+    settings.save();
+
+    emit fontsChanged();
+}
+
+void AppBackend::setContentFont(const QString &family)
+{
+    const QString next = family.trimmed();
+    if (!knownFontChoice(next) || m_contentFont == next) {
+        return;
+    }
+    m_contentFont = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.fontContent = next;
+    settings.save();
+
+    emit fontsChanged();
 }
 
 // 组合键的规范形："Ctrl+Alt+Shift+Win+键"，修饰键顺序固定、字母大写。
@@ -1970,7 +2071,15 @@ void AppBackend::refreshEngineStatuses()
                     "没装任何语言对，去资产页下载或用「下载 / 导入」",
                     "No language pair installed. Download one on the Assets page.");
             } else if (row.second.ready) {
-                detail = mt.routeDescription(m_srcLang, dst);
+                // 副标题给用户看的是「英语 → 中文」，而不是资产 id / 路由细节。
+                // 真正的诊断信息（哪条模型缺失、为什么拒绝）留在状态栏和日志里。
+                const QString srcName =
+                    studious::core::LanguageRegistry::displayName(m_srcLang);
+                const QString dstName =
+                    studious::core::LanguageRegistry::displayName(dst);
+                detail = studious::i18n::sf("%1 → %2 · 本地语言包",
+                                            "%1 → %2 · on-device pack",
+                                            {srcName, dstName});
             } else {
                 detail = studious::i18n::sf(
                     "已装 %1 个语言对 · 选定源语言后可用",
@@ -3129,9 +3238,8 @@ TranslatorRecords *AppBackend::recordsFor(const QString &kind)
                                                                             : m_recordsCapture;
 
     if (!slot) {
-        // 三个库放在 <AppData>/records/ 下：clearAll / 备份 / 删库都能按文件来。
-        const QString dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                .filePath(QStringLiteral("records"));
+        // 三个库放在 <dataRoot>/records/ 下：clearAll / 备份 / 删库都能按文件来。
+        const QString dir = studious::ui::paths::recordsDir();
         QDir().mkpath(dir);
         slot = std::make_unique<TranslatorRecords>(
             QDir(dir).filePath(key + QStringLiteral(".db")));

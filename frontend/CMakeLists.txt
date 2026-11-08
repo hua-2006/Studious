@@ -161,15 +161,15 @@ if(NOT STUDIOUS_GIT_COMMIT)
     set(STUDIOUS_GIT_COMMIT "unknown")
 endif()
 
-# 字体目录：仓库根的 font/（思源黑体做界面、霞鹜文楷做译文）。
-# 直接指源码目录，不往输出目录拷 —— 两套字体加起来 200 MB，拷贝纯属浪费。
+# 构建期常量。字体已经改成编译进 qrc（见下面的 fonts 资源），
+# 不再需要把仓库根的 font/ 路径写进二进制。
 target_compile_definitions(studious PRIVATE
-    STUDIOUS_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../font"
     STUDIOUS_COMMIT="${STUDIOUS_GIT_COMMIT}"
 )
 
 target_link_libraries(studious PRIVATE
     backend
+    studious_fonts
     studious_platform
     Qt6::Core
     Qt6::Gui
@@ -228,8 +228,27 @@ qt_add_resources(studious "translations"
                  BASE "${CMAKE_CURRENT_BINARY_DIR}"
                  FILES ${STUDIOUS_QM_FILES})
 
-# 资产清单编译进二进制（:  /assets/manifest.json）。
+# 字体编进二进制（:/fonts/...）。
 #
+# 为什么不在运行时读 font/ 目录：那个目录是开发机的路径，发行包里根本不存在。
+# 装进 qrc 之后，字体跟着 exe 走，机器上没装思源黑体/霞鹜文楷也能正常显示。
+# 只放实际用到的字重：界面 Regular/Medium/Bold，译文 Regular，等宽 Regular。
+#
+# 为什么放在单独的静态库里、而不是直接挂在 studious 上：qt_add_resources 会把
+# 资源文件挂进目标的 SOURCES，lupdate 照着这份清单逐个解析，25 MB 的 TTF 能把
+# lupdate 卡死（实测 400 s CPU 还没完）。分开之后就只扫 studious 自己的源文件。
+qt_add_library(studious_fonts STATIC)
+qt_add_resources(studious_fonts "fonts"
+                 PREFIX "/fonts"
+                 BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
+                 FILES
+                     "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/StudiousSans-Regular.otf"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/StudiousSans-Medium.otf"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/StudiousSans-Bold.otf"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/StudiousWenKai-Regular.ttf"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/StudiousWenKaiMono-Regular.ttf")
+
+# 资产清单编译进二进制（:  /assets/manifest.json）。
 # 为什么不是运行时读 exe 旁边的 manifest.json：那个目录对所有本进程的用户都可写，
 # 能改清单的人就能把下载 URL 与 sha256 一起换掉，让客户端下载并执行任意
 # llama-server.exe —— 这是代码执行级别的口子。编译进 qrc 之后，改清单等于改 exe。

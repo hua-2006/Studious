@@ -14,6 +14,27 @@
 
 namespace studious::ui::paths {
 
+QString dataRoot()
+{
+    // 从 exe 目录往上找 version.json 当作"应用目录"。开发期 exe 在
+    // frontend/build（version.json 在仓库根，隔两层），打包后一般就在 exe 旁边。
+    // 最多找四层，找不到就用 exe 目录 —— 宁可放在 exe 边上，也不要再散回 AppData。
+    static const QString resolved = [] {
+        QDir dir(QCoreApplication::applicationDirPath());
+        for (int depth = 0; depth < 4; ++depth) {
+            if (QFileInfo::exists(dir.filePath(QStringLiteral("version.json")))) {
+                break;
+            }
+            if (!dir.cdUp()) {
+                dir = QDir(QCoreApplication::applicationDirPath());
+                break;
+            }
+        }
+        return QDir::cleanPath(dir.filePath(QStringLiteral("data")));
+    }();
+    return resolved;
+}
+
 QString assetsRoot()
 {
     // 用户可以在设置里把安装根挪到别的盘（键 settings/asset/root）。空 = 默认位置。
@@ -23,8 +44,36 @@ QString assetsRoot()
     if (!settings.assetRoot.isEmpty()) {
         return QDir::cleanPath(settings.assetRoot);
     }
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("assets"));
+    return QDir(dataRoot()).filePath(QStringLiteral("assets"));
+}
+
+QString modelsLlmDir()
+{
+    return QDir(assetsRoot()).filePath(QStringLiteral("models/llm"));
+}
+
+QString modelsMtDir()
+{
+    return QDir(assetsRoot()).filePath(QStringLiteral("models/mt"));
+}
+
+QString modelsOcrDir()
+{
+    return QDir(assetsRoot()).filePath(QStringLiteral("models/ocr"));
+}
+
+QString logsDir()
+{
+    return QDir(dataRoot()).filePath(QStringLiteral("logs"));}
+
+QString recordsDir()
+{
+    return QDir(dataRoot()).filePath(QStringLiteral("records"));
+}
+
+QString cacheDbPath()
+{
+    return QDir(dataRoot()).filePath(QStringLiteral("cache.db"));
 }
 
 QString manifestPath()

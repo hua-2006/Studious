@@ -17,7 +17,7 @@ import Studious
 //                   Web 来源   单选的 provider（"" = 自动）
 //                   云端 LLM   backend.llmConfig 的全部键
 //                   本地 LLM   llama-server 的模型文件 / GPU / 启停
-//                   本地 MT    语言对 → 实际路径
+//                   本地 MT    语言对 → 保存位置
 //
 // 为什么引擎状态不再单独占一张卡：状态与引擎是一一对应的，拆成两处用户得来回对照；
 // 直接做成行内副标签 + 行尾状态胶囊，点胶囊才跳到下面「引擎配置」卡里对应的 tab。
@@ -100,7 +100,7 @@ Item {
 
     // 「获取模型」「探测」的反馈文案。后端回传的结论是英文（后端 i18n 固定英文），不译。
     readonly property string modelHint: backend.cloudBusy
-                                         ? qsTr("正在向网关请求…")
+                                         ? qsTr("正在向服务商请求…")
                                          : (backend.cloudModels.length > 0
                                             ? qsTr("已拉取 %1 个聊天模型。").arg(backend.cloudModels.length)
                                             : "")
@@ -244,7 +244,7 @@ Item {
     readonly property bool localLlmReady: backend.localPid > 0
 
     // 本地 LLM 能不能真的启动：运行时（llama-server.exe）+ 至少一个模型文件。
-    // 缺任何一样，「启动」按钮就禁用 —— 让用户去资产页补齐，而不是让他点一下再看日志。
+    // 缺任何一样，「启动」按钮就禁用 —— 让用户去「资产」页补齐，而不是让他点一下再看日志。
     readonly property bool localAssetsReady: backend.localGpuAvailable
                                              || backend.localCpuAvailable
     readonly property bool localHasModel: backend.localModels.length > 0
@@ -1228,7 +1228,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("换引擎 / 换模型 / 换 Base URL 后，缓存键（含引擎标签）互不命中，同一句原文译文可能完全不同。")
+                    text: qsTr("换了引擎或模型后，同样的原文可能得到不同的译文，旧译文不再复用。")
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeTiny
@@ -1246,7 +1246,7 @@ Item {
                 collapsible: false
                 expanded: true
                 title: qsTr("引擎配置")
-                hint: qsTr("这里只改引擎自己的参数；上面「引擎」卡决定自动优先级或强制用哪一个。")
+                hint: qsTr("这些设置只对当前这个引擎生效。")
 
                 // 四个面板互斥切换。卡内的分段控件比四张竖排卡省一半纵向空间，
                 // 也让「引擎 → 它的参数」变成一次点击，而不是先滚动定位。
@@ -1269,6 +1269,8 @@ Item {
                     id: webPanel
                     Layout.fillWidth: true
                     visible: page.configTab === "web"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
                     spacing: Theme.s3
 
                     Text {
@@ -1393,11 +1395,13 @@ Item {
                     id: cloudPanel
                     Layout.fillWidth: true
                     visible: page.configTab === "llm-cloud"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
                     spacing: Theme.s3
 
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("OpenAI 兼容接口；没填 API Key 时这条链路自动跳过。")
+                        text: qsTr("填写服务商提供的地址与密钥；没填密钥时不会走云端翻译。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
@@ -1405,7 +1409,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "Base URL"
+                        label: qsTr("服务地址")
                         ThemedField {
                             font.family: Theme.fontMono
                             placeholderText: "http://127.0.0.1:3065/v1"
@@ -1416,7 +1420,7 @@ Item {
                     }
 
                     FieldRow {
-                        label: "API Key"
+                        label: qsTr("密钥")
                         ThemedField {
                             font.family: Theme.fontMono
                             placeholderText: "sk-…"
@@ -1459,7 +1463,7 @@ Item {
                     // 默认收起，省得一张卡把整页撑得没边。
                     SubSection {
                         FieldRow {
-                            label: "timeoutMs"
+                            label: qsTr("等待上限")
                             // 上限跟 AppSettings 的钳位一致，否则存下去会被悄悄截断。
                             ThemedSpin {
                                 from: 1000
@@ -1471,7 +1475,7 @@ Item {
                         }
 
                         FieldRow {
-                            label: "maxTokens"
+                            label: qsTr("最长回复")
                             ThemedSpin {
                                 from: 1
                                 to: 32768
@@ -1482,7 +1486,7 @@ Item {
                         }
 
                         FieldRow {
-                            label: "temperature"
+                            label: qsTr("发散程度")
                             ThemedSpin {
                                 from: 0
                                 to: 150
@@ -1499,11 +1503,11 @@ Item {
                         }
 
                         FieldRow {
-                            label: "systemPrompt"
+                            label: qsTr("风格要求")
                             TextArea {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 72
-                                placeholderText: qsTr("留空使用内置提示词")
+                                placeholderText: qsTr("留空使用默认风格")
                                 wrapMode: TextArea.Wrap
                                 selectByMouse: true
                                 color: Theme.ink
@@ -1536,14 +1540,14 @@ Item {
                         Text {
                             Layout.fillWidth: true
                             Layout.leftMargin: 132 + Theme.s3
-                            text: qsTr("留空使用内置提示词。")
+                            text: qsTr("留空则使用默认的翻译风格。")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
                         }
 
                         FieldRow {
-                            label: qsTr("重试预算")
+                            label: qsTr("重试最长时间")
                             ThemedSpin {
                                 from: 1000
                                 to: 600000
@@ -1624,6 +1628,8 @@ Item {
                     id: localPanel
                     Layout.fillWidth: true
                     visible: page.configTab === "llm-local"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
                     spacing: Theme.s3
 
                     // 服务在跑的时候定时抓一次日志尾部：长翻译过程中日志一直在长，
@@ -1642,7 +1648,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("由主线程持有进程，启动会阻塞轮询 /v1/models；启动失败时进程一定已被回收。")
+                            text: qsTr("启动时界面会短暂等待；失败会自动清理。")
                             wrapMode: Text.WordWrap
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
@@ -1671,7 +1677,7 @@ Item {
                             text: qsTr("浏览…")
                             // 后端 installFromFile 是按 manifest 里的资产 id 校验 sha256 的，
                             // 随便挑一个 .gguf 过不了校验，所以这里仍然只保留接口。
-                            onClicked: page.importHint = qsTr("从文件导入要按资产清单校验 sha256，等后端给出「按路径导入」接口再开。")
+                            onClicked: page.importHint = qsTr("暂时只能从「资产」页下载；手动导入文件稍后开放。")
                         }
                     }
 
@@ -1688,7 +1694,7 @@ Item {
 
                     // 运行时可用性：后端问了 llama-server 的 exe 在不在，界面如实显示。
                     FieldRow {
-                        label: qsTr("可用运行时")
+                        label: qsTr("可用的加速组件")
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: Theme.s2
@@ -1705,8 +1711,8 @@ Item {
                             Text {
                                 Layout.fillWidth: true
                                 text: backend.localGpuAvailable || backend.localCpuAvailable
-                                      ? qsTr("实心 = 已装（资产里已安装的 llama-server 运行时）")
-                                      : qsTr("一个运行时都没装，先去资产页下载")
+                                      ? qsTr("实心 = 已安装")
+                                      : qsTr("还没安装加速组件，先到「资产」页下载")
                                 elide: Text.ElideRight
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1730,7 +1736,7 @@ Item {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("装了 Vulkan 运行时就走 GPU；关掉只用 CPU。")
+                            text: qsTr("有显卡加速就用显卡；关掉只用 CPU。")
                             wrapMode: Text.WordWrap
                             verticalAlignment: Text.AlignVCenter
                             font.family: Theme.fontUi
@@ -1773,7 +1779,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("打开软件就把本地服务跑起来，第一次翻译不用等冷启动；代价是常驻占内存。")
+                                text: qsTr("打开软件就把本地翻译准备好，第一次翻译不用等；代价是常驻占内存。")
                                 wrapMode: Text.WordWrap
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1800,7 +1806,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: backend.localStopOnSwitch
                                       ? qsTr("已关闭：上面那个开关打开时，切走就会停，不需要等空闲。")
-                                      : qsTr("连续一段时间没有本地翻译就自动停掉服务，省内存。")
+                                      : qsTr("一段时间不用就自动停掉，省内存。")
                                 wrapMode: Text.WordWrap
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1846,7 +1852,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("token 数，对应 llama-server 的 -c。太小装不下长句，太大白吃内存。")
+                                text: qsTr("一次能读入的最大长度。太小装不下长句，太大浪费内存。")
                                 elide: Text.ElideRight
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1856,7 +1862,7 @@ Item {
                         }
 
                         FieldRow {
-                            label: qsTr("线程")
+                            label: qsTr("线程数")
                             ThemedSpin {
                                 from: 0
                                 to: 64
@@ -1866,7 +1872,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("0 = 自动（按后端决定），对应 -t。")
+                                text: qsTr("0 表示自动。")
                                 elide: Text.ElideRight
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1902,7 +1908,7 @@ Item {
                         }
 
                         FieldRow {
-                            label: qsTr("附加参数")
+                            label: qsTr("附加选项")
                             ThemedField {
                                 id: extraArgsField
                                 font.family: Theme.fontMono
@@ -1914,7 +1920,7 @@ Item {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: qsTr("原样拼到 llama-server 命令行尾部，空格分隔。")
+                                text: qsTr("会原样传给本地引擎，一般不用填。")
                                 elide: Text.ElideRight
                                 verticalAlignment: Text.AlignVCenter
                                 font.family: Theme.fontUi
@@ -1931,7 +1937,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         Layout.leftMargin: 132 + Theme.s3
-                        text: qsTr("采样参数（temperature / maxTokens / 系统提示词）沿用上方「云端 LLM」里的设置；本地只额外固定「逐段请求」并清理小模型的括注噪声。")
+                        text: qsTr("回复风格沿用「云端 LLM」里的设置；本地模型按段翻译，并会去掉多余的注释。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
@@ -1958,7 +1964,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: qsTr("后端")
+                            text: qsTr("运行方式")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
@@ -1966,7 +1972,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: backend.localBackend.length > 0 ? backend.localBackend : "—"
+                            text: backend.localBackend === "vulkan" ? qsTr("显卡加速") : (backend.localBackend === "cpu" ? "CPU" : (backend.localBackend.length > 0 ? backend.localBackend : "—"))
                             font.family: Theme.fontMono
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.ink
@@ -1974,7 +1980,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: qsTr("端口")
+                            text: qsTr("本地端口")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
@@ -1990,7 +1996,7 @@ Item {
 
                         Text {
                             Layout.alignment: Qt.AlignVCenter
-                            text: "PID"
+                            text: qsTr("进程号")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeTiny
                             color: Theme.inkVariant
@@ -2027,7 +2033,7 @@ Item {
                         AppButton {
                             Layout.alignment: Qt.AlignVCenter
                             visible: !page.localCanStart
-                            text: qsTr("去资产页")
+                            text: qsTr("去「资产」页")
                             onClicked: page.openAssetsRequested("llm")
                         }
 
@@ -2053,10 +2059,10 @@ Item {
                         visible: !page.localCanStart
                         text: {
                             if (!page.localAssetsReady && !page.localHasModel)
-                                return qsTr("还差 llama 运行时和模型文件：去资产页把任意一个 runtime.llama.* 和至少要用的模型下载下来。")
+                                return qsTr("还缺加速组件和模型文件：到「资产」页下载。")
                             if (!page.localAssetsReady)
-                                return qsTr("还差 llama 运行时：去资产页下载 runtime.llama.vulkan.win-x64 或 runtime.llama.cpu.win-x64。")
-                            return qsTr("还差模型文件：去资产页下载任意一个 qwen2.5 GGUF 模型。")
+                                return qsTr("还缺加速组件：到「资产」页下载显卡版或 CPU 版。")
+                            return qsTr("还缺模型文件：到「资产」页下载一个即可。")
                         }
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
@@ -2149,6 +2155,8 @@ Item {
                     id: mtPanel
                     Layout.fillWidth: true
                     visible: page.configTab === "local-mt"
+                    opacity: visible ? 1.0 : 0.0
+                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
                     spacing: Theme.s3
 
                     // 一个语言对都没装时的正路：交给 Main.qml 切到设置页的资产分区（mt）。
@@ -2158,7 +2166,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("按顺序取第一个可用路径；英文中转要做两次推理，会明显变慢。")
+                            text: qsTr("按顺序使用第一个可用的语言对；经英文中转会慢一些。")
                             wrapMode: Text.WordWrap
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
@@ -2258,7 +2266,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         Layout.leftMargin: 132 + Theme.s3
-                        text: qsTr("闲着这么久没有本地 MT 请求就把常驻的语言对放掉；下次再用会重新加载（几百毫秒）。填 0 表示一直留着。")
+                        text: qsTr("这段时间没有离线翻译就释放占用的内存；下次再用会重新加载（约几百毫秒）。填 0 表示一直留着。")
                         wrapMode: Text.WordWrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
@@ -2282,7 +2290,7 @@ Item {
 
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("实际路径")
+                            text: qsTr("保存位置")
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.DemiBold
@@ -2365,7 +2373,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         visible: backend.mtPairs.length === 0
-                        text: qsTr("一个语言对都没装，去资产页下载，或把 mt.opus.<源>-<目标> 目录直接拷进 models/。")
+                        text: qsTr("还没安装语言包：到「资产」页下载。")
                         wrapMode: Text.Wrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeSmall
@@ -2385,7 +2393,7 @@ Item {
                         Layout.fillWidth: true
                         text: mtRouteNote.route.length > 0
                               ? qsTr("当前语言对走：%1").arg(mtRouteNote.route)
-                              : qsTr("当前语言对没有可用的本地路径（本地 MT 不支持自动检测源语言，先在翻译页选定源语言）。")
+                              : qsTr("这个语言方向还不能离线翻译；本地翻译需要先选定源语言，不能选「自动检测」。")
                         wrapMode: Text.Wrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
@@ -2396,7 +2404,7 @@ Item {
                     // 不走资产下载。写这句是为了让人别再来资产页找本地 MT 的「驱动」。
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("ONNX Runtime 随应用内置，无需下载；上面的语言对目录齐全就能直接跑。")
+                        text: qsTr("配套组件已内置，无需另外下载。")
                         wrapMode: Text.Wrap
                         font.family: Theme.fontUi
                         font.pixelSize: Theme.fontSizeTiny
@@ -2459,7 +2467,7 @@ Item {
                     if (detail.length > 0)
                         return detail
                     return page.engineState(notReadyDialog.engineKey) === "missing-assets"
-                            ? qsTr("缺必需的资产文件，先去资产页下载。")
+                            ? qsTr("缺少必需的文件，先到「资产」页下载。")
                             : qsTr("当前语言对下还用不了它，先检查一下配置。")
                 }
                 wrapMode: Text.WordWrap
@@ -2481,7 +2489,7 @@ Item {
                 }
 
                 AppButton {
-                    text: qsTr("去资产页")
+                    text: qsTr("去「资产」页")
                     visible: page.engineState(notReadyDialog.engineKey) === "missing-assets"
                     onClicked: {
                         var key = notReadyDialog.engineKey

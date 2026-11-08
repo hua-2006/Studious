@@ -568,15 +568,19 @@ QString LlamaServer::installRoot() const
 {
     // 资产布局是固定的：
     //   <installRoot>/runtime/<runtimeId>/llama-server.exe
-    //   <installRoot>/models/<modelId>
-    // 优先从模型路径推（模型一定在 <installRoot>/models/ 下，最可靠）；
-    // 推不出来再从可执行文件路径推（runtime/<id>/ 上两级）；最后才落到 AppData。
+    //   <installRoot>/models/llm/<modelId>      （mt/、ocr/ 是别的东西，不归它管）
+    // 优先从模型路径推（模型一定在 <installRoot>/models/llm/ 下，最可靠）；
+    // 推不出来再从可执行文件路径推（runtime/<id>/ 上两级）；最后才落到数据目录。
     if (!m_options.modelPath.trimmed().isEmpty()) {
-        QDir modelsDir = QFileInfo(m_options.modelPath).absoluteDir();
-        if (modelsDir.dirName().compare(QStringLiteral("models"), Qt::CaseInsensitive) == 0) {
-            if (modelsDir.cdUp()) {
-                return modelsDir.absolutePath();
-            }
+        QDir dir = QFileInfo(m_options.modelPath).absoluteDir();
+        const QString leaf = dir.dirName().toLower();
+        if (leaf == QLatin1String("llm") || leaf == QLatin1String("mt")
+            || leaf == QLatin1String("ocr")) {
+            dir.cdUp();                                                    // -> models
+        }
+        if (dir.dirName().compare(QStringLiteral("models"), Qt::CaseInsensitive) == 0
+            && dir.cdUp()) {                                               // -> <root>
+            return dir.absolutePath();
         }
     }
 

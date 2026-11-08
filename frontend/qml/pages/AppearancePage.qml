@@ -201,21 +201,40 @@ Item {
 
                 FieldRow {
                     label: qsTr("界面字体")
-                    Stub { }
-                    AppTextField {
-                        Layout.fillWidth: true
-                        text: Theme.fontUi
-                        font.family: Theme.fontUi
+
+                    // 只列项目自带的三套 + 系统默认。不枚举系统里那几百个族名 ——
+                    // 下拉会长到没法用，且大部分族名缺中文字形。
+                    AppComboBox {
+                        id: uiFontCombo
+                        Layout.preferredWidth: 260
+                        model: backend.fontChoices
+                        textRole: "label"
+                        currentIndex: {
+                            for (let i = 0; i < model.length; ++i) {
+                                if (model[i].code === backend.uiFont)
+                                    return i
+                            }
+                            return 0
+                        }
+                        onActivated: function (index) { backend.uiFont = model[index].code }
                     }
                 }
                 FieldRow {
                     label: qsTr("译文字体")
-                    Stub { }
-                    AppTextField {
-                        Layout.fillWidth: true
-                        // 译文用的是内容字体（霞鹜文楷），别显示成界面字体。
-                        text: Theme.fontContent
-                        font.family: Theme.fontContent
+
+                    AppComboBox {
+                        id: contentFontCombo
+                        Layout.preferredWidth: 260
+                        model: backend.fontChoices
+                        textRole: "label"
+                        currentIndex: {
+                            for (let i = 0; i < model.length; ++i) {
+                                if (model[i].code === backend.contentFont)
+                                    return i
+                            }
+                            return 0
+                        }
+                        onActivated: function (index) { backend.contentFont = model[index].code }
                     }
                 }
                 FieldRow {
@@ -330,65 +349,6 @@ Item {
                         font.pixelSize: Theme.fontSizeBody
                         color: Theme.ink
                     }
-                }
-            }
-
-            SectionCard {
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.s6
-                Layout.rightMargin: Theme.s6
-                title: qsTr("主窗口")
-                Stub { }
-
-                FieldRow {
-                    label: qsTr("布局密度")
-                    Stub { }
-                    Segmented {
-                        items: [
-                            { code: "compact", label: qsTr("紧凑") },
-                            { code: "standard", label: qsTr("标准") }
-                        ]
-                        current: "standard"
-                    }
-                }
-                FieldRow {
-                    label: qsTr("状态栏信息密度")
-                    Stub { }
-                    Segmented {
-                        items: [
-                            { code: "minimal", label: "minimal" },
-                            { code: "normal", label: "normal" },
-                            { code: "detailed", label: "detailed" }
-                        ]
-                        current: "normal"
-                    }
-                }
-            }
-
-            SectionCard {
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.s6
-                Layout.rightMargin: Theme.s6
-                title: qsTr("语言显示名")
-
-                FieldRow {
-                    label: qsTr("显示方式")
-                    Stub { }
-                    Segmented {
-                        items: [
-                            { code: "short", label: qsTr("简短(zh / en)") },
-                            { code: "full", label: qsTr("完整(中文(简体) / English)") }
-                        ]
-                        current: "full"
-                    }
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: qsTr("预览:中文(简体) · English")
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.inkVariant
                 }
             }
 

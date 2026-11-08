@@ -21,6 +21,48 @@ Rectangle {
     border.width: 1
     border.color: Theme.outlineVariant
 
+    // 选中块是一颗会滑动的胶囊：位置跟着 seg.current 走，不在每个按钮上各自涂色。
+    Rectangle {
+        id: pill
+        visible: false
+        radius: seg.radius
+        color: Theme.primaryContainer
+        Behavior on x { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    }
+
+    // 按钮宽度由文字决定，不能靠"下标 × 等分宽"算位置，只能问布局要实际坐标。
+    function syncPill() {
+        var target = null
+        for (var i = 0; i < row.children.length; ++i) {
+            var c = row.children[i]
+            if (c && c.modelData && c.modelData.code === seg.current) {
+                target = c
+                break
+            }
+        }
+        if (!target) {
+            pill.visible = false
+            return
+        }
+        var p = target.mapToItem(seg, 0, 0)
+        pill.x = p.x
+        pill.y = p.y
+        pill.width = target.width
+        pill.height = target.height
+        pill.visible = true
+    }
+
+    onCurrentChanged: Qt.callLater(syncPill)
+    Component.onCompleted: Qt.callLater(syncPill)
+
+    // 布局变化（父容器改宽、语言切换改文字）后按钮位置会变，需要重新对位。
+    Connections {
+        target: row
+
+        function onWidthChanged() { Qt.callLater(seg.syncPill) }
+    }
+
     RowLayout {
         id: row
         anchors.fill: parent
@@ -45,9 +87,8 @@ Rectangle {
                 Layout.preferredWidth: (segBtn.badgeShown ? 6 + Theme.s2 : 0)
                                        + segLabel.implicitWidth + Theme.s3 * 2
                 radius: Theme.rFull
-                color: seg.current === modelData.code ? Theme.primaryContainer : "transparent"
-
-                Behavior on color { ColorAnimation { duration: Theme.durFast } }
+                // 选中态由上面那颗滑动胶囊表示，按钮自己保持透明。
+                color: "transparent"
 
                 RowLayout {
                     id: segContent

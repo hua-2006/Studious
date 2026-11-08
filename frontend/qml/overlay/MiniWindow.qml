@@ -61,7 +61,7 @@ Window {
     // 目标语言的显示名（空串 = 未知，退回语言码）。
     function langName(code) {
         if (!code || code.length === 0)
-            return qsTr("自动检测 (auto)")
+            return qsTr("自动检测")
         const list = backend.languages || []
         for (let i = 0; i < list.length; ++i) {
             if (list[i].code === code)
@@ -1224,7 +1224,7 @@ Window {
                     Layout.alignment: Qt.AlignHCenter
                     visible: win.records.length === 0
                     text: backend.historyEnabled
-                          ? qsTr("还没有记录。翻译完成会自动存进 mini.db。")
+                          ? qsTr("还没有记录。翻译完成会自动存下来。")
                           : qsTr("历史对话是关着的。去「设置 · 缓存」里打开「保存翻译历史」。")
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeSmall
