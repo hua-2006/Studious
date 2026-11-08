@@ -1,10 +1,14 @@
 #include "AppBackend.h"
 #include "AppSettings.h"
 #include "AssetFormat.h"
+#include "AssetPaths.h"
+#include "Languages.h"
 #include "LocalEngine.h"
 #include "LiveSession.h"
+#include "LogSink.h"
 #include "MiniSession.h"
 #include "ScreenFlow.h"
+#include "platform/ScreenCaptureWin.h"
 #include "TranslateJob.h"
 #include "i18n/Strings.h"
 #include "platform/IPlatform.h"
@@ -369,6 +373,9 @@ void printUsage()
     say(QStringLiteral("                                     # 打印资产清单（类型/大小/状态/占位），不开 GUI"));
     say(QStringLiteral("  studious.exe --asset-download <manifest.json> <assetId>"));
     say(QStringLiteral("                                     # 真实下载一个资产（含续传/校验/安装），不开 GUI"));
+    say(QStringLiteral("  studious.exe --asset-verify <assetId>"));
+    say(QStringLiteral("  studious.exe --capture-probe <x,y,w,h,out.png>   （诊断：抓一块物理像素区域）"));
+    say(QStringLiteral("                                     # 按启动前规则校验一条已安装资产（导入的不校验哈希）"));
 }
 
 // --smoke 冒烟：不建窗口，但走与 GUI 完全相同的路径
@@ -543,10 +550,10 @@ int runSmoke(const QStringList &args)
         return 1;
     }
     // 源语言：没给 --from 就用设置里的（默认 auto）。
+    // 两边都过 langs::normalizeSource，「自动」只有 "auto" 一种写法。
     const QString srcLang = from.isEmpty()
-                                ? (settings.srcLang.isEmpty() ? QStringLiteral("auto")
-                                                              : settings.srcLang)
-                                : from;
+                                ? studious::ui::langs::normalizeSource(settings.srcLang)
+                                : studious::ui::langs::normalizeSource(from);
 
     // 引擎 id 归一：界面 id（llm-cloud / llm-local）和 auto 都在这里落到后端 id 上。
     // 解析失败（未知 id、auto 一个都挑不出来）直接 [FAIL] —— 以前这种情况会被 Router 的
@@ -737,8 +744,7 @@ int runSmoke(const QStringList &args)
         // 这时还去拉起 llama-server（1 秒启动 + 3 秒停止）纯属浪费，直接跳过。
         const QString srcNorm = studious::core::LanguageRegistry::normalize(req.srcLang);
         const QString dstNorm = studious::core::LanguageRegistry::normalize(to);
-        const bool sameLanguage =
-            !srcNorm.isEmpty() && srcNorm != QLatin1String("auto") && srcNorm == dstNorm;
+        const bool sameLanguage = !studious::ui::langs::isAuto(srcNorm) && srcNorm == dstNorm;
 
         if (useLocalEngine && !sameLanguage) {
             LocalEngineConfig cfg;
@@ -1237,6 +1243,134 @@ AppInfo loadAppInfo()
     return AppInfo{};
 }
 
+    // --asset-verify <assetId>：按「启动前校验」的同一套逻辑检查一条已安装资产。
+//
+// 用途：验收「下载安装的资产必须逐字节对上清单哈希、用户导入的只确认文件还在」。
+// origin 记录在 <安装根>/state/asset-origins.json。
+int runAssetVerify(const QStringList &args)
+{
+    QString assetId;
+    for (int i = 0; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        if (arg == QLatin1String("--asset-verify")) {
+            const bool hasValue = (i + 1) < args.size() && !args.at(i + 1).startsWith(QLatin1String("--"));
+            if (hasValue) {
+                assetId = args.at(++i);
+            }
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage();
+            return 0;
+        }
+    }
+
+    if (assetId.isEmpty()) {
+        say(QStringLiteral("[FAIL] 用法：studious.exe --asset-verify <assetId>"));
+        return 1;
+    }
+
+    studious::asset::Manifest manifest;
+    if (!studious::ui::paths::loadManifest(&manifest)) {
+        say(QStringLiteral("[FAIL] 找不到或无法解析资产清单：") +
+            QDir::toNativeSeparators(studious::ui::paths::manifestPath()));
+        return 1;
+    }
+
+    studious::asset::AssetRegistry registry(studious::ui::paths::assetsRoot(), manifest);
+    const studious::asset::AssetOrigin origin = registry.originOf(assetId);
+    QString originName = QStringLiteral("unknown");
+    if (origin == studious::asset::AssetOrigin::Import) {
+        originName = QStringLiteral("import");
+    } else if (origin == studious::asset::AssetOrigin::Download) {
+        originName = QStringLiteral("download");
+    }
+
+    QString error;
+    const bool ok = registry.verifyInstalled(assetId, &error);
+    say(QStringLiteral("[verify] %1 origin=%2 -> %3")
+            .arg(assetId, originName, ok ? QStringLiteral("ok") : QStringLiteral("FAIL")));
+    if (!ok) {
+        say(error);
+    }
+    return ok ? 0 : 1;
+}
+
+// --capture-probe <x,y,w,h,out.png>：诊断用，抓一块物理像素区域并打印亮度。
+//
+// 用途：确认「游戏窗口抓出来是黑的」到底是 GDI 读不到硬件平面，还是我们的调用错了。
+// 配合环境变量 STUDIOUS_FORCE_DXGI=1 对比两条路（见 ScreenCaptureWin.cpp）。
+int runCaptureProbe(const QStringList &args)
+{
+    QString spec;
+    for (int i = 0; i < args.size(); ++i) {
+        if (args.at(i) == QLatin1String("--capture-probe")) {
+            if ((i + 1) < args.size() && !args.at(i + 1).startsWith(QLatin1String("--")))
+                spec = args.at(++i);
+        }
+    }
+    const QStringList parts = spec.split(QLatin1Char(','));
+    if (parts.size() != 5) {
+        say(QStringLiteral("[FAIL] 用法：studious.exe --capture-probe <x,y,w,h,out.png>"));
+        return 1;
+    }
+    bool ok = true;
+    const int x = parts.at(0).toInt(&ok);
+    const int y = parts.at(1).toInt(&ok);
+    const int w = parts.at(2).toInt(&ok);
+    const int h = parts.at(3).toInt(&ok);
+    if (!ok || w <= 0 || h <= 0) {
+        say(QStringLiteral("[FAIL] 几何参数不对：%1").arg(spec));
+        return 1;
+    }
+
+    const studious::platform::CaptureResult result =
+        studious::platform::winCaptureRect(QRect(x, y, w, h));
+    if (result.status != studious::platform::PlatformStatus::Ok) {
+        say(QStringLiteral("[probe] FAIL %1").arg(result.error));
+        return 1;
+    }
+
+    // 抽样算亮度（9 px 网格），和 ImageMagick 的 mean 一个量级，够判断黑图。
+    qint64 sum = 0;
+    int count = 0;
+    int bright = 0;
+    for (int py = 0; py < result.image.height(); py += 9) {
+        for (int px = 0; px < result.image.width(); px += 9) {
+            const QRgb c = result.image.pixel(px, py);
+            const int lum = (qRed(c) * 299 + qGreen(c) * 587 + qBlue(c) * 114) / 1000;
+            sum += lum;
+            ++count;
+            if (lum > 24)
+                ++bright;
+        }
+    }
+    const double mean = count > 0 ? static_cast<double>(sum) / count : 0.0;
+    const double brightPct = count > 0 ? 100.0 * bright / count : 0.0;
+
+    const QString outPath = parts.at(4);
+    if (!result.image.save(outPath)) {
+        say(QStringLiteral("[probe] 保存失败：%1").arg(outPath));
+        return 1;
+    }
+    say(QStringLiteral("[probe] %1x%2 mean=%3 bright=%4%% -> %5")
+            .arg(result.image.width())
+            .arg(result.image.height())
+            .arg(mean, 0, 'f', 1)
+            .arg(brightPct, 0, 'f', 1)
+            .arg(outPath));
+    return 0;
+}
+
+// 每个进程入口都要装的日志汇（CLI 也落盘，不然 --smoke 出问题时没现场）。
+// 装完再挂 aboutToQuit：正常退出时收尾 flush 一次；缓冲区本身是逐行 flush 的，
+// 所以即便走的是 CLI 那种「不跑事件循环直接 return」的路径，日志也不会丢。
+void installLogSink(QCoreApplication &app)
+{
+    studious::ui::logsink::install();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [] {
+        studious::ui::logsink::flushToDisk();
+    });
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -1247,6 +1381,7 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         applyUiLanguageFromSettings();
+        installLogSink(app);
         return runListModels(QCoreApplication::arguments());
     }
 
@@ -1254,6 +1389,7 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         applyUiLanguageFromSettings();
+        installLogSink(app);
         return runSmoke(QCoreApplication::arguments());
     }
 
@@ -1261,13 +1397,32 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         applyUiLanguageFromSettings();
+        installLogSink(app);
         return runAssetsCli(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--asset-verify")) {
+        QCoreApplication app(argc, argv);
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
+        installLogSink(app);
+        return runAssetVerify(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--capture-probe")) {
+        // 抓屏要 QGuiApplication 里的 QImage 插件（PNG 编码），QCoreApplication 存不出图。
+        QGuiApplication app(argc, argv);
+        QGuiApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
+        installLogSink(app);
+        return runCaptureProbe(QCoreApplication::arguments());
     }
 
     if (hasFlag(argc, argv, "--asset-download")) {
         QCoreApplication app(argc, argv);
         QCoreApplication::setApplicationName(QStringLiteral("studious"));
         applyUiLanguageFromSettings();
+        installLogSink(app);
         return runAssetDownload(QCoreApplication::arguments());
     }
 
@@ -1276,6 +1431,10 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("studious"));
+
+    // 日志汇要尽早装上：后面 QML 加载期的一堆 warning（绑定失败、缺组件）
+    // 正是日志窗口最需要看的东西。这行之后的 qWarning 才会进缓冲。
+    installLogSink(app);
 
     // 任务栏 / Alt-Tab / 窗口图标。exe 本身的图标由 resources/app.rc 编进 PE，
     // 这里再设一次是为了让运行期窗口也用同一张图（托盘以后接平台层时同样取它）。
@@ -1346,24 +1505,73 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("miniSession"), miniSession);
 
     // 热键：文本写在设置里（"Ctrl+Alt+S"），这里翻译成 HotkeySpec 注册。
-    // 注册失败（被别的程序占用）只发通知，不改设置、不阻断启动。
+    // 注册失败（被别的程序占用）不改设置、不阻断启动，只把结果写回 backend.hotkeyStatus，
+    // 由快捷键页显示「已被占用」。
     const studious::platform::CapabilityReport platformCaps = platform->capabilities();
     if (platformCaps.hotkey.available) {
-        const AppSettings settings = AppSettings::load();
-        const auto registerOne = [platform = platform.get()](const QString &id,
-                                                                    const QString &text) {
-            if (text.trimmed().isEmpty())
-                return;
-            studious::platform::HotkeySpec spec;
-            spec.id = id;
-            spec.description = text;   // key == 0 时平台层把 description 当组合键文本解析
-            QString error;
-            if (!platform->registerHotkey(spec))
-                qWarning("[hotkey] %s: %s", qUtf8Printable(text), qUtf8Printable(error));
+        // 注意：backend 与 platform 的生命周期都到 main 结束，这个 lambda 只会在
+        // 用户改设置时被触发，捕获裸指针是安全的（connect 的 context 用 backend）。
+        const auto applyHotkeys = [backend, platform = platform.get()]() {
+            const QStringList ids{QStringLiteral("capture"), QStringLiteral("mini"),
+                                  QStringLiteral("live"), QStringLiteral("selection"),
+                                  QStringLiteral("home")};
+            for (const QString &id : ids) {
+                platform->unregisterHotkey(id);
+            }
+
+            // 三个键位撞在一起时，系统只会告诉你"被占用"，那个提示对用户毫无信息量。
+            // 自己先查一遍，把"和谁的撞了"说清楚。
+            QHash<QString, QString> takenCombos;
+            const auto registerOne = [backend, platform, &takenCombos](const QString &id,
+                                                                       const QString &text) {
+                if (text.trimmed().isEmpty()) {
+                    // 空 = 用户清掉了这条：既不算失败，也不留上一次的「已占用」。
+                    backend->setHotkeyStatus(id, true, QString());
+                    return;
+                }
+                const QString key = text.toUpper();
+                if (takenCombos.contains(key)) {
+                    const auto label = [](const QString &v) {
+                        if (v == QLatin1String("capture"))
+                            return QStringLiteral("截图翻译");
+                        if (v == QLatin1String("mini"))
+                            return QStringLiteral("小窗翻译");
+                        if (v == QLatin1String("selection"))
+                            return QStringLiteral("划词翻译");
+                        if (v == QLatin1String("home"))
+                            return QStringLiteral("打开主页");
+                        return QStringLiteral("实时翻译");
+                    };
+                    backend->setHotkeyStatus(
+                        id, false,
+                        QStringLiteral("与其他快捷键重复：%1 已经给了「%2」。")
+                            .arg(text, label(takenCombos.value(key))));
+                    return;
+                }
+                takenCombos.insert(key, id);
+
+                studious::platform::HotkeySpec spec;
+                spec.id = id;
+                spec.description = text;   // key == 0 时平台层把 description 当组合键文本解析
+                QString error;
+                const bool ok = platform->registerHotkey(spec, &error);
+                if (!ok) {
+                    qWarning("[hotkey] %s: %s", qUtf8Printable(text), qUtf8Printable(error));
+                }
+                backend->setHotkeyStatus(id, ok, ok ? QString() : error);
+            };
+
+            registerOne(QStringLiteral("capture"), backend->hotkeyCapture());
+            registerOne(QStringLiteral("mini"), backend->hotkeyMini());
+            registerOne(QStringLiteral("live"), backend->hotkeyLive());
+            registerOne(QStringLiteral("selection"), backend->hotkeySelection());
+            registerOne(QStringLiteral("home"), backend->hotkeyHome());
         };
-        registerOne(QStringLiteral("capture"), settings.hotkeyCapture);
-        registerOne(QStringLiteral("mini"), settings.hotkeyMini);
-        registerOne(QStringLiteral("live"), settings.hotkeyLive);
+
+        applyHotkeys();
+        QObject::connect(backend, &studious::ui::AppBackend::hotkeysChanged, backend,
+                         applyHotkeys);
+
         platform->setHotkeyHandler([screenFlow](const QString &id) {
             // 三个热键的落地：capture 直接开框选；小窗与实时由 QML 侧接信号。
             if (id == QLatin1String("capture"))
@@ -1561,6 +1769,27 @@ int main(int argc, char *argv[])
                      qUtf8Printable(screenFlow->property("statusText").toString()));
         };
 
+        // STUDIOUS_UI_SET="prop=value;prop2=value2"：只在这个截图分支里生效，
+        // 用 QObject::setProperty 改 Q_PROPERTY（很多设置项的 WRITE 访问器不是 Q_INVOKABLE，
+        // invokeMethod 调不到），用来走查"改了设置之后"的界面与落盘形态。
+        const QByteArray uiSet = qgetenv("STUDIOUS_UI_SET");
+        if (!uiSet.isEmpty()) {
+            const QStringList pairs = QString::fromUtf8(uiSet).split(QLatin1Char(';'),
+                                                                    Qt::SkipEmptyParts);
+            for (const QString &pair : pairs) {
+                const int eq = pair.indexOf(QLatin1Char('='));
+                if (eq <= 0) {
+                    continue;
+                }
+                const QByteArray name = pair.left(eq).trimmed().toUtf8();
+                const QString value = pair.mid(eq + 1).trimmed();
+                const bool ok = backend->setProperty(name.constData(), value);
+                qWarning("[ui-shot] set %s = %s -> %d",
+                         name.constData(),
+                         qUtf8Printable(value),
+                         ok ? 1 : 0);
+            }
+        }
         // STUDIOUS_UI_CALL=<Q_INVOKABLE>：走查"点下去之后"的样子用（通知条、弹窗、
         // 列表展开态）。只在这个截图分支里生效，正式启动路径完全不看这个变量。
         const QByteArray uiCall = qgetenv("STUDIOUS_UI_CALL");

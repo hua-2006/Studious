@@ -187,30 +187,45 @@ bool LlamaServer::start(QString *error)
         return fail(extraError);
     }
 
-    if (!pickPort(error)) {
-        // pickPort 已写好错误文案，这里只补一条记录 + 回收。
-        recordError(error != nullptr ? *error : QString());
-        return false;
-    }
-    m_baseUrl = QStringLiteral("http://127.0.0.1:%1/v1").arg(m_port);
+    // 端口竞态兜底：pickPort 是"试着 bind 一下再松开"，从松开到 llama-server 真正
+    // bind 之间有一个窗口，别的进程可能正好抢走。命中时重挑一个端口重试，
+    // 最多 3 次；其它原因（模型损坏、显存不足…）不重试，直接把错误交出去。
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        if (!pickPort(error)) {
+            // pickPort 已写好错误文案，这里只补一条记录 + 回收。
+            recordError(error != nullptr ? *error : QString());
+            return false;
+        }
+        m_baseUrl = QStringLiteral("http://127.0.0.1:%1/v1").arg(m_port);
 
-    if (!launch(error)) {
-        stop();
-        recordError(error != nullptr ? *error : QString());
-        return false;
-    }
-    if (!waitUntilReady(error)) {
+        if (!launch(error)) {
+            stop();
+            recordError(error != nullptr ? *error : QString());
+            return false;
+        }
+        if (waitUntilReady(error)) {
+            m_ready = true;
+            if (error != nullptr) {
+                error->clear();
+            }
+            return true;
+        }
+
         // waitUntilReady 内部已带日志尾巴；这里仍要回收进程，否则 5xx 就是常驻内存。
+        const QString tail = logTail(40);
+        const bool portBusy = tail.contains(QStringLiteral("address already in use"),
+                                            Qt::CaseInsensitive)
+                              || tail.contains(QStringLiteral("failed to bind"),
+                                               Qt::CaseInsensitive);
         stop();
         recordError(error != nullptr ? *error : QString());
-        return false;
+        if (!portBusy || attempt == 3) {
+            return false;
+        }
+        qWarning("[local] port %d was taken between probe and bind, retrying (%d/3)",
+                 m_port, attempt);
     }
-
-    m_ready = true;
-    if (error != nullptr) {
-        error->clear();
-    }
-    return true;
+    return false;
 }
 
 bool LlamaServer::pickPort(QString *error)

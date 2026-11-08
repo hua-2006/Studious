@@ -1,6 +1,8 @@
 #include "ScreenFlow.h"
 
 #include "AppSettings.h"
+#include "Languages.h"
+#include "OcrModels.h"
 #include "LocalEngine.h"
 // 「词 → 行」的规则搬到了 OcrLines，实时翻译（LiveSession）用同一份。
 #include "OcrLines.h"
@@ -18,6 +20,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QGuiApplication>
@@ -52,68 +55,8 @@ QString shotFilePath()
 
 QString ocrModelsDir()
 {
-    // 与 AppBackend::assetInstallRootPath() 同一套规则（settings.assetRoot 优先）。
-    const AppSettings settings = AppSettings::load();
-    const QString root = settings.assetRoot.isEmpty()
-                             ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                   .filePath(QStringLiteral("assets"))
-                             : settings.assetRoot;
-    const QString modelsDir = QDir(root).filePath(QStringLiteral("models"));
-    const QString stagedDir = QDir(modelsDir).filePath(QStringLiteral("ocr"));
-
-    // 资产是「一条资产一个文件/目录」装的：单文件资产的落点是 models/<assetId>（没有扩展名），
-    // 而 OcrEngine 只收一个目录。这里把三个文件收拢到 models/ocr/ 下（优先硬链接，失败再复制），
-    // 三种布局都认：models/ocr/det.onnx、models/ocr.det.ppocrv4（单文件资产）、
-    // models/ocr.det.ppocrv4/det.onnx（压缩包资产）。
-    struct Item {
-        const char *fileName;
-        const char *assetId;
-    };
-    static const Item kItems[] = {
-        {"det.onnx", "ocr.det.ppocrv4"},
-        {"rec.onnx", "ocr.rec.ppocrv4"},
-        {"ppocr_keys_v1.txt", "ocr.dict.ppocrv4"},
-    };
-
-    bool anyStaged = false;
-    for (const Item &item : kItems) {
-        const QString staged = QDir(stagedDir).filePath(QString::fromLatin1(item.fileName));
-
-        const QString assetName = QString::fromLatin1(item.assetId);
-        const QString candidates[] = {
-            QDir(modelsDir).filePath(assetName),
-            QDir(QDir(modelsDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
-        };
-        QString source;
-        for (const QString &candidate : candidates) {
-            if (QFileInfo(candidate).isFile()) {
-                source = candidate;
-                break;
-            }
-        }
-        if (source.isEmpty())
-            continue;
-
-        // 已经收拢过就跳过；但尺寸对不上说明上次留下的是坏文件（例如 Qt 的
-        // QFile::link() 在 Windows 上会写成 1 KB 的 .lnk 快捷方式，不是硬链接），重来。
-        const QFileInfo stagedInfo(staged);
-        if (stagedInfo.isFile() && stagedInfo.size() == QFileInfo(source).size())
-            continue;
-        if (stagedInfo.exists())
-            QFile::remove(staged);
-
-        QDir().mkpath(stagedDir);
-        if (!QFile::copy(source, staged))
-            qWarning("[ocr] failed to stage %s from %s",
-                     qUtf8Printable(item.fileName),
-                     qUtf8Printable(source));
-        anyStaged = true;
-    }
-
-    if (anyStaged)
-        qInfo("[ocr] staged models into %s", qUtf8Printable(stagedDir));
-
-    return stagedDir;
+    // 三件套的收拢逻辑只有一份（见 OcrModels.cpp）：这里以前抄了一份给 LiveSession 用。
+    return studious::ui::ocr::stageModels();
 }
 
 // OCR 的 box 是「裁剪图」坐标；浮层要按「相对选区左上角」画，两者是同一套物理像素。
@@ -159,15 +102,21 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
             return;
         }
         const AppSettings settings = AppSettings::load();
-        const QStringList dstList = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        const QString dst = dstList.value(0, QStringLiteral("zh"));
+        const QString dst = langs::normalizeTargets(langs::split(settings.dstLang), settings.engineId)
+                                .value(0, QStringLiteral("zh"));
         const QStringList lines = r.byLang.value(dst);
         // 段落与 OCR 行是一一对应的（QuickTranslate 按空行切段，这里传的就是每行一块），
         // 数量对不上时以块为准：少补空串、多截断，绝不把错位的译文贴到别的行上。
         for (int i = 0; i < m_blocks.size(); ++i) {
             QVariantMap block = m_blocks.at(i).toMap();
-            block.insert(QStringLiteral("text"), lines.value(i));
-            block.insert(QStringLiteral("untranslated"), lines.value(i).isEmpty());
+            QString text = lines.value(i);
+            // 模型把原文原样退回来（菜单名、型号、已经是目标语言的短句）：
+            // 按「未翻译」处理，别把原文当成译文贴上去。
+            const QString original = block.value(QStringLiteral("original")).toString().trimmed();
+            if (!text.isEmpty() && text.trimmed() == original)
+                text.clear();
+            block.insert(QStringLiteral("text"), text);
+            block.insert(QStringLiteral("untranslated"), text.isEmpty());
             m_blocks[i] = block;
         }
         setStatusText(QStringLiteral("%1 · %2 ms").arg(m_engineLabel).arg(r.elapsedMs));
@@ -201,6 +150,21 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
     });
     connect(m_qt, &QuickTranslate::errorOccurred, this, [this](const QString &message) {
         m_busy = false;
+        // 本地 LLM 刚被拉起来：启动要一两秒，这里自己等，别把「正在启动」当失败摆给用户。
+        // 20 次 × 1 秒：模型再大也够冷启动了，超了才真的报错。
+        if (m_qt->lastFailureRetryable() && m_retryLeft < 20) {
+            ++m_retryLeft;
+            setPhase(QStringLiteral("Translating"));
+            setStatusText(tr("等待本地 LLM 启动（第 %1 次重试）…").arg(m_retryLeft));
+            QTimer::singleShot(1000, this, [this] {
+                // 用户可能已经关掉浮层/重新框选，那就别再翻旧图。
+                if (m_shot.isNull() || m_lastWords.isEmpty()) {
+                    return;
+                }
+                startTranslation();
+            });
+            return;
+        }
         fail(message);
     });
 }
@@ -302,6 +266,25 @@ QString ScreenFlow::ocrTest(const QString &imagePath)
     }
     if (words.isEmpty() && !engine.lastError().isEmpty())
         qWarning("[ocr-test] %s", qUtf8Printable(engine.lastError()));
+
+    // 控制台在中文 Windows 上会把非 GBK 字符换成问号，日文假名根本看不出来。
+    // 顺手把结果写成 UTF-8 的旁注文件（<图>.ocr.txt），走查时直接读文件。
+    {
+        QFile sidecar(imagePath + QStringLiteral(".ocr.txt"));
+        if (sidecar.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QString dump;
+            for (const studious::platform::OcrWord &w : words) {
+                dump += QStringLiteral("%1\t%2,%3\t%4x%5\t%6\n")
+                            .arg(w.confidence, 0, 'f', 3)
+                            .arg(w.box.x())
+                            .arg(w.box.y())
+                            .arg(w.box.width())
+                            .arg(w.box.height())
+                            .arg(w.text);
+            }
+            sidecar.write(dump.toUtf8());
+        }
+    }
     return QStringLiteral("%1 word(s)").arg(words.size());
 }
 
@@ -355,6 +338,10 @@ bool ScreenFlow::begin()
     // 「先抓整屏、再显示遮罩」：顺序反了遮罩会被拍进截图。
     const studious::platform::CaptureResult shot = platform()->captureInteractive();
     if (shot.status != studious::platform::PlatformStatus::Ok || shot.image.isNull()) {
+        // 抓屏失败时把原始原因写进日志：界面上只显示一句人话，排查时总要有个出处。
+        qWarning("[capture] interactive capture failed: status=%d size=%dx%d error=%s",
+                 int(shot.status), shot.image.width(), shot.image.height(),
+                 qUtf8Printable(shot.error));
         fail(shot.error.isEmpty() ? tr("抓屏失败。") : shot.error);
         return false;
     }
@@ -476,8 +463,8 @@ void ScreenFlow::confirmSelection(const QRect &region)
         studious::ocr::OcrOptions o;
         const AppSettings settings = AppSettings::load();
         // 源语言给了具体值就只认它，否则中英混合（界面文字的绝大多数情况）。
-        if (!settings.srcLang.isEmpty() && settings.srcLang != QLatin1String("auto"))
-            o.languages = { settings.srcLang };
+        if (!langs::isAuto(settings.srcLang))
+            o.languages = { langs::normalizeSource(settings.srcLang) };
         return o;
     }();
     watcher->setFuture(QtConcurrent::run([engine, crop, options] { return engine->recognize(crop, options); }));
@@ -525,9 +512,7 @@ void ScreenFlow::startTranslation()
     setStatusText(tr("翻译中…"));
 
     const AppSettings settings = AppSettings::load();
-    QStringList dst = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    if (dst.isEmpty())
-        dst = { QStringLiteral("zh") };
+    const QStringList dst = langs::normalizeTargets(langs::split(settings.dstLang), settings.engineId);
 
     QStringList paragraphs;
     paragraphs.reserve(m_lastWords.size());
@@ -550,13 +535,18 @@ void ScreenFlow::startTranslation()
     }
 
     m_busy = true;
-    if (!m_qt->translate(text, settings.srcLang.isEmpty() ? QStringLiteral("auto") : settings.srcLang, dst)) {
+    if (!m_qt->translate(text, langs::normalizeSource(settings.srcLang), dst)) {
         // 同步拒绝只有一条路径：QuickTranslate 在返回 false 之前已经 emit 过
-        // errorOccurred，那个连接里做了 fail()。这里再 fail 一次会让
-        // finished() / errorTextChanged 双发（浮层会闪两下、记录会落两条）。
+        // errorOccurred，那个连接里做了 fail()/重试。这里不再重复处理。
+        // 补一条日志：引擎未就绪（缺资产 / 服务没起）时界面上只有一句闪过的提示。
+        qWarning("[screenflow] startTranslation: request rejected by engine (lines=%d, src=%s, dst=%s, err=%s)",
+                 int(paragraphs.size()), qUtf8Printable(settings.srcLang),
+                 qUtf8Printable(dst.join(QLatin1Char(','))), qUtf8Printable(m_qt->lastError()));
         m_busy = false;
         return;
     }
+    // 真的发出去了：之前的启动重试计数清零。
+    m_retryLeft = 0;
 }
 
 void ScreenFlow::cancel()
@@ -629,8 +619,12 @@ bool ScreenFlow::copyResult()
     QStringList lines;
     for (const QVariant &v : std::as_const(m_blocks)) {
         const QVariantMap block = v.toMap();
-        const QString text = block.value(QStringLiteral("text")).toString();
-        lines.append(text.isEmpty() ? block.value(QStringLiteral("original")).toString() : text);
+        const QString original = block.value(QStringLiteral("original")).toString();
+        const QString translated = block.value(QStringLiteral("text")).toString();
+        // 复制要跟屏幕上看到的一致：正在显示原文就复制原文，显示译文就复制译文。
+        // 缺哪一边就退回另一边，避免某些块只识别出一半时复制出空行。
+        lines.append(m_showOriginal ? (original.isEmpty() ? translated : original)
+                                    : (translated.isEmpty() ? original : translated));
     }
     if (lines.isEmpty())
         return false;

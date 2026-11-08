@@ -254,7 +254,7 @@ bool TranslatorRecords::ensureOpen() const
     return true;
 }
 
-qint64 TranslatorRecords::add(const TranslationRecord &rec, const QString &parentKey)
+qint64 TranslatorRecords::add(const TranslationRecord &rec)
 {
     if (!ensureOpen()) {
         return 0;
@@ -276,9 +276,9 @@ qint64 TranslatorRecords::add(const TranslationRecord &rec, const QString &paren
     query.prepare(QStringLiteral(
         "INSERT INTO records(parent, source, src, dst, engine, image, region, original,"
         " translated, created) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
-    // 顶层记录的 parent 写空串而不是 NULL：查询里统一写 parent = '' 就够，
-    // 不用再 OR 一个 IS NULL（手写的旧库/手工补的数据也能被正确当成顶层）。
-    query.addBindValue(parentKey);
+    // parent 写空串而不是 NULL：查询里统一写 parent = '' 就够，不用再 OR 一个 IS NULL。
+    // 列本身保留（旧库里有），但不再有子记录——父子模型已废弃。
+    query.addBindValue(QString());
     query.addBindValue(rec.source.trimmed());
     query.addBindValue(rec.srcLang);
     query.addBindValue(rec.dstLangs);
@@ -370,32 +370,6 @@ QVector<TranslationRecord> TranslatorRecords::list(int limit, const QString &sea
 
     if (!query.exec()) {
         m_lastError = QStringLiteral("读取记录列表失败：%1").arg(describe(query));
-        return rows;
-    }
-    while (query.next()) {
-        rows.append(rowToRecord(query));
-    }
-    return rows;
-}
-
-QVector<TranslationRecord> TranslatorRecords::children(const QString &parentKey) const
-{
-    QVector<TranslationRecord> rows;
-    // 空 key 是正常调用（比如顶层记录被问"你有子记录吗"），不是错误：
-    // 不写 m_lastError，免得界面上平白弹一条红字。
-    if (parentKey.isEmpty()) {
-        return rows;
-    }
-    if (!ensureOpen()) {
-        return rows;
-    }
-
-    QSqlQuery query(connection());
-    query.prepare(selectPrefix()
-                  + QStringLiteral(" WHERE parent = ? ORDER BY created DESC, id DESC"));
-    query.addBindValue(parentKey);
-    if (!query.exec()) {
-        m_lastError = QStringLiteral("读取子记录失败：%1").arg(describe(query));
         return rows;
     }
     while (query.next()) {

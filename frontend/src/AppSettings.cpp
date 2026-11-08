@@ -1,5 +1,7 @@
 #include "AppSettings.h"
 
+#include "platform/SecretStore.h"
+
 #include <QColor>
 #include <QSettings>
 
@@ -33,7 +35,8 @@ AppSettings AppSettings::defaults()
 
     // 本机网关默认值（与 backend_selftest 的 --llm 模式保持一致）。
     s.llm.baseUrl = QStringLiteral("http://127.0.0.1:3065/v1");
-    s.llm.apiKey = QStringLiteral("12345678");
+    // 不自带任何默认 Key：以前这里硬编码了 "12345678"，既像弱口令又会被打进发行包。
+    s.llm.apiKey.clear();
     s.llm.model = QStringLiteral("deepseek-v4.1-flash");
     s.llm.timeoutMs = 60000;
     s.llm.maxTokens = 2048;
@@ -85,12 +88,11 @@ AppSettings AppSettings::defaults()
     s.overlayAutoHideDelay = 0;     // 0 = 复制完立刻收
     s.miniAlwaysOnTop = true;
     s.liveIntervalMs = 600;         // 400 太快，本地 MT 跟不上
-    s.liveEngineLocked = true;      // 实时默认锁本地引擎，免得每 600 ms 打一次云端
     s.liveOnlyOnChange = true;      // 内容没变就不重翻，省一次引擎调用
-    s.recordSaveMode = QStringLiteral("original");   // original / current
-    s.hotkeyCapture = QStringLiteral("Ctrl+Alt+S");
-    s.hotkeyMini = QStringLiteral("Ctrl+Alt+W");
-    s.hotkeyLive = QStringLiteral("Ctrl+Alt+L");
+    // 热键默认空（用户自己录），见 AppSettings.h 的说明。
+    s.hotkeyCapture.clear();
+    s.hotkeyMini.clear();
+    s.hotkeyLive.clear();
     return s;
 }
 
@@ -117,7 +119,9 @@ AppSettings AppSettings::load()
     AppSettings s = def;
 
     s.llm.baseUrl = textOrKeepEmpty(key("llm/baseUrl"), def.llm.baseUrl);
-    s.llm.apiKey = textOr(key("llm/apiKey"), def.llm.apiKey);
+    // 落盘的是密文（Windows 走 DPAPI）；老版本写进去的明文由 unprotect 原样返回，
+    // 下次保存时自动变成密文。
+    s.llm.apiKey = studious::platform::secret::unprotect(textOr(key("llm/apiKey"), def.llm.apiKey));
     s.llm.model = textOrKeepEmpty(key("llm/model"), def.llm.model);
     // systemPrompt 不做空值回落：留空是有意义的状态。
     s.llm.systemPrompt = store.value(key("llm/systemPrompt")).toString();
@@ -200,6 +204,11 @@ AppSettings AppSettings::load()
     s.localIdleMinutes = clampedInt(
         store.value(key("llm/localIdleMinutes"), def.localIdleMinutes).toInt(), 1, 240);
 
+    // 本地 MT：常驻开关 + 空闲释放阈值。0 是合法值（= 不自动释放）。
+    s.mtPreload = store.value(key("mt/preload"), def.mtPreload).toBool();
+    s.mtIdleMinutes = clampedInt(store.value(key("mt/idleMinutes"), def.mtIdleMinutes).toInt(), 0,
+                                 180);
+
     // 界面语言：空串是有意义的值（= 跟随系统），所以不做 textOr 回落。
     // 注册表可能被手改成乱七八糟的值，不在白名单里就当"跟随系统"。
     const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
@@ -218,6 +227,8 @@ AppSettings AppSettings::load()
 
     // 字号缩放：夹在 80~150，缺失或越界都回落到 100。
     s.fontScale = clampedInt(store.value(key("ui/fontScale"), def.fontScale).toInt(), 80, 150);
+    s.readingFontSize =
+        clampedInt(store.value(key("ui/readingFontSize"), def.readingFontSize).toInt(), 11, 24);
 
     // 桌面集成：bool 一律 toBool()，注册表被写成 "true"/"1" 也能认。
     s.autoStart = store.value(key("desktop/autoStart"), def.autoStart).toBool();
@@ -270,11 +281,7 @@ AppSettings AppSettings::load()
     s.historyDir = store.value(key("history/dir"), def.historyDir).toString().trimmed();
     s.miniAlwaysOnTop = store.value(key("mini/alwaysOnTop"), def.miniAlwaysOnTop).toBool();
     s.liveIntervalMs = clampedInt(store.value(key("live/intervalMs"), def.liveIntervalMs).toInt(), 400, 1500);
-    s.liveEngineLocked = store.value(key("live/engineLocked"), def.liveEngineLocked).toBool();
     s.liveOnlyOnChange = store.value(key("live/onlyOnChange"), def.liveOnlyOnChange).toBool();
-    // 只认两个已知值，其余一律回默认——这值会决定记录里存哪份文本，写错就是数据事故。
-    const QString saveMode = store.value(key("record/saveMode"), def.recordSaveMode).toString().trimmed().toLower();
-    s.recordSaveMode = (saveMode == QLatin1String("current")) ? saveMode : QStringLiteral("original");
 
     // 热键文本只做去空白：合法性由平台层注册时判定，写在这里会把用户的写法「规范」掉。
     // key() 收的是 const char*，所以这里直接写三个字面量、不要再套一层 QString。
@@ -285,6 +292,8 @@ AppSettings AppSettings::load()
     s.hotkeyCapture = hotkey("hotkey/capture", def.hotkeyCapture);
     s.hotkeyMini = hotkey("hotkey/mini", def.hotkeyMini);
     s.hotkeyLive = hotkey("hotkey/live", def.hotkeyLive);
+    s.hotkeySelection = hotkey("hotkey/selection", def.hotkeySelection);
+    s.hotkeyHome = hotkey("hotkey/home", def.hotkeyHome);
 
     return s;
 }
@@ -294,7 +303,7 @@ void AppSettings::save() const
     QSettings store(QStringLiteral("Studious"), QStringLiteral("Studious"));
 
     store.setValue(key("llm/baseUrl"), llm.baseUrl);
-    store.setValue(key("llm/apiKey"), llm.apiKey);
+    store.setValue(key("llm/apiKey"), studious::platform::secret::protect(llm.apiKey));
     store.setValue(key("llm/model"), llm.model);
     store.setValue(key("llm/timeoutMs"), llm.timeoutMs);
     store.setValue(key("llm/maxTokens"), llm.maxTokens);
@@ -324,9 +333,12 @@ void AppSettings::save() const
     store.setValue(key("llm/localPreheat"), localPreheat);                 // 启动即预热
     store.setValue(key("llm/localIdleStop"), localIdleStop);               // 空闲自动停
     store.setValue(key("llm/localIdleMinutes"), localIdleMinutes);         // 1~240
+    store.setValue(key("mt/preload"), mtPreload);
+    store.setValue(key("mt/idleMinutes"), mtIdleMinutes);                  // 0 = 不自动释放
     store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
     store.setValue(key("ui/theme"), themeMode);       // system / light / dark
     store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小
+    store.setValue(key("ui/readingFontSize"), readingFontSize);   // 11~24，译文正文字号
     store.setValue(key("ui/accent"), accentSeed);     // 空 = 默认紫 #6750A4
     store.setValue(key("desktop/autoStart"), autoStart);
     store.setValue(key("desktop/minimizeToTray"), minimizeToTray);
@@ -356,12 +368,12 @@ void AppSettings::save() const
     store.setValue(key("history/dir"), historyDir);                   // 空 = 默认位置
     store.setValue(key("mini/alwaysOnTop"), miniAlwaysOnTop);
     store.setValue(key("live/intervalMs"), liveIntervalMs);       // 400~1500
-    store.setValue(key("live/engineLocked"), liveEngineLocked);
     store.setValue(key("live/onlyOnChange"), liveOnlyOnChange);
-    store.setValue(key("record/saveMode"), recordSaveMode);       // original / current
     store.setValue(key("hotkey/capture"), hotkeyCapture);
     store.setValue(key("hotkey/mini"), hotkeyMini);
     store.setValue(key("hotkey/live"), hotkeyLive);
+    store.setValue(key("hotkey/selection"), hotkeySelection);
+    store.setValue(key("hotkey/home"), hotkeyHome);
 
     store.sync();
 }

@@ -52,6 +52,8 @@ int effectiveTimeout(const config::LlmConfig &cfg)
 // 判据二选一：
 //   1. 输出长度远超原文（> 4 倍 + 120 字符）—— 正常译文不会这样
 //   2. 末尾 12 个字符在全文里出现 ≥ 4 次 —— 典型的"卡住复读"
+int trailingRepeatUnit(const QString &text, int minRepeats, int maxUnit);
+
 bool looksDegenerate(const QString &output, const QString &source)
 {
     if (output.size() > source.size() * 4 + 120) {
@@ -76,40 +78,65 @@ bool looksDegenerate(const QString &output, const QString &source)
         }
     }
 
-    const QString tail = output.right(12);
-    if (tail.trimmed().size() < 4) {
-        return false;   // 纯标点/空白结尾，不足以判断
-    }
-
-    int count = 0;
-    int pos = 0;
-    while ((pos = output.indexOf(tail, pos)) >= 0) {
-        ++count;
-        pos += tail.size();
-    }
-    return count >= 4;
+    // 结尾连续复读：同一个短单元连着来 ≥3 次，而且输出明显比原文长一截，
+    // 才算退化。只判"结尾连续"是因为全文计数会误伤合法重复。
+    const int unit = trailingRepeatUnit(output, 3, 24);
+    return unit > 0 && output.size() > source.size() * 2;
 }
 
-// 把复读尾巴截掉：找到第二次出现的位置，从那里切断。
-QString truncateRepetition(const QString &output)
+// 结尾是否由同一个短单元**连续**重复 —— 返回该单元长度（0 = 没重复）。
+//
+// 只看「紧邻结尾是不是同一段文字连着来了 N 次」，不看全文出现过几次：全文计数会把
+// 合法重复也算进去（实测把 806 字的 "hello world. " × 62 的译文截成了两句）。
+int trailingRepeatUnit(const QString &text, int minRepeats, int maxUnit)
+{
+    const int n = text.size();
+    const QString last = n >= 1 ? text.right(qMin(maxUnit, n)) : QString();
+    Q_UNUSED(last)
+
+    for (int unit = 1; unit <= maxUnit; ++unit) {
+        if (unit * minRepeats > n) {
+            break;
+        }
+        const QString block = text.mid(n - unit, unit);
+        if (block.trimmed().isEmpty()) {
+            continue;
+        }
+        bool same = true;
+        for (int k = 1; k < minRepeats && same; ++k) {
+            const int start = n - unit * (k + 1);
+            if (start < 0 || text.mid(start, unit) != block) {
+                same = false;
+            }
+        }
+        if (same) {
+            return unit;
+        }
+    }
+    return 0;
+}
+
+// 把复读尾巴截掉：只留重复段的第一份，其余丢掉。
+// 源文本身就有这么长时不截 —— 说明模型的输出体量是合理的，重复是原文自带的。
+QString truncateRepetition(const QString &output, const QString &source)
 {
     if (output.size() < 40) {
         return output;
     }
-    const QString tail = output.right(12);
-    if (tail.trimmed().size() < 4) {
+    const int unit = trailingRepeatUnit(output, 3, 24);
+    if (unit <= 0) {
+        return output;
+    }
+    if (source.size() * 2 >= output.size()) {
         return output;
     }
 
-    const int first = output.indexOf(tail);
-    if (first < 0) {
-        return output;
+    const QString block = output.mid(output.size() - unit, unit);
+    int start = output.size() - unit;
+    while (start - unit >= 0 && output.mid(start - unit, unit) == block) {
+        start -= unit;
     }
-    const int second = output.indexOf(tail, first + tail.size());
-    if (second > 0 && second < output.size() - tail.size()) {
-        return output.left(second).trimmed();
-    }
-    return output;
+    return output.left(start + unit).trimmed();
 }
 
 // 判断文本里是否含中日韩字符。
@@ -821,7 +848,7 @@ bool LlmTranslator::translateOne(const QString &text,
 
         // 复读：先截断；截完仍离谱就换策略。
         if (looksDegenerate(content, text)) {
-            content = truncateRepetition(content);
+            content = truncateRepetition(content, text);
             if (looksDegenerate(content, text)) {
                 lastError = i18n::s("模型输出重复内容", "The model produced repeated output.");
                 continue;
@@ -920,8 +947,27 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
                              QString &outContent,
                              QString &outError)
 {
-    const net::HttpResponse resp =
-        m_http->send(buildChatRequest(systemPrompt, userPrompt, temperature, maxTokens));
+    const net::HttpRequest request =
+        buildChatRequest(systemPrompt, userPrompt, temperature, maxTokens);
+    const bool trace = qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE");
+    if (trace) {
+        qInfo("[llm] post start url=%s timeout=%dms body=%lld",
+              qUtf8Printable(request.url.toString()),
+              request.timeoutMs,
+              static_cast<long long>(request.body.size()));
+    }
+    const net::HttpResponse resp = m_http->send(request);
+    if (trace) {
+        // 实时翻译这种「每 600 ms 一帧」的场景，出问题时要能分清是没发出去、
+        // 还是发出去了对面不回。这一行只在排查时开，正式跑不打印。
+        QString head = QString::fromUtf8(resp.body.left(160));
+        head.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        qInfo("[llm] post done status=%d err=%s chars=%lld body=%s",
+              resp.status,
+              qUtf8Printable(resp.error),
+              static_cast<long long>(resp.body.size()),
+              qUtf8Printable(head));
+    }
     if (!resp.ok) {
         outError = describeHttpFailure(resp);
         return false;
@@ -1091,18 +1137,28 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
             if (results.at(i).isEmpty()) {
                 reason = i18n::sf("第 %1 条译文为空", "item %1 is empty", {i + 1});
             } else if (looksDegenerate(results.at(i), texts.at(i))) {
-                results[i] = truncateRepetition(results.at(i));
+                results[i] = truncateRepetition(results.at(i), texts.at(i));
                 if (looksDegenerate(results.at(i), texts.at(i))) {
                     reason = i18n::sf("第 %1 条译文重复", "item %1 is repetitive", {i + 1});
                 }
             } else if (!sameLanguage && isUntranslatedOutput(results.at(i), texts.at(i))) {
-                // 源语言 = 目标语言时原文就是正确结果，跟单段路径一样跳过语种校验。
-                reason = i18n::sf("第 %1 条返回了原文", "item %1 returned the source text", {i + 1});
+                // 模型把原文原样退回来了。常见于本来就不该翻的东西：菜单名（文件/编辑）、
+                // 型号、人名、已经是目标语言的短句。以前这里判「可疑 → 清空 → 逐段补救 →
+                // 还是原样 → 整单失败」，实时翻译每 600 ms 撞一次，界面就永远停在「翻译失败」。
+                // 现在收下原文（界面按「未翻译」显示），不再算失败。
+                results[i] = texts.at(i);
+                continue;
             } else if (!sameLanguage && !matchesTargetScript(results.at(i), dstLang)) {
                 reason = i18n::sf("第 %1 条语种不符", "item %1 is not in the target language",
                                   {i + 1});
             }
 
+            if (qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE")) {
+                qInfo("[llm] item %d rejected (%s) src=[%s] out=[%s]",
+                      i + 1, qUtf8Printable(reason),
+                      qUtf8Printable(texts.at(i).left(60)),
+                      qUtf8Printable(results.at(i).left(60)));
+            }
             if (!reason.isEmpty()) {
                 bad.append(i);
                 reasons.append(reason);
@@ -1130,6 +1186,12 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
     QVector<int> bad;
     if (parseJsonStringArray(content, texts.size(), results)) {
         bad = review(results, reasons);
+        if (qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE") && !bad.isEmpty()) {
+            qInfo("[llm] batch review: %d/%lld item(s) suspicious: %s",
+                  static_cast<int>(bad.size()),
+                  static_cast<long long>(results.size()),
+                  qUtf8Printable(reasons.join(QStringLiteral("; "))));
+        }
         if (bad.isEmpty()) {
             outTexts = results;
             return true;

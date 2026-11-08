@@ -1,17 +1,25 @@
 #include "MiniSession.h"
 
+#include <QTimer>
+
 #include "AppSettings.h"
+#include "Languages.h"
 #include "QuickTranslate.h"
 
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QHash>
+#include <QMimeData>
 #include <QRegularExpression>
+#include <QTextDocument>
 #include <QVariantMap>
 
 namespace studious::ui {
 
 namespace {
+
+// 划词热键的自动翻译上限：超过这个字数只把内容填进输入框，由用户确认后手动点「翻译」。
+constexpr int kAutoTranslateChars = 1500;
 
 // 和 QuickTranslate 的切段规则保持一致：空行分段，段内单换行保留。
 QStringList splitParagraphs(const QString &text)
@@ -27,19 +35,12 @@ QStringList splitParagraphs(const QString &text)
     return out;
 }
 
+// 小窗也要跟主页共用同一份语言规则（拆分 / 兜底 / 本地 MT 收成单选），
+// 实现只在 Languages.cpp 里写一遍。
 QStringList settingsTargets()
 {
     const AppSettings settings = AppSettings::load();
-    QStringList dsts;
-    const QStringList raw = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    for (const QString &one : raw) {
-        const QString code = one.trimmed();
-        if (!code.isEmpty() && !dsts.contains(code))
-            dsts.append(code);
-    }
-    if (dsts.isEmpty())
-        dsts.append(QStringLiteral("zh"));
-    return dsts;
+    return langs::normalizeTargets(langs::split(settings.dstLang), settings.engineId);
 }
 
 } // namespace
@@ -49,7 +50,7 @@ MiniSession::MiniSession(QObject *parent)
     , m_qt(new QuickTranslate(this))
 {
     const AppSettings settings = AppSettings::load();
-    m_srcLang = settings.srcLang == QStringLiteral("auto") ? QString() : settings.srcLang;
+    m_srcLang = langs::normalizeSource(settings.srcLang);
     m_dstLangs = settingsTargets();
     m_activeDst = m_dstLangs.first();
 
@@ -90,14 +91,15 @@ void MiniSession::setSourceText(const QString &text)
 
 void MiniSession::setSrcLang(const QString &code)
 {
-    const QString next = (code == QStringLiteral("auto")) ? QString() : code;
+    const QString next = langs::normalizeSource(code);
     if (m_srcLang == next)
         return;
     m_srcLang = next;
     // 语言对是全局一份（主页、截图、实时、小窗共用 settings/srcLang），
     // 这里改完就落盘，别的窗口下一单会读到同一个值。
+    // 注意存的就是 "auto"，不再有「空串」这种第二种写法。
     AppSettings settings = AppSettings::load();
-    settings.srcLang = next.isEmpty() ? QStringLiteral("auto") : next;
+    settings.srcLang = next;
     settings.save();
     emit srcLangChanged();
     emit languagesChanged();
@@ -105,18 +107,9 @@ void MiniSession::setSrcLang(const QString &code)
 
 void MiniSession::setDstLangs(const QStringList &codes)
 {
-    QStringList next;
-    for (const QString &one : codes) {
-        const QString code = one.trimmed();
-        if (!code.isEmpty() && !next.contains(code))
-            next.append(code);
-    }
-    if (next.isEmpty())
-        next.append(QStringLiteral("zh"));
-    // 本地 MT 只按语言对装模型，一次只能翻一个目标语言 —— 多选在这里收成单选
-    // （界面按 backend.dstMultiSupported 把「多选」关掉，这里兜住切换引擎那一刻）。
-    if (AppSettings::load().engineId == QStringLiteral("local-mt") && next.size() > 1)
-        next = {next.first()};
+    // 去空、去重、空列表兜底 {zh}、本地 MT 收成单选，全部交给 langs 的唯一实现。
+    const QStringList next = langs::normalizeTargets(langs::split(langs::join(codes)),
+                                                     AppSettings::load().engineId);
     if (m_dstLangs == next)
         return;
     m_dstLangs = next;
@@ -136,15 +129,8 @@ void MiniSession::setDstLangs(const QStringList &codes)
 void MiniSession::reloadLanguagesFromSettings()
 {
     const AppSettings settings = AppSettings::load();
-    const QString src = settings.srcLang == QStringLiteral("auto") ? QString() : settings.srcLang;
-    QStringList dsts = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    for (QString &one : dsts)
-        one = one.trimmed();
-    dsts.removeAll(QString());
-    if (dsts.isEmpty())
-        dsts.append(QStringLiteral("zh"));
-    if (settings.engineId == QStringLiteral("local-mt") && dsts.size() > 1)
-        dsts = {dsts.first()};
+    const QString src = langs::normalizeSource(settings.srcLang);
+    const QStringList dsts = langs::normalizeTargets(langs::split(settings.dstLang), settings.engineId);
 
     if (m_srcLang != src) {
         m_srcLang = src;
@@ -194,8 +180,12 @@ void MiniSession::translate()
         setDstLangs(settingsTargets());
     // 主页把引擎切成本地 MT 之后，小窗这边可能还留着几个目标语言：
     // 先在发单前收成一个，免得因为缺模型整单失败。
-    if (AppSettings::load().engineId == QStringLiteral("local-mt") && m_dstLangs.size() > 1)
-        setDstLangs({m_dstLangs.first()});
+    {
+        const QString engineId = AppSettings::load().engineId;
+        const QStringList clamped = langs::normalizeTargets(m_dstLangs, engineId);
+        if (clamped != m_dstLangs)
+            setDstLangs(clamped);
+    }
 
     m_paragraphs = paragraphs;
     m_errorText.clear();
@@ -206,12 +196,27 @@ void MiniSession::translate()
     // 领号：这一单的结果只有代号还对得上时才准写回界面。
     m_requestGeneration = ++m_generation;
 
-    if (!m_qt->translate(m_sourceText, m_srcLang.isEmpty() ? QStringLiteral("auto") : m_srcLang,
-                         m_dstLangs)) {
+    // m_srcLang 已经是 "auto" 或具体语言码（setSrcLang / 构造函数都过过
+    // langs::normalizeSource），不需要再在这里补一次「空串 → auto」。
+    if (!m_qt->translate(m_sourceText, m_srcLang, m_dstLangs)) {
+        // 本地 LLM 刚被拉起来时不要立刻报错：它要一两秒，等它起来自己再发一次。
+        if (m_qt->lastFailureRetryable() && m_retryLeft < 20) {
+            ++m_retryLeft;
+            setPhase(QStringLiteral("Translating"));
+            setNotice(tr("等待本地 LLM 启动（第 %1 次重试）…").arg(m_retryLeft));
+            QTimer::singleShot(1000, this, [this] {
+                if (m_sourceText.trimmed().isEmpty()) {
+                    return;
+                }
+                translate();
+            });
+            return;
+        }
         setError(m_qt->lastError());
         setPhase(QStringLiteral("Failed"));
         return;
     }
+    m_retryLeft = 0;
     setPhase(QStringLiteral("Translating"));
 }
 
@@ -303,8 +308,11 @@ bool MiniSession::grabClipboard()
         return false;
 
     const QString text = QGuiApplication::clipboard()->text().trimmed();
-    if (text.isEmpty())
+    if (text.isEmpty()) {
+        // 剪贴板空 = 小窗保持原样；热键按了没反应的情况要能在日志里看到原因。
+        qWarning("[mini] MiniSession::grabClipboard: clipboard is empty, source kept unchanged");
         return false;
+    }
     m_sourceTag = QStringLiteral("clip");
     m_sourceText = text;
     // 划词换掉原文，同样要作废可能还在飞的旧请求。
@@ -323,6 +331,76 @@ bool MiniSession::grabClipboard()
     emit resultChanged();
     setPhase(QStringLiteral("Editing"));
     return true;
+}
+
+bool MiniSession::grabSelection()
+{
+    if (busy())
+        return false;
+
+    QClipboard *cb = QGuiApplication::clipboard();
+    if (!cb) {
+        setNotice(tr("拿不到剪贴板。"));
+        return false;
+    }
+
+    const QMimeData *mime = cb->mimeData();
+    QString text;
+    if (mime) {
+        if (mime->hasText()) {
+            text = mime->text();
+        } else if (mime->hasHtml()) {
+            // 富文本只取文字：粘贴 <b>/<a> 这种标记进输入框既难看又会被当成原文翻。
+            QTextDocument doc;
+            doc.setHtml(mime->html());
+            text = doc.toPlainText();
+        } else if (mime->hasImage()) {
+            setNotice(tr("剪贴板里是图片，不粘贴。"));
+            return false;
+        }
+    }
+    text = text.trimmed();
+    if (text.isEmpty()) {
+        setNotice(tr("剪贴板里没有可翻译的文字。"));
+        return false;
+    }
+
+    m_sourceTag = QStringLiteral("clip");
+    m_sourceText = text;
+    ++m_generation;
+    m_byLang.clear();
+    m_blocks.clear();
+    m_errorText.clear();
+    m_engineLabel.clear();
+    m_elapsedMs = 0;
+    emit sourceTagChanged();
+    emit sourceTextChanged();
+    emit statsChanged();
+    emit blocksChanged();
+    emit errorTextChanged();
+    emit engineLabelChanged();
+    emit resultChanged();
+    setPhase(QStringLiteral("Editing"));
+
+    // 长文只填不翻：整篇自动翻容易把段落关系弄丢，也让用户来不及看一眼原文。
+    if (text.size() > kAutoTranslateChars) {
+        setNotice(tr("这段有 %1 字，超过 %2 字就不自动翻 —— 看过原文再点「翻译」。")
+                      .arg(text.size())
+                      .arg(kAutoTranslateChars));
+        return true;
+    }
+
+    setNotice(QString());
+    translate();
+    return true;
+}
+
+void MiniSession::setNotice(const QString &text)
+{
+    if (m_noticeText == text)
+        return;
+    m_noticeText = text;
+    emit noticeTextChanged();
 }
 
 void MiniSession::prepare()

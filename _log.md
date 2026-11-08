@@ -1410,3 +1410,410 @@ Qt 6.12 可用；手工跟随只作为兜底。
 
 ### 未做
 - 改动未提交（README.md / SettingsPage.qml / studious_en.ts / studious_zh_CN.ts）。
+## 死代码清理 + 运行时资产校验接线（2026-11-08）
+
+用户审核后拍板「按你的计划来」。这一轮只动「有实现、零调用」的接口，外加把安装后复查接上。
+
+### 删掉
+- AppBackend::beginLiveSession / appendLiveSession / finishLiveSession 及成员 m_liveSessionActive / m_liveOriginals / m_liveTranslated：上一版「边跑边攒记录」的遗留，已被 saveLiveRecord 取代。它做的「同一行只留第一次」去重挪进了 saveLiveRecord，实时记录不再可能存出一堆重复行。
+- TranslatorRecords::children() 与 dd() 的 parentKey 参数：父子记录模型（实时一父 N 子）从来没接线。parent 列保留（旧库里有），dd() 一律写空串，list() 仍兼容历史上写入过非空 parent 的行。
+- AppSettings::recordSaveMode（settings/record/saveMode）：决定记录里存原文还是译文的开关，界面上没入口、代码里没读取，留着等于骗人。
+- ScreenFlow::startRecognition() 声明（无定义、无调用）。
+- platform::winClearOverlayFlags()（声明 + 实现）：窗口销毁时扩展样式本来就跟着没了。
+- LocalEngine::backendLabel()：界面文案由 QML 处理，无人调用。
+
+### 接上
+- 新建 rontend/src/AssetPaths.{h,cpp}：资产根、清单路径、清单解析、**安装后复查**的唯一实现。AppBackend 里三份本地实现（indManifestPath / assetInstallRootPath / parseBundledManifest）改成薄壳，LocalEngine::installRoot() 也改为 paths::assetsRoot()（原来它自己又拼了一遍 %APPDATA%\studious\assets，迁移资产根后两边会各说各话）。
+- LocalEngine::ensureStarted() 在起 llama-server 之前调 paths::verifyInstalled(runtimeAssetId, &err)：清单点名的关键文件必须齐全，运行时资产必须点名了原生可执行文件。失败直接拒绝启动并给「去资产页重新下载」的人话提示。
+
+### 验证
+- 正向：--smoke "Hello, world!" --local → 启动 2162 ms、译文「你好，世界！」、[DONE] exit 0；ackend_selftest = ALL CORE TESTS PASSED。
+- 负向：把 ssets\runtime\runtime.llama.vulkan.win-x64\ggml-vulkan.dll 改名后再跑，得到
+  [FAIL] 本地引擎运行时校验失败（runtime.llama.vulkan.win-x64）：资产 … 缺少清单要求的关键文件：ggml-vulkan.dll exit 1（改名前是照启不误）。测完已改名还原。
+- 构建 [14/14] Linking；studious_en.ts 542 条 / unfinished = 0（新增文案走 i18n::sf 双语对，不需要进 .ts）。
+
+### 仍未做
+- 清单验签仍关闭（equireSignature=false / llowMissingSha256=true，AppBackend.cpp 与 main.cpp 三处）：运行时校验目前依赖「清单编译进 qrc」，不是密码学意义上的可信。
+- API Key 仍明文落注册表、默认值仍是 12345678。
+## 源语言「自动」编码统一为 auto（2026-11-08）
+
+### 病因
+「自动检测」有两种写法：MiniSession 在内存里用空串（srcLang == "auto" ? "" : code），
+其余四个入口一律用 "auto"。这种漏转不崩溃、不报错，只会**静默翻错语言**
+（"自动检测"被当成"没指定"）。同一个原因还让语言菜单里的「自动检测」项永远不高亮
+（miniSession.srcLang === modelData.code 里左边是空串、右边是 "auto"）。
+
+### 改法
+- Languages.h/.cpp 增加 isAuto(code) 与 
+ormalizeSource(code)：「自动」唯一编码 = "auto"；
+  大小写不敏感；**不**在这里校验语言码是否注册 —— CLI 传没见过的码时应当由后端给出
+  「不支持这个源语言」的明确错误，而不是被悄悄改成自动检测。
+- 全部调用点改走它们：MiniSession（构造 / setSrcLang / eloadLanguagesFromSettings /
+  	ranslate）、AppBackend（构造 / setSrcLang / eloadLanguagesFromSettings /
+  detectLanguage 的 auto 判断 / persistRecord）、ScreenFlow（OCR 限定语言 + 发单）、
+  LiveSession（同上两处）、QuickTranslate::translate、main.cpp（CLI --from 与同语言判断）。
+- MiniSession::setDstLangs 里手写的「trim + 去重 + 空兜底 + 本地 MT 收成单选」换成
+  langs::normalizeTargets(langs::split(langs::join(codes)), engineId)，四份实现归一份。
+
+### 验证
+- 构建 [14/14] Linking。
+- --from AUTO（大小写混写）→ 头部 src=auto、命中缓存、译文「你好，世界！」exit 0
+  （改前这种写法会被当成非法语言码）。
+- --from xx 仍报错 exit 1：非法码不会被悄悄改成自动（保持原有诊断能力）。
+- 注册表 settings/lang/src 写 ja → 小窗显示「日语」；写空串（旧版本遗留）→ 显示「自动检测」，
+  说明历史数据不用迁移也能读对。
+## 安全项第一批：安装来源 + 选择性校验、API Key 加密（2026-11-08）
+
+口径（用户定）：**我们自己下载安装的资产要校验安全性；用户从文件导入的不校验。**
+
+### 1. 资产来源（AssetOrigin）
+- `AssetRegistry` 新增 `enum class AssetOrigin { Unknown, Download, Import }`、`markInstalled(id, origin, error)`（旧签名等价 Download）、`originOf(id)`。
+- 来源落盘 `<资产根>/state/asset-origins.json`（QSaveFile 原子写）；读不到/写坏 → 全 Unknown，按 Download 处理。
+- `verifyInstalled()`：单文件资产在「0 字节」检查之后，若来源是 Import 直接放行（不比对 sha256）；下载安装的仍逐字节比对。
+- `Downloader::installFromFile()`：清单没有 sha256 不再拒绝导入，改为按 Import 安装并记来源；有哈希仍比一次，防选错文件。
+- 界面：资产状态徽章对导入项显示「已安装 · 用户导入」；`refreshAssets()` 每条多带 `origin` / `verified` 字段。
+- 新 CLI：`studious.exe --asset-verify <assetId>` → `[verify] <id> origin=… -> ok|FAIL`，退出码 0/1。
+
+### 2. API Key 落盘加密
+- 新建 `frontend/src/platform/SecretStore.{h,cpp}`：Windows 用 DPAPI（`CryptProtectData`，附加熵 `studious.settings.v1`，不做 LOCAL_MACHINE → 只当前用户能解）；其它平台退回 base64 并注明只防误读。
+- `AppSettings`：读时 `unprotect`（老明文原样返回 → 升级不丢 Key），写时 `protect`；**删掉硬编码默认 Key `12345678`**（默认空）。
+- 平台库补链 `crypt32`。
+- 取证钩子新增 `STUDIOUS_UI_SET="prop=value;…"`（`QObject::setProperty`，因为很多设置的 WRITE 访问器不是 Q_INVOKABLE，invokeMethod 调不到）。
+
+### 3. 清单验签
+- `paths::loadManifest()` 现在把 `TrustKeys.h` 的公钥传进 `parseManifest`：**清单一旦带 sig 就必须验过**（不再受 requireSignature 开关影响）。
+- 新增开关 `STUDIOUS_REQUIRE_SIGNED_MANIFEST=1`：要求必须带签名，发版/验收用；仓库里这份清单还没签名（发布流水线用 `manifest_tool sign` 生成），所以默认仍是"没签名就放行 + 打警告"。
+
+### 验证
+- `--asset-verify runtime.llama.vulkan.win-x64` → `origin=unknown -> ok`。
+- 篡改 `models/ocr.det.ppocrv4`（追加 6 字节）→ `origin=unknown -> FAIL`（哈希不符）；写 `{"ocr.det.ppocrv4":"import"}` → `origin=import -> ok`；还原文件后回到 ok。
+- Key 迁移：注册表写明文 `plain-test-key-123` → 触发一次保存 → 值变成 `dpapi:AQAA…`；再启动跑 `--smoke` 正常；把密文改成 `dpapi:AAAA` → 日志 `[secret] CryptUnprotectData 失败…按「未配置」处理`，进程不崩。
+- `STUDIOUS_REQUIRE_SIGNED_MANIFEST=1` + `--asset-verify` → `[FAIL] 找不到或无法解析资产清单`（拒绝未签名清单）。
+- 构建 `[5/5] Linking`；`studious_en.ts` 543 条 / 0 unfinished；`backend_selftest` → `ALL CORE TESTS PASSED`。
+
+### 还没做
+- 清单目前**未签名**：需要一对正式密钥，seed 必须离线保存（不进仓库），签名后的信封进 qrc 才算真开验签。
+- 模型类资产（.q4km）目前不在启动前校验范围内（只校验运行时资产）；要校验得接受首次加载时算一遍 491 MB ~ 1.1 GB 的 sha256。
+- 代理串里的凭据是否也走 SecretStore（现在明文）。
+## 3B 模型入库（哈希）+ 7B 改为自行导入（2026-11-08）
+
+### 3B
+- 从 ModelScope 下载 `qwen2.5-3b-instruct-q4_k_m.gguf`，先验 GGUF magic（前 4 字节 `GGUF`），再算哈希：
+  - 实际大小 `2,104,932,768` 字节（清单原先写的 `1,930,000,000` 是估算值，已改正）；
+  - sha256 `626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d`。
+- 装到 `<资产根>/models/model.qwen2.5-3b-instruct.q4km`，`state/asset-origins.json` 记 `"download"`（= 是我方下载安装，启动前要校验）。
+- `--asset-verify model.qwen2.5-3b-instruct.q4km` → `origin=download -> ok`，耗时 11.4 s（2.1 GB 全量 sha256 的代价）。
+- `--smoke "Hello, world!" --from en --to zh --local --local-model model.qwen2.5-3b-instruct.q4km` → 启动 2111 ms、翻译 170 ms、停止 153 ms，无残留 llama-server 进程。
+
+### 7B
+- 清单里删掉 `urls`（变成占位条目）→ 不再出现在可下载列表；note 改为「需自行导入」并写明去哪取、怎么装。
+- UI：占位资产的按钮分两类 —— 运行时类仍「暂不支持」不可点；**模型类显示「导入文件」且可点**，点了直接开文件选择框，用的是清单里那条 id（导入走 Import 来源，不做哈希校验）。
+
+### 踩坑
+- 清单是**编译进 qrc** 的：改完 `backend/asset/manifest.json` 必须重建，否则 `--asset-verify` 读到的还是旧的内置副本，报「清单没有 … 的 sha256」。
+- 资产根下的 `state/asset-origins.json` 手工维护时要保证 JSON 合法（QSaveFile 全量重写；读坏会全部回落 Unknown = 按下载来源校验）。
+## B 组正确性修复 + 翻译字号实装（2026-11-08）
+
+用户定调：「这只是一个开源的翻译工具软件，没必要做很高的安全性，我源码会直接公开上传的，先修复 b，把翻译字号实装。」
+（A = 安全加固清单，B = 正确性/稳定性清单。）
+
+### 1. 合法重复被误截断（LlmTranslator）
+- 病因：`looksDegenerate()` 用「结尾 12 字在全文出现 ≥4 次」判复读、`truncateRepetition()` 从第二次出现处切断，
+  806 字的 `"hello world. " × 62` 译文被截成两句。
+- 修法：新增 `trailingRepeatUnit(text, minRepeats, maxUnit)` 只判「紧邻结尾的同一短单元是否连续重复」；
+  `truncateRepetition(output, source)` 增加原文参数——原文本身长度 ≥ 译文一半时直接不截。
+- 验证：805 字重复文本 `耗时 1910 ms`、`命中=0/1`，输出 62 个「你好，世界。」+「完成了。」，不再截断。
+
+### 2. 本地 MT 长文本退化（LocalMtTranslator）
+- 病因：整段塞进 OPUS-MT，8 段 587 字时解码器进入退化循环，`cleanupTranslation` 清成空串。
+- 修法：`kMtChunkChars = 180` + `splitSentences()`（优先在句末标点后切，标点跟上一句）+ `targetWantsSpace()`
+  决定拼接是否补空格；块之间也检查 `m_cancelRequested`。
+- 验证：同一段八句英文 `耗时 5810 ms`、`命中=0/1`，八句全部译出，`[DONE] exit 0`。
+
+### 3. 缓存并发与连接泄漏（TranslationCache）
+- `hits_`/`misses_` 改 `std::atomic<qint64>`（worker 线程会并发累加）。
+- 连接泄漏用 `thread_local ThreadConnectionCleanup`：线程退出时 close + `removeDatabase`，
+  QThreadPool 反复换线程不再攒连接。
+
+### 4. 本地引擎端口竞态（LlamaServer）
+- `pickPort → launch → waitUntilReady` 包进 3 次重试；只有日志里出现 `address already in use` / `failed to bind`
+  才重挑端口，模型损坏、显存不足这类不重试。
+
+### 5. 翻译字号（readingFontSize）
+- `AppSettings`：`settings/ui/readingFontSize`（11–24，默认 13），load 夹紧、save 落盘。
+- `AppBackend`：`readingFontSize` Q_PROPERTY，写访问器 `setReadingFontSize` 夹紧并 `emit fontScaleChanged()`
+  （与 `fontScale` 共用通知——QML 都当「字号变了要重排」）。
+- `AppearancePage.qml`：「字号缩放」下面新增「翻译字号」滑块 + `N px` 读数。
+- `MiniWindow.qml`：结果区正文 `font.pixelSize: max(11, round(readingFontSize * Theme.fontScale))`。
+- `studious_en.ts`：545 条、unfinished = 0。
+
+### 坑
+- PowerShell 用 `\r\n` 拼接做替换时模式经常不命中且不报错（AppBackend.h 的 getter/setter 就是这么漏的），
+  moc 才报 `no member named 'readingFontSize'`。结构性插入一律用 `edit` 工具精确定位。
+- `MiniWindow.qml` 替换 `font.pixelSize` 时新行插在旧行之前，出现重复赋值，需手动删旧行。
+- CLI `--smoke` 仍会打 `QSqlDatabase requires a QCoreApplication`（缓存统计早于 QCoreApplication），只告警。
+
+### 验证
+- 构建 `[60/60]`、`[5/5] Linking`；`backend_selftest` = ALL CORE TESTS PASSED。
+- 截图 `docs/ui-shots-qml/mini_font20.png`（20 px 下的结果区正文）、`appearance_font.png`（含两条滑块）。
+- 测试后把注册表 `readingFontSize` 复位 13。
+## 快捷键页 + 划词热键（2026-11-08）
+
+### 快捷键页
+- 三个入口（小窗 / 截图 / 实时）各一张卡，观感照搬翻译页入口卡；点卡开始录制，Esc 放弃，
+  键位框显示 `Ctrl+Alt+S` 这类文本，右上角 `已绑定` / `未生效` 徽章。
+- 默认全空：`AppSettings` 里三个默认值从 `Ctrl+Alt+S/W/L` 改成空串，注册表旧值也清了 ——
+  预置组合键很容易和用户机器上的软件撞车。
+- 录制用一个隐形 `Item` 接 `Keys.onPressed`；**坑**：不可见 Item 拿不到 `activeFocus`，
+  `visible` 必须跟着录制状态走，并用 `Qt.callLater` 再 `forceActiveFocus()`（visible 翻转在事件循环之后）。
+- 改动即时生效：`main.cpp` 的 `applyHotkeys` 收到 `AppBackend::hotkeysChanged` 后
+  先注销三个 id 再重新注册，结果写回 `backend.hotkeyStatus`。
+- 重复检测（自己先查，系统只会说"被占用"）+ 占用来由（给 `IPlatform::registerHotkey`
+  加了 `QString *error` 出参，`WinPlatform` / `NullPlatform` 同步实现）。
+
+### 划词热键
+- `AppSettings::hotkeySelection`（键 `settings/hotkey/selection`，默认空），快捷键页
+  「场景快捷键」里一行「划词翻译」。
+- `MiniSession::grabSelection()`：读剪贴板 →
+  只有图片 → 提示「剪贴板里是图片，不粘贴。」不填；
+  富文本（只有 HTML）→ `QTextDocument::toPlainText()`；
+  ≤1500 字 → 填进输入框并立刻 `translate()`；
+  超过 1500 字 → 只填不翻，提示「这段有 N 字，超过 1500 字就不自动翻 —— 看过原文再点「翻译」。」
+- `Main.qml` 的 `launch("selection")`：开小窗 → `miniSession.grabSelection()`。
+- 说明文字挂在 MiniWindow 输入框下方（`miniSession.noticeText`），平时不占位。
+
+### 验证
+- 短文本（59 字 2 段）：粘贴 + 自动翻译，命中缓存 4 ms（`selection_short_zh.png`）。
+- 图片剪贴板：提示正确、输入框保持空（`selection_image.png`）。
+- 长文本 3841 字：填入 + 只提示不翻，按钮仍是「翻译」（`selection_long.png`）。
+- 快捷键页截图 `hotkeys_final.png`（空态）、`hotkeys_scene.png`（划词绑定 `Ctrl+Shift+D`）。
+- `studious_en.ts` 544 条 / unfinished = 0；构建 `[15/15]`、`[5/5] Linking`。
+
+### 未完成
+真实按键录制仍未自动化验证（`--ui-shot` 下窗口存活时间太短，模拟点击 + SendKeys 三次都没打中），
+交由用户手动确认；测试用的 `Ctrl+Shift+D` 已从注册表清掉，保持"默认空"。
+### 追加：打开主页热键（2026-11-08）
+- 场景快捷键最上面加一行「打开主页」：`settings/hotkey/home`（默认空），
+  录制 / 重新录制 / 清除 与划词那行同一套（`comboFor` / `applyHotkey` / `clearHotkey` 加 `home` 分支）。
+- 触发链：`main.cpp` 注册 id `home` → `screenFlow->launchRequested("home")` →
+  `Main.qml` 的 `launch("home")` 做 `root.show()/raise()/requestActivate()`（托盘里也能叫出来）。
+- 证据：`docs/ui-shots-qml/hotkeys_scene2.png`（两行都绑定时的样子）；
+  构建 `[15/15]`、`[5/5] Linking`；`studious_en.ts` 546 条 / unfinished = 0。
+- 测试用的 `Ctrl+Alt+H` / `Ctrl+Shift+D` 已从注册表清掉，保持"默认空"。
+### 追加：左上角 logo 矫正（2026-11-08）
+- 症状：`brand.svg` 的 viewBox 是 `40 0 0 24`（横向字标，宽高比 5:3），
+  而 `Main.qml` 的 `Image` 只写了 `sourceSize: 22×22` 且没开 `fillMode` ——
+  默认 `Stretch`，40×24 被硬拉成 22×22，竖笔画被拉长，看着"歪/被压扁"。
+- 改法：`sourceSize: 52×32` + `width: 26; height: 15.6` + `fillMode: Image.PreserveAspectFit`
+  （26 : 15.6 = 5 : 3，与 viewBox 同比例；sourceSize 给 2 倍保证高 DPI 清晰）。
+- 证据：`docs/ui-shots-qml/logo_fix2.png` + `logo_fix2_crop.png`（A 与文水平并排、居中、无拉伸）；
+  构建 `[9/9] Linking`。
+### 追加：删掉「锁定本地引擎」（2026-11-08）
+- 它本来想解决的问题：实时翻译每 600 ms 发一次请求，云端/Web 单次 1 s 以上，所以默认把实时锁在本地引擎上。
+- 实际上它**从来没有生效**：`LiveSession` 一次都没读 `liveEngineLocked`（全仓 grep 只有
+  `AppSettings` 存取 + `AppBackend` 转发 + `OverlayPage.qml` 那个开关）。引擎在实时里
+  真正读的是 `settings/engine/id`（上一轮统一口径之后），这个开关纯属遗留死代码。
+- 删除范围：`OverlayPage.qml` 的开关 + 说明行；`AppBackend` 的 `Q_PROPERTY`、getter、
+  setter、成员 `m_liveEngineLocked`、构造回读；`AppSettings` 的字段、defaults、load、save
+  （键 `settings/live/engineLocked` 一并从注册表清掉）。
+- 实时工具栏里**没有**这个开关（只有「锁定选区」，那是防误拖选区的，属于另一个功能）。
+- 验证：构建 `[9/9]` / `[5/5] Linking`；`studious_en.ts` 544 条（两条文案 vanished）、
+  unfinished = 0；截图 `docs/ui-shots-qml/overlay_live_nolock.png` 确认「实时翻译」那组
+  现在只剩 刷新间隔 / 只在内容变化时翻译 / 区域底色 / 译文不透明度 / 译文字号。
+### 追加：截屏翻译的「复制」跟随原文/译文切换（2026-11-08）
+- 以前 `ScreenFlow::copyResult()` 无论屏幕上显示的是原文还是译文，都复制译文
+  （空块回填原文），用户看着英文点复制却拿到中文。
+- 改法：按 `m_showOriginal` 分支 —— 显示原文时复制 `original`，显示译文时复制 `text`，
+  缺哪边退回另一边（防止只识别出一半的块复制出空行）。
+- 验证（`STUDIOUS_UI_CALL` 直接驱动，读真实剪贴板）：
+  - `begin|debugSampleBlocks|copyResult` → 剪贴板是「你好，世界 / 这是一段用来检查排版的译文 / 第三行…」
+  - `begin|debugSampleBlocks|toggleOriginal|copyResult` → 剪贴板是「Hello, world / This is a sample translation used to check layout / Third line…」
+- 复制按钮在两种状态下都可见（`showing = phase == "Showing" || "ShowingOriginal"`）；
+  构建 `[4/4] Linking`；无新增文案。
+### 诊断：游戏窗口抓屏全黑（2026-11-08）
+- 环境实测：Windows 10 IoT 企业版 LTSC **19044**，RTX 4060 Laptop + AMD 集显，
+  未开 HDR（用户确认）→ 之前"HDR/独占全屏"的猜测**不成立**。
+- 对每个窗口分别做 GDI `BitBlt(SRCCOPY|CAPTUREBLT)` 与 `PrintWindow(PW_RENDERFULLCONTENT)`，
+  抽样 9 px 网格算平均亮度 / 亮像素占比：
+  | 窗口 | BitBlt | PrintWindow |
+  |---|---|---|
+  | Studious | mean 92.6 / 44% | 232.9 / 100% |
+  | Folia (CEF 浏览器) | 37.6 / 45% | 97.3 / 99% |
+  | Firefox | 37.2 / 43% | 116.2 / 97% |
+  | 逆夢のメナスフィア(DLC) ver1.08 (Chrome_WidgetWin_1) | **20.2 / 24%** | **3.6 / 5.6%** |
+- 结论：普通窗口 BitBlt 都正常，只有游戏窗口两面都拿不到 → 它的画面被扫到
+  硬件平面（MPO / independent flip），GDI 两条路都读不到。不是 OCR 或我们代码的 bug。
+- 待验证的下一步：`Win+Shift+S` 系统截图能否拍到游戏（能 → DXGI/WGC 路线可行）。
+### 实装：DXGI Output Duplication 抓屏兜底（2026-11-08）
+- 新增 `frontend/src/platform/ScreenCaptureDxgi.{h,cpp}`：`captureWithDxgi(physicalRect, *error)`
+  - D3D11 设备（BGRA）→ IDXGIDevice → 适配器 → 枚举输出，挑**完全覆盖选区**的那块屏；
+  - `IDXGIOutput1::DuplicateOutput` → `AcquireNextFrame(300ms)` → `CopyResource` 到 staging
+    → `Map` → 逐行转 QImage → 按输出左上角裁到选区；
+  - 三种格式都转：`B8G8R8A8_UNORM` 直接拷、`R16G16B16A16_FLOAT`（scRGB 线性）走
+    sRGB 编码、`R10G10B10A2_UNORM`（PQ）先 PQ→nits 再按 203 nits 白点归一；
+  - 旋转输出（非 IDENTITY）明确报错，不输出方向错的图。
+- `ScreenCaptureWin.cpp`：`looksAllBlack()` 命中后先调 DXGI 兜底，成功就用它，
+  失败才报「…DXGI 兜底也没成功：<原因>」；另加诊断开关 `STUDIOUS_FORCE_DXGI=1`
+  跳过 BitBlt 直接走复制（用来对比两条路）。
+- CMake：`studious_platform` 加 `ScreenCaptureDxgi.cpp/.h`，链接 `d3d11 dxgi`
+  （MinGW 有 `libd3d11.a` / `libdxgi.a`）。
+- 踩坑（关键）：`AcquireNextFrame` 返回的帧如果 `LastPresentTime == 0`（只有鼠标更新、
+  桌面内容没变），**帧纹理内容未定义**，我们第一版直接拷 → 整幅全黑；现在丢掉这种帧重取。
+- 新增诊断 CLI `--capture-probe <x,y,w,h,out.png>`：抓一块物理像素区域，打印
+  `mean / bright%` 并存图 —— 用来对比 GDI 与 DXGI。
+- 实测（本机，Win10 19044 / RTX 4060）：同一块 700×400 区域
+  GDI `mean=41.9 bright=28.5%`、强制 DXGI `mean=41.9 bright=28.5%` —— 两条路输出一致，
+  说明复制的取帧/裁剪/颜色转换正确。`--smoke` 仍 `[DONE]`。
+### 日文识别不出来：OCR 字典换成 PP-OCRv5 多语种（2026-11-08）
+- 现象：框住日文，只有部分行出贴纸，识别结果像中文乱码。
+- 根因：识别模型配的是 `ch_PP-OCRv4_rec` + `ppocr_keys_v1.txt`（6623 行），
+  字典里**一个假名都没有**（实测 `has あ=False has ア=False`，全表只有 5 个片假名标点）。
+  det 是无语言的（只找文本区域），能不能出字完全由 rec 的字典决定 ——
+  所以假名要么被丢、要么被硬猜成相近汉字，整行长度一变，行合并也会跟着错位。
+- 改法：rec + dict 换成 **PP-OCRv5 mobile rec**（16.5 MB）+ **v5 多语种字典**
+  （18384 行，含平假名/片假名/汉字/英文）。det 仍用 PP-OCRv4 DBNet。
+  - `backend/asset/manifest.json`：删 `ocr.rec.ppocrv4` / `ocr.dict.ppocrv4`，
+    新增 `ocr.rec.ppocrv5`（sha256 `bf66820f…`）/ `ocr.dict.ppocrv5`（sha256 `1ea29636…`），
+    双 url（huggingface + hf-mirror）。
+  - 新增 `frontend/src/OcrModels.{h,cpp}`：`ocr::stageModels()` 统一把三件套收拢到
+    `<资产根>/models/ocr/`，assetId 列表「新 id 在前、旧 id 兜底」；
+    `ScreenFlow.cpp` 与 `LiveSession.cpp` 里各自抄的那份 `ocrModelsDir()` 改成一行转发
+    （以前改模型集合要改两处，注释里还写着"将来要合并"）。
+- 验收（同一张 1377×363 日文截图）：
+  - 旧：0.621 / 0.911 / 0.930，文本被吞成 `…RPG…` 之类；
+  - 新：0.962 / 0.999 / 0.813，识别为
+    「【カジュアル】ストーリーを楽しむためのモ一ドです。/ 敵のステータスが大きく下がります。/
+     「工ロRPG」といえばこの難易度です。」（长音ー 与 エ 各错一个，属单字混淆）；
+  - 中文回归（界面截图 1380×340）：7 个框、信度 0.998~1.000，无退化。
+- 顺手加的开发设施：`ScreenFlow::ocrTest()` 除了打 stderr，还会写 `<图>.ocr.txt`
+  （UTF-8 旁注文件）—— 中文 Windows 控制台会把非 GBK 字符换成问号，假名根本没法看。
+- 坑：`models/ocr.det.ppocrv4` 这类单文件资产会被每次 `begin()` 重新 stage 到
+  `models/ocr/`，直接替换 `models/ocr/*.onnx` 会被覆盖回去 —— 要换模型必须换资产源文件。
+## 实时翻译「检测不到文字 / 一直报错」的根因与修复（2026-11-08）
+
+用户反馈：截图翻译能翻，实时翻译却报「检测不到文字」，而且一直不恢复。
+实测（记事本放三行日文，`STUDIOUS_UI_TARGET=liveSession` 直接开局）：
+
+- OCR 其实**认出了 4~6 块**，不是没有文字。
+- 失败在后面：`translation finished ok=0`，错误是
+  `[llm] 目标语言 zh 第 1 段失败：翻译失败（已尝试 1 次）：模型没有翻译（返回了原文）`。
+- 再跑十几秒，状态变成「引擎忙，等下一帧」，`已更新 0 次` —— 因为每 600 ms 一帧，
+  每帧都在走同一条失败路径，界面就一直停在错误上。
+
+**根因一：把「模型原样退回原文」当成硬失败。**
+菜单名（文件/编辑）、型号、人名、已经是目标语言的短句，模型返回原文是正确行为。
+旧逻辑判它「可疑 → 清空 → 逐段补救 → 还是原样 → 整单失败」，
+实时场景每 600 ms 撞一次，于是永远翻不出一帧。
+修法（`backend/src/translators/LlmTranslator.cpp` 的 batch `review`）：
+原样退回的条目**收下原文**、不再计入可疑，界面按「未翻译」渲染（贴纸画原文样式），
+不再拖垮整单。
+
+**根因二：连续 3 帧没字就收单**（已按用户要求删除）。
+`LiveSession` 不再自己停；只把状态写成「这一帧没有文字（已连续 N 帧）」，
+并加空帧诊断日志 `[live] empty frame: WxH mean=…`，用来区分「区域没框到」
+「抓到自家浮层」「画面全黑」。
+
+**配套**
+- `ScreenFlow`（截图翻译）同样规则：译文 == 原文 → 按未翻译，不贴假译文。
+- 新增 `STUDIOUS_LLM_TRACE=1` 诊断日志：请求 url/timeout/body 字节、返回 status/字节/片段、
+  批量逐条「第 N 条返回了原文」的判定。默认关闭。
+
+**验证**
+- 干净选区（记事本正文两行）：`blocks=2 updates=1`，状态「画面未变 · 已更新 1 次」，
+  贴纸为「状态会大幅下降。」「说到色情RPG，就是这个难…」（`docs/ui-shots-qml/live_ja_clean.png`）。
+- 之前那张截图里出现的「文件(F) 编辑(E)」「Studious 截图/文本翻译」是**测试时我自己的窗口
+  压在选区上**被 OCR 读到了，不是产品 bug；把窗口移开即消失。
+## 本地 LLM 生命周期：选中即启动、切走即停、空闲回收（2026-11-08）
+
+用户要求：
+1. 选中「本地 LLM」时就把 llama-server 拉起来（不等第一次翻译）。
+2. 配置里加开关：打开 = 切到别的引擎就停；关闭 = 一直留到软件退出。
+3. 再加「空闲多少分钟自动关」，并且只在上面那个开关关闭时可用，否则置灰。
+
+**改动**
+- `frontend/src/AppBackend.cpp` `setEngineId()`：`next == "llm-local"` 且服务没跑时调
+  `startLocalServer()`（缺资产会自己提示去资产页，不会误拉进程）。
+- 同一个 `setEngineId()`：切走且 `localStopOnSwitch` 打开时 `shutdownLocalEngine()`（原有逻辑）。
+- 构造函数：`m_localPreheat || m_engineId == "llm-local"` 时延迟 1.5 秒预热 ——
+  「记住的选择」也算选中，否则开局显示「本地 LLM（未就绪）」还要再吃一次冷启动。
+- `setLocalStopOnSwitch()`：打开时停掉空闲计时器，关闭时重新按空闲阈值计时。
+- `frontend/qml/pages/ConfigPage.qml`：行名「切走就停」→「切换引擎时关闭」；
+  「空闲自动停」开关与「空闲阈值」的数字框都加 `enabled: !backend.localStopOnSwitch`，
+  并给出「已关闭：上面那个开关打开时，切走就会停」的解释文案。
+  这四行（切换引擎时关闭 / 启动时预热 / 空闲自动停 / 空闲阈值）从「高级设置」里
+  挪到本地 LLM 卡的主干上：它们是服务策略，不是采样参数。
+
+**验证**
+- 注册表 engine 先置 `web`，用 `STUDIOUS_UI_SET="engineId=llm-local"` 启动：12 秒内
+  `llama-server` 进程出现，退出后归零（Job Object 收尾正常）。
+- 重启时 engine 已经是 `llm-local`（记住的选择）：1.5 秒后进程起来，
+  配置页显示「运行中 · 后端 vulkan · 端口 18080 · PID · 启动耗时 1760 ms」。
+- 截图 `docs/ui-shots-qml/config_local_on2.png`：切换引擎时关闭=开，空闲自动停/空闲阈值置灰。
+## 本地 MT 常驻 + 本地 LLM 单实例（2026-11-09）
+
+**做了什么**
+1. `LocalMtTranslator` 增加 `warmPair(pair)` / `unloadAll()` / `loadedCount()`，`m_mutex` 改 `mutable`，四个入口全部加锁（共享实例会被三个 `QuickTranslate` 在不同工作线程同时调到）。
+2. `QuickTranslate` 暴露进程级共享实例：`sharedMt()` / `warmMtAll()` / `unloadMtAll()` / `mtLoadedPairs()` / `setMtUsedHook()` / `setLocalEngineStarter()`。`sharedMt()` 里比对 `LocalEngine::modelsDir()`，资产根迁移后重建，不会捧着旧路径。
+3. `TranslateJobRequest` 增加 `sharedMt`，`TranslateJob` 用 `BorrowedTranslator` 适配器把工厂那个临时 `local-mt` 换掉（Router 仍然只看到 `ITranslator*`）。
+4. 设置项 `settings/mt/preload`（默认 false）与 `settings/mt/idleMinutes`（0–180，0 = 不释放，默认 10）；`AppBackend` 四个属性 + `m_mtIdleTimer` + `touchMtIdle()`；翻译成功经 `setMtUsedHook` 重置计时。
+5. `ConfigPage.qml` 本地 MT 卡新增「开机自启」「空闲释放」两行，`enabled` 绑 `backend.mtPacksInstalled`（第二行还要 `mtPreload`），置灰 0.45 透明。
+
+**修的缺陷（用户报「截图/实时不能用本地 LLM」）**
+- `AppBackend` 以前持有自己的 `LocalEngine m_localEngine`，而 `QuickTranslate` 用匿名命名空间里的另一个 `static LocalEngine *`：配置页启动的是 A，截图/实时检查的是 B → 一直提示「本地 LLM 还没启动」，点了启动也没用（用户看到的现象）。现在 `sharedLocalEngine()` 是唯一实例，`AppBackend` 的 23 处调用全部改过去，成员删除。
+- `QuickTranslate::translate()` 的「本地 LLM 未运行」分支改成「有 starter 就先发起启动 + 标记可重试」，文案「本地 LLM 正在启动，稍后自动重试…」；`ScreenFlow` / `MiniSession` 各加 `m_retryLeft`（1 s 一次、上限 20），`LiveSession` 每帧天然重试。
+
+**踩的坑**
+- `class LocalEngine;` 前向声明写在 `studio::ui` 里会声明成另一个类，编译报 `invalid use of incomplete type`；必须放全局作用域。
+- `lock_guard` 绑不上 const mutex（`discards qualifiers`）→ 成员改 `mutable`。
+- `ConfigPage.qml` 没有 `page.labelWidth`（那是 `components/FieldRow.qml` 的 132），新行缩进要写字面量。
+- 含中文的 QML 片段不能走 PowerShell here-string（引号被 GBK 解析炸），改成写 `_mt_rows.qmlpart` 再按行拼接。
+
+**验证**
+- 构建 `[76/76]`；`--smoke … --engine llm-cloud` → 6 ms 命中 1/1；`--local --local-model model.qwen2.5-0.5b-instruct.q4km` → 命中 1/1、70 ms 停服务、`[DONE]`。
+- `[mt] warmed 6/6 language pair(s)`（开机自启全量预热）；`[mt] unloaded 6`（空闲释放）。
+- `studious_en.ts` 555 条 / `unfinished = 0`。
+## 实时翻译切本地 LLM 卡死整机：启动风暴（2026-11-09）
+
+**证据（`%APPDATA%\studious\assets\logs\llama-server.log`）**
+- 23:54:52 起 18080，23:54:53 又起一个 18081（上一个还占着端口），23:55:05 再起 18094、18095 —— 中间 18082~18093 全被跳过，说明当时已经有一串 llama-server 活着、每起来一个就把端口再往上推一格。
+- 全程 start 记录 240 条；崩溃窗口里一秒内出现 2 条、同一分钟 4 条。每次 start 都要把 1.5B 的 q4km 权重重新塞进显存（Vulkan），叠起来就是显存被打满 → 驱动挂起 → 整机卡死。
+- 结论：**不是模型太大，也不是 Vulkan 后端本身的问题，是启动被反复触发**。
+
+**为什么会反复触发**
+- `QuickTranslate::translate()` 在本地 LLM 没跑时会给 `starter()`（= `AppBackend::startLocalServer`）发一次请求，并标记 `lastFailureRetryable`。
+- 实时翻译每 600 ms 一帧、截图重试每 1 s、小窗 1 s，全都在「引擎还在启动」这段时间里继续报「没在跑」→ 每次都再排一轮启动。
+- `startLocalServer()` 用 `QTimer::singleShot(0)` 把阻塞挪出当前帧，于是这些请求排成队列；`LocalEngine::ensureStarted()` 开头就 `shutdown()` 再起新的，既没有「正在启动」标志也没有冷却，队列里每个都真的拉了一次进程。
+
+**修法（四道闸）**
+1. `LocalEngine`：新增 `std::atomic_bool m_starting` + `isStarting()`；`ensureStarted()` 入口 `exchange(true)`，后到的调用直接返回「本地引擎正在启动，等它起来再试。」（RAII 复位，任何 return 都会清标志）。
+2. `AppBackend::startLocalServer()`：`m_localStartQueued` + `isStarting()` + `isRunning()` 三重判断，先到的那一次才排 singleShot；`runLocalServerStart()` 一进来就清标记。
+3. `QuickTranslate`：只在 `!isStarting()` 且**距上次触发 &gt; 5 s**（`starterCooldownOver()`，静态 `QElapsedTimer`）时才调 starter；正在启动时只回「本地 LLM 正在启动，稍后自动重试…」。
+4. `LiveSession`：可重试失败时 `m_retrySkipFrames = 3`，接下来三帧直接跳过（不抓屏、不发请求），状态显示「本地 LLM 正在启动，稍后自动重试…」。
+
+**验证**
+- 连打 10 次 `startLocalServer`（`STUDIOUS_UI_CALL` 每 100 ms 一次）→ 日志只新增 **1** 条 start（改前是每打一次起一个）。
+- `--smoke … --local --local-model model.qwen2.5-1.5b-instruct.q4km` → 你好，世界！、97 ms 停服务、exit 0。
+- 构建 `[11/11] Linking`。
+## 应用级日志 + 双击 logo 打开日志窗口（2026-11-09）
+
+**做了什么**
+- rontend/src/LogSink.h/.cpp（新）：直接写 qInstallMessageHandler，4000 行环形缓冲（QMutex 保护）、落盘 `%APPDATA%\studious\logs\studious.log`、8 MB 轮转成 studious.1.log、200 ms 合并 notify、lushToDisk() 在 boutToQuit 落地。**必须转发旧 handler**，否则 --smoke 的终端输出会消失。
+- AppBackend：logText/logFilePath/logLines + clearLogs/copyLogs/openLogFile/openLogDir，QML 不再自己拼 URL。
+- rontend/qml/LogWindow.qml（新，900×600、无系统标题栏）：等宽正文、跟随最新、复制、清空、打开所在目录、打开文件；标题条可拖动、双击最大化。
+- Main.qml：logo 上加 HoverHandler（手型）+ TapHandler.onDoubleTapped → 显示并前置日志窗口；logo 不在拖拽区，双击不会被 startSystemMove 吃掉。
+- 补了约 10 处 qWarning（资产枚举失败、打开历史目录失败、翻译未就绪、剪贴板为空、切本地 LLM 缺资产等），不改行为。
+
+**踩的坑**
+- TextElideRight 不是枚举值，QML 里是 Text.ElideRight；写成前者只在运行时刷 ReferenceError，静态检查看不出来。
+- 链接偶发 ld.exe: cannot open output file studious.exe: Permission denied，Get-Process 又看不到进程——等两三秒重试即可（杀毒/索引器短暂占用）。
+- 子代理给的 LogWindow.qml 用的是旧的 ackend.localLogTail/localLogPath，且清空是"视图摘除"假清空；集成时全部换成 LogSink 的真接口。
+
+**验证**
+- 构建 [5/5]，Generated 566 translation(s) (566 finished and 0 unfinished)。
+- STUDIOUS_UI_CALL='logWindow:show@1500' STUDIOUS_UI_SHOT='logWindow' → [ui-shot] window 'logWindow' 900x600 at (404,254) visible=1，零 QML 报错；截图 docs/ui-shots-qml/log_window.png（标题条 + 5 行真实日志 + 「5 行 · C:/Users/hua/AppData/Roaming/studious/logs/studious.log」）。
+- 双击 logo 的真实鼠标事件未自动化（--ui-shot 下用 logWindow:show 代替），代码路径已审阅。
+## 1.0.0 发布（2026-11-09）
+
+- `version.json` 升到 `1.0.0`（codename 仍是 `Erstling`，channel `separate` / `test`），README 两处版号同步。
+- 本次发布的实质内容：LogSink + 独立日志窗口、本地 MT 常驻（自启/空闲释放/无语言库禁用）、本地 LLM 单实例与启动风暴防护、DXGI 抓屏兜底、OCR 换 PP-OCRv5 多语种、实时/截图对「原文原样退回」按未翻译处理、本地 MT 长段按句切、缓存与端口竞态修复、资产来源选择性校验与 API Key 加密。
+- 发布后仍未做：真实双击之外的按键录制自动化、4000 行日志压力、跨 8 MB 的写中轮转、模型文件的启动前校验。

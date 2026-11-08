@@ -23,6 +23,18 @@ struct AssetStatus {
     QString    detail;             // 已本地化的说明，如"缺少关键文件：llama-server.exe"
 };
 
+// 这条资产是怎么进到磁盘上的。决定「启动前要不要做内容校验」：
+//   · Download —— 我们自己按清单下载安装的，哈希与签名都有据可查，必须校验；
+//   · Import   —— 用户自己从文件导入的，没有可信来源，只保证"文件还在、能读"，
+//                 不做 sha256 比对（用户本来就是要装自己的文件）。
+// Origin 记在 <root>/state/asset-origins.json；旧版本装的资产没有记录，算 Unknown，
+// 按 Download 处理（历史行为：那时只有下载一条路）。
+enum class AssetOrigin {
+    Unknown,
+    Download,
+    Import,
+};
+
 // 资产安装状态的唯一真源：清单 + 安装根目录 → 每个资产装没装、多大、坏没坏。
 //
 // 线程约束：内部有状态缓存，非线程安全。前端在主线程用、下载在工作线程用的话，
@@ -55,10 +67,15 @@ public:
 
     // Downloader / 手动导入完成后登记。会重新算一次状态，
     // 登记后仍不完整（缺关键文件）就返回 false 并把原因写进 error。
+    // origin 决定以后启动前要不要做内容校验（见 AssetOrigin）。
     bool markInstalled(const QString &id, QString *error = nullptr);
+    bool markInstalled(const QString &id, AssetOrigin origin, QString *error = nullptr);
+
+    // 安装来源；没有记录时返回 AssetOrigin::Unknown。
+    AssetOrigin originOf(const QString &id) const;
 
     // 安装后校验：状态缓存只判"存在且非空"，这里按清单做内容校验。
-    //   单文件资产  → 整份文件 sha256 必须等于清单里的 sha256；
+    //   单文件资产  → 整份文件 sha256 必须等于清单里的 sha256（Import 来源跳过哈希）；
     //   目录型资产  → 清单点名的每个关键文件都要存在、非空、且落在安装目录内，
     //                 运行时资产额外要求至少点名了一个原生可执行文件（.exe/.dll/.so/.dylib）。
     // 目录型资产的整包 sha256 覆盖的是压缩包，解压后无法逐字节复原，故只能做上面这些检查。
@@ -80,6 +97,13 @@ private:
     Manifest m_manifest;
     mutable QHash<QString, AssetStatus> m_cache;
     mutable bool m_dirty = true;
+
+    // <root>/state/asset-origins.json：{"<assetId>": "download" | "import"}
+    QString originsPath() const;
+    void ensureOriginsLoaded() const;
+    void saveOrigin(const QString &id, AssetOrigin origin);
+    mutable QHash<QString, AssetOrigin> m_origins;
+    mutable bool m_originsLoaded = false;
 };
 
 } // namespace studious::asset

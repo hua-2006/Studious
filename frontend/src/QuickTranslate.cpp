@@ -2,13 +2,19 @@
 
 #include "AppSettings.h"
 #include "LocalEngine.h"
+#include "EngineIds.h"
+#include "Languages.h"
 #include "TranslateJob.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QStandardPaths>
+
+#include <functional>
+#include <memory>
 
 #include <studious/cache/TranslationCache.h>
 #include <studious/i18n/L10n.h>
@@ -20,92 +26,11 @@ namespace {
 // 后端 i18n 的别名（studious::ui::i18n 已经被 Strings.h 占了，这里换个名字免得撞）。
 namespace l10n = studious::i18n;
 
-// ─── 引擎 id 换算 ────────────────────────────────────────────────────────────
-// 与 AppBackend.cpp 匿名 namespace 里那四个函数（toUiEngineId / toRouterEngineId /
-// sanitizedPriority / toRouterPriority）**逐条等价**。它们是 .cpp 内部符号、没导出，
-// 为了保证「界面设置 → 后端 id」只有一套语义，这里照抄并保持同一份注释意图：
-//   llm-cloud → router "llm"；llm-local → 空（它不经 Router，由 LocalEngine 单独承担）。
-
-QStringList knownUiEngineIds()
-{
-    return {QStringLiteral("web"), QStringLiteral("llm-cloud"),
-            QStringLiteral("llm-local"), QStringLiteral("local-mt")};
-}
-
-QStringList defaultUiEnginePriority()
-{
-    return {QStringLiteral("llm-local"), QStringLiteral("local-mt"),
-            QStringLiteral("llm-cloud"), QStringLiteral("web")};
-}
-
-// 任意写法 → 规范界面 id。认不出来 / "auto" / 空 → 空串，代表「自动」。
-QString toUiEngineId(const QString &raw)
-{
-    const QString id = raw.trimmed().toLower();
-    if (id == QLatin1String("web")) {
-        return QStringLiteral("web");
-    }
-    if (id == QLatin1String("llm-cloud") || id == QLatin1String("llm")) {
-        // router 的老 id "llm" 在设置里靠 useLocalEngine 分流；走到这里按云端算（同 AppBackend）。
-        return QStringLiteral("llm-cloud");
-    }
-    if (id == QLatin1String("llm-local") || id == QLatin1String("llamacpp")
-        || id == QLatin1String("local-llm")) {
-        return QStringLiteral("llm-local");
-    }
-    if (id == QLatin1String("local-mt") || id == QLatin1String("localmt")) {
-        return QStringLiteral("local-mt");
-    }
-    return QString();
-}
-
-// 界面 id → Router 引擎 id。llm-local 返回空：它不进优先级链。
-QString toRouterEngineId(const QString &uiId)
-{
-    if (uiId == QLatin1String("llm-cloud")) {
-        return QStringLiteral("llm");
-    }
-    if (uiId == QLatin1String("llm-local")) {
-        return QString();
-    }
-    return uiId;
-}
-
-// 只含已知 id、无重复、不缺项（缺的按默认顺序补在后面）。
-QStringList sanitizedPriority(const QStringList &input)
-{
-    const QStringList known = knownUiEngineIds();
-    QStringList out;
-    for (const QString &raw : input) {
-        const QString uiId = toUiEngineId(raw);
-        if (uiId.isEmpty() || out.contains(uiId)) {
-            continue;
-        }
-        if (known.contains(uiId)) {
-            out.append(uiId);
-        }
-    }
-    for (const QString &id : defaultUiEnginePriority()) {
-        if (!out.contains(id)) {
-            out.append(id);
-        }
-    }
-    return out;
-}
-
-// 界面优先级 → Router 优先级（自动模式下 req.priority 就用这个，Router 才会降级）。
-QStringList toRouterPriority(const QStringList &uiOrder)
-{
-    QStringList out;
-    for (const QString &uiId : uiOrder) {
-        const QString id = toRouterEngineId(uiId);
-        if (id.isEmpty() || out.contains(id)) {
-            continue;
-        }
-        out.append(id);
-    }
-    return out;
-}
+// 引擎 id 换算统一在 EngineIds（界面 id ↔ Router id 只有一份实现）。
+using studious::ui::engine::sanitizePriority;
+using studious::ui::engine::toRouter;
+using studious::ui::engine::toRouterPriority;
+using studious::ui::engine::toUi;
 
 // ─── 段落切分 ────────────────────────────────────────────────────────────────
 
@@ -275,7 +200,7 @@ QString describeEngine(const QString &uiId, const AppSettings &settings)
 // 自动模式：按界面优先级找出第一个「看起来能用」的引擎，探不出来就老实写「自动」。
 QString describeAutoEngine(const AppSettings &settings, const QString &srcLang, const QString &dstLang)
 {
-    const QStringList order = sanitizedPriority(settings.enginePriority);
+    const QStringList order = sanitizePriority(settings.enginePriority);
     for (const QString &uiId : order) {
         if (engineLooksUsable(uiId, settings, srcLang, dstLang)) {
             return describeEngine(uiId, settings);
@@ -308,6 +233,8 @@ studious::cache::TranslationCache *processCache()
 // 所以 ensureStarted() 是幂等命中，不会互相热重启。
 // 故意不 delete（与 main.cpp 的 sharedCache 同一套理由）：退出时靠 aboutToQuit 关服务，
 // 对象本身留着，避免 QProcess 在静态析构阶段踩到已经拆掉的 Qt 基础设施。
+} // namespace
+
 LocalEngine &sharedLocalEngine()
 {
     static LocalEngine *engine = nullptr;
@@ -323,7 +250,85 @@ LocalEngine &sharedLocalEngine()
     return *engine;
 }
 
+// ─── 进程级共享的本地 MT ────────────────────────────────────────────────────
+
+namespace {
+std::function<void()> &mtUsedHook()
+{
+    static std::function<void()> hook;
+    return hook;
+}
+
+std::function<void()> &localEngineStarter()
+{
+    static std::function<void()> starter;
+    return starter;
+}
+
+// 启动冷却：一次拉起要 2~10 秒，这期间再来多少次「它没在跑」都只能等。
+// 光看 isStarting() 不够 —— 上一轮刚失败（比如端口被占）时标志已经落下，
+// 调用方会立刻再拉一次，变成一个「失败-重拉」的紧密循环。
+bool starterCooldownOver()
+{
+    static QElapsedTimer clock;   // 默认构造是 invalid，第一次必定放行
+    static bool first = true;
+    if (first || !clock.isValid() || clock.elapsed() > 5000) {
+        first = false;
+        clock.restart();
+        return true;
+    }
+    return false;
+}
 } // namespace
+
+studious::translate::LocalMtTranslator &sharedMt()
+{
+    // 资产根可能被用户改过（设置里可迁移），路径变了就换一个新实例，
+    // 旧实例随之析构，内存也一起还回去。
+    static QString root;
+    static std::unique_ptr<studious::translate::LocalMtTranslator> instance;
+    const QString wanted = LocalEngine::modelsDir();
+    if (!instance || root != wanted) {
+        instance = std::make_unique<studious::translate::LocalMtTranslator>(wanted);
+        root = wanted;
+    }
+    return *instance;
+}
+
+int warmMtAll()
+{
+    int loaded = 0;
+    const QStringList pairs = sharedMt().installedPairs();
+    for (const QString &pair : pairs) {
+        if (sharedMt().warmPair(pair)) {
+            ++loaded;
+        }
+    }
+    qInfo("[mt] warmed %d/%lld language pair(s)", loaded, static_cast<long long>(pairs.size()));
+    return loaded;
+}
+
+void unloadMtAll()
+{
+    const int before = sharedMt().loadedCount();
+    sharedMt().unloadAll();
+    qInfo("[mt] unloaded %d language pair(s)", before);
+}
+
+int mtLoadedPairs()
+{
+    return sharedMt().loadedCount();
+}
+
+void setMtUsedHook(std::function<void()> hook)
+{
+    mtUsedHook() = std::move(hook);
+}
+
+void setLocalEngineStarter(std::function<void()> starter)
+{
+    localEngineStarter() = std::move(starter);
+}
 
 QuickTranslate::QuickTranslate(QObject *parent)
     : QObject(parent)
@@ -349,7 +354,7 @@ void QuickTranslate::setEngineOverride(const QString &uiEngineId)
     // 存空串也算"覆盖"，语义是「自动」：实时翻译里选「自动/跟随设置」是两件事，
     // 调用方用 clearEngineOverride() 表达后者。
     m_hasEngineOverride = true;
-    m_engineOverride = toUiEngineId(uiEngineId);
+    m_engineOverride = toUi(uiEngineId);
 }
 
 void QuickTranslate::clearEngineOverride()
@@ -363,9 +368,15 @@ QString QuickTranslate::lastError() const
     return m_lastError;
 }
 
+bool QuickTranslate::lastFailureRetryable() const
+{
+    return m_retryable;
+}
+
 bool QuickTranslate::translate(const QString &text, const QString &srcLang, const QStringList &dstLangs)
 {
     m_lastError.clear();
+    m_retryable = false;
 
     // 并发调用直接拒绝，不排队：三页各自持有一个 QuickTranslate，排队只会让
     // 「刚截的图」等「上一张的译文」，用户看到的是延迟而不是新结果。
@@ -398,10 +409,10 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
     // 每次都重读设置：用户刚改完引擎/模型/代理就点翻译，必须立刻生效。
     const AppSettings settings = AppSettings::load();
 
-    const QString src = srcLang.trimmed().isEmpty() ? QStringLiteral("auto") : srcLang.trimmed();
+    const QString src = langs::normalizeSource(srcLang);
     // 优先用调用方指定的引擎（实时翻译工具栏的下拉），否则回到全局设置。
-    const QString uiEngine = m_hasEngineOverride ? toUiEngineId(m_engineOverride)
-                                                 : toUiEngineId(settings.engineId);   // 空 = 自动
+    const QString uiEngine = m_hasEngineOverride ? toUi(m_engineOverride)
+                                                 : toUi(settings.engineId);   // 空 = 自动
     const bool wantLocal = uiEngine == QLatin1String("llm-local");
 
     TranslateJobRequest req;
@@ -416,8 +427,8 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
 
     // 自动模式不写 req.engineId（写了 Router 就不降级了），只给优先级；
     // 显式选了云端/本地 MT 才写 routerEngineId（"llm" / "local-mt" / "web"）。
-    req.engineId = toRouterEngineId(uiEngine);
-    req.priority = toRouterPriority(sanitizedPriority(settings.enginePriority));
+    req.engineId = toRouter(uiEngine);
+    req.priority = toRouterPriority(sanitizePriority(settings.enginePriority));
 
     if (settings.cacheEnabled) {
         req.cache = processCache();
@@ -426,6 +437,10 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
         req.cache = nullptr;
         req.cacheEnabled = false;
     }
+
+    // 本地 MT 一律用进程级共享实例（界面上的「开机自启 / 空闲关闭」就是它的生命周期）。
+    // Router 只借指针，所有权仍在这里 —— TranslateJob 里用不删除的 unique_ptr 包一层。
+    req.sharedMt = &sharedMt();
 
     QString label;
     if (wantLocal) {
@@ -437,6 +452,27 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
         // 现在改成「没起就报错」，启动只留在配置页那个显式按钮里做。
         LocalEngine &local = sharedLocalEngine();
         if (!local.isRunning()) {
+            // 用户在配置页之外选了本地 LLM（截图 / 实时 / 小窗）时，这里顺手把它拉起来：
+            // 启动本身是异步的（不阻塞界面），调用方看到 lastFailureRetryable() 就隔一会儿重试。
+            //
+            // 但「正在启动」期间绝不能再触发一次：每次启动都要重新加载权重，实时翻译
+            // 每 600 ms 一帧全打过来就是一个启动风暴（实测一秒开了 6 个 llama-server，
+            // 显存被反复占满，整机卡死）。所以这里既看 isStarting()，又加 5 秒冷却。
+            if (auto &starter = localEngineStarter(); starter && !local.isStarting() && starterCooldownOver()) {
+                starter();
+                m_retryable = true;
+                m_lastError = l10n::s("本地 LLM 正在启动，稍后自动重试…",
+                                      "Local LLM is starting; retrying in a moment…");
+                emit errorOccurred(m_lastError);
+                return false;
+            }
+            if (local.isStarting()) {
+                m_retryable = true;
+                m_lastError = l10n::s("本地 LLM 正在启动，稍后自动重试…",
+                                      "Local LLM is starting; retrying in a moment…");
+                emit errorOccurred(m_lastError);
+                return false;
+            }
             m_lastError = l10n::s(
                 "本地 LLM 还没启动：先在「配置」页的「本地 LLM」里点「启动」，"
                 "或者换成云端 LLM / 本地 MT。",
@@ -534,6 +570,10 @@ void QuickTranslate::onJobFinished(const TranslateJobResult &result, qint64 elap
     }
 
     out.ok = true;
+    // 本地 MT 刚干过活：通知外部把「空闲释放」计时器往后推。
+    if (auto &hook = mtUsedHook(); hook) {
+        hook();
+    }
     QStringList problems;
     for (const QString &dst : m_pendingDstLangs) {
         const QStringList got = result.outcome.byLang.value(dst);

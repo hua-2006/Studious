@@ -9,6 +9,8 @@ Rectangle {
     // outline | tonal | primary | text | danger
     property string variant: "outline"
     property bool buttonEnabled: true
+    // 标签字号：默认跟正文一致；紧凑场景（日志窗标题栏那种 26 高的条）传 Theme.fontSizeSmall。
+    property int fontPixelSize: Theme.fontSizeBody
     signal clicked()
 
     readonly property bool isPrimary: variant === "primary"
@@ -36,7 +38,7 @@ Rectangle {
         anchors.centerIn: parent
         text: button.text
         font.family: Theme.fontUi
-        font.pixelSize: Theme.fontSizeBody
+        font.pixelSize: button.fontPixelSize
         font.weight: button.isPrimary ? Font.DemiBold : Font.Normal
         color: button.isPrimary ? Theme.primaryText
                : button.isDanger ? Theme.danger

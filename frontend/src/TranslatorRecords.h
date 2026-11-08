@@ -63,29 +63,16 @@ public:
     bool isOpen() const;
     QString lastError() const;
 
-    // key 是记录的唯一标识：给实时翻译的父记录用
-    // （实时一次会话一条父记录 + N 条子记录，子记录都带同一个 parentKey）。
-    //
     // 成功返回新记录 id（> 0）；失败返回 0，原因见 lastError()。
-    //
-    // 推荐 parentKey 用 QStringLiteral("r%1").arg(父记录 id)：
-    //   表里只有 parent 列、没有"父行自己的 key"列，用一次性 uuid 的话重启后
-    //   就再也无法从某条父记录反查出它的子记录（见 README 里的遗留风险）。
-    qint64 add(const TranslationRecord &rec, const QString &parentKey = QString());
+    // 一次会话写一行（原文与译文各自按换行拼接），不做父子记录展开。
+    qint64 add(const TranslationRecord &rec);
 
-    // 列表，默认 100 条，按时间倒序。
-    // **只返回顶层行**（parent 为空）：实时翻译的子记录不混进主列表，
-    // 展开某一行时用 children(parentKey) 单独取。
-    // search 只匹配 original / translated，空串 = 不过滤。
+    // 列表，默认 100 条，按时间倒序。search 只匹配 original / translated，空串 = 不过滤。
+    // 表里的 parent 列是早期「父记录 + 子记录」设计的遗留，当前一律写空串，
+    // 查询仍然兼容历史上可能写入过非空 parent 的行（不会漏掉它们）。
     QVector<TranslationRecord> list(int limit = 100, const QString &search = QString()) const;
 
-    // 某个 parentKey 下的子记录，按时间倒序（最新在上，与 B7 的子列表一致）。
-    // parentKey 为空 = 没有子记录，返回空列表（这不算错误）。
-    QVector<TranslationRecord> children(const QString &parentKey) const;
-
     // 删一条。id 不存在时返回 false 并说明原因。
-    // 注意：删父记录**不会**连带删它的子记录（父行里没有 key，反查不到）；
-    // 要整组删，先 children() 拿 id 逐条 remove()。
     bool remove(qint64 id);
 
     // 清空全部，返回删掉的行数；出错返回 -1。

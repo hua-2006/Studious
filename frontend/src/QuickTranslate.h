@@ -21,10 +21,39 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 class TranslateJob;
 struct TranslateJobResult;
+class LocalEngine;   // 定义在 LocalEngine.h（全局命名空间）
+
+namespace studious::translate {
+class LocalMtTranslator;
+}
 
 namespace studious::ui {
+
+// ─── 进程级共享的本地 LLM 引擎 ──────────────────────────────────────────────
+// 以前 AppBackend 自己持有一个 LocalEngine、这里的 CLI/快捷入口另建一个：
+// 界面从配置页启动的是 A，截图/实时/小窗检查的是 B —— B 永远「没在跑」，
+// 于是「本地 LLM 没启动」这条错误永远消不掉，还会每次重试都重复拉起一遍。
+// 现在全进程只有这一个实例（AppBackend 也用它的引用）。
+LocalEngine &sharedLocalEngine();
+// ─── 进程级共享的本地 MT 实例 ───────────────────────────────────────────────
+// 为什么要有：本地 MT 的 ONNX 会话建一次要几百毫秒、占几十 MB。以前每个翻译作业
+// 都新建一个 LocalMtTranslator，作业结束就释放 —— 每次翻译都重新加载。
+// 现在三页共用这一个实例（LocalMtTranslator 内部加了锁），界面上：
+//   「开机自启」= 启动时就 warmMtAll()；「空闲关闭」= 到点 unloadMtAll()。
+studious::translate::LocalMtTranslator &sharedMt();
+int warmMtAll();                       // 预热所有已安装的语言对，返回成功数
+void unloadMtAll();                    // 释放全部常驻语言对
+int mtLoadedPairs();                   // 当前常驻了几个语言对
+// 每次真正用本地 MT 翻完一次就回调一次，给 AppBackend 的空闲计时器续命。
+void setMtUsedHook(std::function<void()> hook);
+
+// 本地 LLM 没起来时，由 AppBackend 注入一个「异步启动」的动作。
+// 注入之后 QuickTranslate 不再让用户自己去配置页点启动，而是发起一次并让调用方重试。
+void setLocalEngineStarter(std::function<void()> starter);
 
 // 一次请求的结果：按目标语言分组，每组与输入段落 1:1 等长（缺的填空串）。
 struct QuickTranslateResult {
@@ -50,6 +79,10 @@ public:
     // 上一次 translate() 被同步拒绝的原因（busy / 空输入 / 没有目标语言 / 本地引擎起不来）。
     // 异步失败的原因在 finished().error 里，不在这里。
     QString lastError() const;
+
+    // 上一次同步拒绝是不是「等一下就会好」的（目前只有本地 LLM 正在启动这一种）。
+    // 调用方看到 true 应该自己安排重试，而不是把错误摆到用户脸上。
+    bool lastFailureRetryable() const;
 
     // text 会按空行切段（连续空行算一个分隔，段内单换行保留）。
     // dstLangs 至少一个；srcLang 可为 "auto"/空。
@@ -83,6 +116,7 @@ private:
 
     // 在途请求的快照：结果回来时据此补齐段落 / 回填引擎名（期间设置可能已被改）。
     QString m_lastError;
+    bool m_retryable = false;
     QString m_pendingEngineLabel;   // 下发前就拼好，避免回来时设置已变
     QStringList m_pendingDstLangs;
     QStringList m_pendingParagraphs;

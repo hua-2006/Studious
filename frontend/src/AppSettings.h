@@ -129,6 +129,19 @@ struct AppSettings {
     // 空闲判定阈值，分钟（键 settings/llm/localIdleMinutes，默认 10，合法 1~240）。
     int localIdleMinutes = 10;
 
+    // ---- 本地 MT 的常驻策略 ----
+    //
+    // 本地 MT 是进程内 ONNX，没有独立服务，所以没有「启动/端口」这些概念；
+    // 这里管的是「模型什么时候加载进内存」：
+    //   开 = 软件一启动就把已安装的语言对全部加载好（第一次翻译不用等）；
+    //   关 = 谁用到谁加载（省内存，第一次翻译多等几百毫秒）。
+    // 键 settings/mt/preload，默认 false。
+    bool mtPreload = false;
+
+    // 空闲多少分钟把常驻的语言对释放掉（键 settings/mt/idleMinutes，默认 10，合法 1~180）。
+    // 0 视为「不自动释放」。
+    int mtIdleMinutes = 10;
+
     // ---- 三个新入口（截屏翻译 / 小窗翻译 / 实时翻译）的共用设置 ----
     //
     // 设计稿 docs/TempUI/flows.html 的 A/B/C 三页共用一份 D「二级设置」，
@@ -177,17 +190,11 @@ struct AppSettings {
     // 太小会把引擎压死，太大会看不出"实时"，所以夹得很紧。
     int liveIntervalMs = 600;
 
-    // 实时翻译锁本地引擎（键 settings/live/engineLocked，默认 true）：
-    // 云端 / web 单次 1 秒以上，做实时没有意义，默认逼用户走本地。
-    bool liveEngineLocked = true;
-
     // 只在内容变化时才翻译（键 settings/live/onlyOnChange，默认 true）：
     // 每一帧都翻会把引擎压满，而且同样的句子重复请求也只是吃缓存。
     // 关掉 = 每帧都重翻，用来验证"引擎是不是真的在跑"。
     bool liveOnlyOnChange = true;
 
-    // 记录里存哪一份文本（键 settings/record/saveMode）："original"（OCR 原文）或 "current"。
-    QString recordSaveMode = QStringLiteral("original");
 
     // ---- 翻译历史（键 settings/history/enabled、settings/history/dir）----
     //
@@ -199,9 +206,14 @@ struct AppSettings {
 
     // 三个全局热键（键 settings/hotkey/capture|mini|live）。
     // 空串 = 不注册（界面上显示「未设置」）。格式 "Ctrl+Alt+S"。
-    QString hotkeyCapture = QStringLiteral("Ctrl+Alt+S");
-    QString hotkeyMini = QStringLiteral("Ctrl+Alt+W");
-    QString hotkeyLive = QStringLiteral("Ctrl+Alt+L");
+    // 默认一律留空：预置组合键很容易和用户机器上已有的软件撞车，让用户自己录。
+    QString hotkeyCapture;
+    QString hotkeyMini;
+    QString hotkeyLive;
+    // 划词翻译：读剪贴板 → 填进小窗 → 短文本直接翻。同样默认空。
+    QString hotkeySelection;
+    // 打开主页：把主窗口从托盘/后台叫到最前。同样默认空。
+    QString hotkeyHome;
 
     // 界面语言：空 = 跟随系统；"zh" = 强制中文；"en" = 强制英文。
     //    // 只影响**界面文案与后端本地化文案**（后端通过 i18n::setLanguage 覆盖），
@@ -215,6 +227,10 @@ struct AppSettings {
 
     // 字号缩放百分比（80~150，默认 100）。QML 侧 Theme.fontScale = 这个值 / 100。
     int fontScale = 100;
+
+    // 译文正文的字号（pt）。和上面的 fontScale 是两件事：fontScale 缩放整个界面，
+    // 这个只管译文/原文正文，读长文时单独放大，不动控件。默认 13。
+    int readingFontSize = 13;
 
     // 强调色种子（QSettings 键 ui/accent），形如 "#RRGGBB"。
     // 空 = 用默认紫 #6750A4；load() 里非法值同样按空处理。

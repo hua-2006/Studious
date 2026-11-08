@@ -43,6 +43,8 @@ class MiniSession final : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY phaseChanged)
     // 输入框左上角那个小标签：手动输入 / 划词获取
     Q_PROPERTY(QString sourceTag READ sourceTag NOTIFY sourceTagChanged)
+    // 划词热键的一行说明（图片 / 空 / 太长只填不翻）；空串 = 不显示。
+    Q_PROPERTY(QString noticeText READ noticeText NOTIFY noticeTextChanged)
 
 public:
     explicit MiniSession(QObject *parent = nullptr);
@@ -76,6 +78,13 @@ public:
     Q_INVOKABLE void saveRecord();
     // 「划词获取」：目前读系统剪贴板（真正的划词要模拟 Ctrl+C，见 TODO.md）。
     Q_INVOKABLE bool grabClipboard();
+    // 划词热键的入口：读剪贴板 → 填进输入框 → 短文本直接开翻。
+    // 图片不接（剪贴板里只有图就直接返回），富文本取纯文本，
+    // 超过 kAutoTranslateChars 的长文只填不翻 —— 长文自动翻容易连标点都错位，
+    // 让用户在窗口里自己确认一遍再点「翻译」。
+    Q_INVOKABLE bool grabSelection();
+    // 上一次 grabSelection 的结果说明（图片 / 太长 / 空），界面显示一行就够。
+    QString noticeText() const { return m_noticeText; }
     // 打开窗口时把焦点送进输入框：QML 自己 requestActivate()，这里只清上一次的错。
     Q_INVOKABLE void prepare();
 
@@ -97,6 +106,8 @@ signals:
     void errorTextChanged();
     void resultChanged();
     void sourceTagChanged();
+    void noticeTextChanged();
+
     // 保存到记录：由 QML 转给 backend.saveMiniRecord(...)，本类不认识 AppBackend。
     void saveRecordRequested(const QVariantList &originals, const QVariantList &blocks,
                             const QString &engineLabel);
@@ -106,6 +117,9 @@ private:
     void rebuildBlocks();
     void setPhase(const QString &phase);
     void setError(const QString &text);
+    void setNotice(const QString &text);
+    // 本地 LLM 冷启动时的自动重试次数。
+    int m_retryLeft = 0;
 
     QuickTranslate *m_qt = nullptr;
     QString m_phase = QStringLiteral("Empty");
@@ -116,6 +130,7 @@ private:
     QString m_engineLabel;
     QString m_errorText;
     QString m_sourceTag = QStringLiteral("manual");
+    QString m_noticeText;
     QVariantList m_blocks;
     QStringList m_paragraphs;
     QHash<QString, QStringList> m_byLang;

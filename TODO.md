@@ -30,9 +30,11 @@
 
 | 项 | 状态 | 现状 | 要做的 |
 | --- | --- | --- | --- |
-| 截图热键 | 已实现 | `AppSettings::hotkeyCapture`，默认 `Ctrl+Alt+S` | 「快捷键」页做成录制控件（现在整页是占位） |
-| 小窗热键 | 已实现 | `hotkeyMini`，默认 `Ctrl+Alt+W` | 同上 |
-| 实时热键 | 已实现 | `hotkeyLive`，默认 `Ctrl+Alt+L` | 同上 |
+| 截图热键 | 已完成 | 「快捷键」页三张卡可录制，默认**空**（用户自己录）；改动即时生效（`main.cpp` 的 `applyHotkeys` 收到 `hotkeysChanged` 后注销重注册） | 无 |
+| 小窗热键 | 已完成 | 同上 | 无 |
+| 实时热键 | 已完成 | 同上 | 无 |
+| 打开主页热键 | 已完成 | 「场景快捷键」第一行：把主窗口从托盘/后台叫到最前；默认空 | 无 |
+| 划词热键 | 已完成 | 「场景快捷键」里的「划词翻译」：读剪贴板 → 开小窗填入 → ≤1500 字直接翻；图片不接、富文本取纯文本、超长只填不翻 | 无 |
 | 二次调整最小尺寸 | 未开始 | 写死 12px | 一般不需要暴露 |
 | 方向键微调 | 已完成 | `AppSettings::overlayArrowNudge`，键 `settings/overlay/arrowNudge`，默认开；「浮层」页 → 方向键微调选区。`CaptureOverlay` 在 `Keys.onPressed` 里判开关（不用 `Keys.enabled`，否则同一 Item 的 Esc / Enter 会被一起关掉），1px / Shift 10px，只在「已框好、未开始翻译」时生效 | 无 |
 
@@ -103,11 +105,13 @@
 | 浮层定位 / 截图排除 | Windows 已实现 / Linux 未开始 | `OverlayWin`；X11 无 `WDA_EXCLUDEFROMCAPTURE` 等价物 | 只做「不被自己拍到」的近似方案 |
 | 孤儿进程兜底 | Windows 已实现 / Linux 未开始 | `ProcessGuard` 用 Job Object | 换 `prctl(PR_SET_PDEATHSIG)` |
 
-## 10. 主界面 · 翻译字号
+## 10. 主界面 · 翻译字号（已做：设置项 + 外观滑块 + 小窗正文）
 
 | 项 | 状态 | 现状 | 要做的 |
 | --- | --- | --- | --- |
-| 翻译字号 | 未开始 | 译文栏用 `Theme.fontContent`（霞鹜文楷）+ 写死的 `Theme.fontSizeBody`（13）；外观里的「字号缩放」是全局倍率（80–150%），改不了"只看译文时字太小" | 加 `settings/ui/readingFontSize`（11–24，默认 13），只作用于翻译页双语正文（原文/译文两栏 + 段落操作区），不动界面控件；截屏浮层的字号走 `overlayFontSize`，两者独立 |
+| 翻译字号（设置项） | 已完成 | `settings/ui/readingFontSize`（11–24，默认 13），`AppBackend.readingFontSize`（与 `fontScale` 共用 `fontScaleChanged` 通知） | — |
+| 翻译字号（外观页入口） | 已完成 | 外观页「字号缩放」下面新增「翻译字号」滑块 + `N px` 读数；`fontScale` 管整个界面，这个只管正文 | — |
+| 翻译字号（阅读界面） | 部分完成 | `MiniWindow.qml` 结果区正文已用 `readingPx = max(11, round(readingFontSize * fontScale))`；主界面译文栏还没有正文渲染（见第 14 节），补上时套同一个 `readingPx` | 主界面译文栏落地后接同一个绑定 |
 
 ## 11. 翻译历史（已做：自动存档 + 三分库 + 合并列表）
 
@@ -146,3 +150,23 @@
 | Esc 分档 | 已完成 | 设置小窗 → 引擎菜单 → 取消翻译 → 关浮层，四档；小窗自己也有 `Keys.onEscapePressed` | 无 |
 | 翻译小窗口的选项 | 未开始 | 已按要求从小窗里移除，等 B 页（小窗）落地后再放进主界面「浮层」页 | 随 B 页加 `settings/mini/*` |
 | 实时翻译的选项 | 未开始 | 已从小窗里移除，等 C 页（实时）落地后再放进「浮层」页 | 随 C 页加 `settings/live/*` |
+
+## 14. 引擎常驻（本地 MT / 本地 LLM）
+
+| 项 | 状态 | 现状 | 要做的 |
+| --- | --- | --- | --- |
+| 本地 MT 开机自启 | 已完成 | `settings/mt/preload`；打开后工作线程 `warmMtAll()` 把已装语言对全部加载，配置页显示「常驻 6 个语言对」 | 无（大批语言对可考虑只预热常用方向） |
+| 本地 MT 空闲释放 | 已完成 | `settings/mt/idleMinutes`（0–180，0 = 不释放，默认 10）；每次翻译成功重置计时，到点 `unloadMtAll()` | 无（卸载在 GUI 定时器里做，需等当前请求结束这件事由互斥锁保证） |
+| 本地 MT 线程安全 | 已完成 | `LocalMtTranslator` 的 `m_mutex` 改 `mutable`；`translate`/`warmPair`/`unloadAll`/`loadedCount` 全部加锁 | 无 |
+| 无语言库时禁用 | 已完成 | `backend.mtPacksInstalled`（扫 `mt.opus.*` + `pairAvailable`）；开关与数字框 `enabled` 绑它，置灰 0.45 透明 | 无 |
+| 本地 LLM 单实例 | 已完成 | `studious::ui::sharedLocalEngine()` 成为唯一实例；`AppBackend` 删掉自己的 `m_localEngine` 成员（以前配置页起的和截图/实时查的是两个对象，所以永远「还没启动」） | 无 |
+| 跨入口自动拉起 | 已完成 | `QuickTranslate` 在本地 LLM 未运行且拿到 `setLocalEngineStarter` 时发起启动并标记 `lastFailureRetryable()`；`ScreenFlow`/`MiniSession` 每 1 s 重试、上限 20 次；`LiveSession` 本来每帧重试 | 无 |
+| 启动风暴防护 | 已完成 | `LocalEngine::isStarting()` + `AppBackend::m_localStartQueued` + `QuickTranslate` 5 s 冷却 + `LiveSession` 三帧退避；实测连打 10 次启动请求只起 1 个进程 | 无 |
+
+## 15. 日志与诊断
+
+| 项 | 状态 | 现状 | 要做的 |
+| --- | --- | --- | --- |
+| 应用级日志 | 已完成 | `LogSink` 接管 `qInstallMessageHandler`，4000 行环形缓冲 + 8 MB 轮转，落 `%APPDATA%\studious\logs\studious.log`；`aboutToQuit` 强制落盘 | 无 |
+| 日志窗口 | 已完成 | 双击左上角 logo 打开独立窗口（900×600，无系统标题栏）：等宽正文、跟随最新、复制、清空、打开目录/文件、双击标题条最大化 | 真实双击未做自动化验证 |
+| 错误处理补强 | 已完成 | 资产枚举、历史目录、翻译未就绪、剪贴板为空、切本地 LLM 缺资产等约 10 处补 `qWarning` | 后续新增分支继续按这个习惯补 |

@@ -21,6 +21,10 @@ namespace studious::router {
 class TranslatorRouter;
 }
 
+namespace studious::core {
+class ITranslator;
+}
+
 // 取消通道：工作线程把 router 指针挂进来，主线程拿着 atomic 标志和同一把锁去置位。
 // 锁的意义不是保护 router 的方法，而是保证"读指针 + 调用 cancel()"期间
 // 工作线程不会把 router 析构掉（worker 在离开作用域前会先拿锁把指针清空）。
@@ -61,6 +65,11 @@ struct TranslateJobRequest {
     // 后端头文件明确承诺可跨线程共享。
     studious::cache::TranslationCache *cache = nullptr;
     bool cacheEnabled = true;   // 界面上「启用缓存」勾选框的状态
+
+    // 进程级共享的本地 MT 实例（**不拥有**）。非空时用它顶替工厂里那个临时
+    // LocalMtTranslator —— 模型因此能在多次翻译之间常驻，界面上的「开机自启 /
+    // 空闲关闭」也才有意义。指针来自 studious::ui::sharedMt()，寿命覆盖本作业。
+    studious::core::ITranslator *sharedMt = nullptr;
 };
 
 // 一次翻译作业的产出：后端 outcome + Router 报上来的缓存命中情况。

@@ -58,7 +58,7 @@ public:
     using HotkeyHandler = std::function<void(const QString &id)>;
     virtual void setHotkeyHandler(HotkeyHandler handler) = 0;
 
-    virtual bool registerHotkey(const HotkeySpec &) = 0;
+    virtual bool registerHotkey(const HotkeySpec &, QString *error = nullptr) = 0;
     virtual void unregisterHotkey(const QString &id) = 0;
 
     virtual QStringList ocrLanguages() const = 0;

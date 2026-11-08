@@ -35,6 +35,13 @@ namespace studious::ui {
 class AppBackend : public QObject {
     Q_OBJECT
 
+    // ---- 日志窗口 ----
+    // 内容来自进程级 logsink（LogSink.h），这里只做「从任意线程的新日志 → 主线程一次 emit」
+    // 和剪贴板 / 打开文件这类桥接。
+    Q_PROPERTY(QString logText READ logText NOTIFY logTextChanged)
+    Q_PROPERTY(QString logFilePath READ logFilePath CONSTANT)
+    Q_PROPERTY(QStringList logLines READ logLines NOTIFY logTextChanged)
+
     // ---- 翻译页状态 ----
     Q_PROPERTY(QString sourceText READ sourceText WRITE setSourceText NOTIFY sourceTextChanged)
     Q_PROPERTY(QString translatedText READ translatedText NOTIFY translatedTextChanged)
@@ -147,6 +154,16 @@ class AppBackend : public QObject {
     // 每项：pair / path / missing（QStringList）/ usable（bool）
     Q_PROPERTY(QVariantList mtPairs READ mtPairs NOTIFY mtPairsChanged)
 
+    // ---- 本地 MT 的常驻策略 ----
+    // 开 = 启动就把已安装的语言对全部加载（第一次翻译不用等）；
+    // 关 = 谁用到谁加载。没有语言库时界面把这两项置灰（见 mtPacksInstalled）。
+    Q_PROPERTY(bool mtPreload READ mtPreload WRITE setMtPreload NOTIFY mtStateChanged)
+    Q_PROPERTY(int mtIdleMinutes READ mtIdleMinutes WRITE setMtIdleMinutes NOTIFY mtStateChanged)
+    // 当前常驻了几个语言对（状态行显示用）。
+    Q_PROPERTY(int mtLoadedPairs READ mtLoadedPairs NOTIFY mtStateChanged)
+    // 有没有可用的语言库（三项资产齐全）；没有就别让用户开开关。
+    Q_PROPERTY(bool mtPacksInstalled READ mtPacksInstalled NOTIFY mtPairsChanged)
+
     // ---- 界面语言 ----
     // 取值："system" | "zh" | "en"。
     // 只落盘、不热生效 —— 语言在 main() 里加载 QML 之前就要定下来，
@@ -160,6 +177,23 @@ class AppBackend : public QObject {
 
     // ---- 字号缩放百分比（80~150）----
     Q_PROPERTY(int fontScale READ fontScale WRITE setFontScale NOTIFY fontScaleChanged)
+    // 译文正文字号（11~24）。只影响正文，左上角浮层/主界面的控件字号由 fontScale 统一缩放。
+    Q_PROPERTY(int readingFontSize READ readingFontSize WRITE setReadingFontSize NOTIFY fontScaleChanged)
+
+    // ---- 三个全局热键（文本形式，例如 "Ctrl+Alt+S"；空 = 不注册）----
+    // 注册动作在 main.cpp（平台层归它管）。这里只负责校验、落盘、发信号，
+    // 由 main.cpp 收到 hotkeysChanged 后重新注册，再把结果写回 hotkeyStatus。
+    Q_PROPERTY(QString hotkeyCapture READ hotkeyCapture WRITE setHotkeyCapture
+                   NOTIFY hotkeysChanged)
+    Q_PROPERTY(QString hotkeyMini READ hotkeyMini WRITE setHotkeyMini NOTIFY hotkeysChanged)
+    Q_PROPERTY(QString hotkeyLive READ hotkeyLive WRITE setHotkeyLive NOTIFY hotkeysChanged)
+    // 划词翻译：读剪贴板 → 小窗 → 短文本直接翻。
+    Q_PROPERTY(QString hotkeySelection READ hotkeySelection WRITE setHotkeySelection
+                   NOTIFY hotkeysChanged)
+    // 打开主页：把主窗口叫到最前（托盘里也能叫出来）。
+    Q_PROPERTY(QString hotkeyHome READ hotkeyHome WRITE setHotkeyHome NOTIFY hotkeysChanged)
+    // id → {ok: bool, message: string}；注册失败（被别的程序占用）时给界面看。
+    Q_PROPERTY(QVariantMap hotkeyStatus READ hotkeyStatus NOTIFY hotkeyStatusChanged)
 
     // ---- 强调色（seed）："#RRGGBB"，空 = 默认紫 #6750A4，落 QSettings ----
     Q_PROPERTY(QString accentColor READ accentColor WRITE setAccentColor NOTIFY accentColorChanged)
@@ -211,7 +245,6 @@ class AppBackend : public QObject {
     // 画面没变就不重翻：省一次引擎调用，也让"已更新 N 次"这个数字有意义。
     Q_PROPERTY(bool liveOnlyOnChange READ liveOnlyOnChange WRITE setLiveOnlyOnChange NOTIFY prefsChanged)
     // 锁本地引擎：云端 / Web 单次都在 1 秒以上，做实时没有意义。
-    Q_PROPERTY(bool liveEngineLocked READ liveEngineLocked WRITE setLiveEngineLocked NOTIFY prefsChanged)
 
     // 翻译历史目前只有框架：开关 + 目录。写入与浏览界面在后面批次接上。
     Q_PROPERTY(bool historyEnabled READ historyEnabled WRITE setHistoryEnabled NOTIFY prefsChanged)
@@ -276,6 +309,25 @@ public:
 
     int fontScale() const { return m_fontScale; }
     void setFontScale(int percent);
+    int readingFontSize() const { return m_readingFontSize; }
+    void setReadingFontSize(int px);
+
+    QString hotkeyCapture() const { return m_hotkeyCapture; }
+    QString hotkeyMini() const { return m_hotkeyMini; }
+    QString hotkeyLive() const { return m_hotkeyLive; }
+    QString hotkeySelection() const { return m_hotkeySelection; }
+    QString hotkeyHome() const { return m_hotkeyHome; }
+    void setHotkeyCapture(const QString &combo);
+    void setHotkeyMini(const QString &combo);
+    void setHotkeyLive(const QString &combo);
+    void setHotkeySelection(const QString &combo);
+    void setHotkeyHome(const QString &combo);
+    QVariantMap hotkeyStatus() const { return m_hotkeyStatus; }
+    // main.cpp 注册完把结果写回来；id 取 capture / mini / live。
+    Q_INVOKABLE void setHotkeyStatus(const QString &id, bool ok, const QString &message);
+    // 录制出来的组合键先过一遍规范形（修饰键顺序固定、字母大写）。
+    // 返回空串 = 不可用（没有修饰键，或只有修饰键本身）。
+    Q_INVOKABLE QString normalizeHotkey(const QString &combo);
 
     QString uiLanguage() const { return m_uiLanguage; }
     void setUiLanguage(const QString &code);
@@ -331,7 +383,18 @@ public:
     // 本地 MT 已装语言对（含缺文件信息）。
     QVariantList mtPairs() const { return m_mtPairs; }
     void refreshMtPairs();
+
+    bool mtPreload() const { return m_mtPreload; }
+    void setMtPreload(bool on);
+    int mtIdleMinutes() const { return m_mtIdleMinutes; }
+    void setMtIdleMinutes(int minutes);
+    int mtLoadedPairs() const;
+    bool mtPacksInstalled() const;
     // 该语言对实际走的路线说明（"直接翻译" / "经英语中转" …）；不可用返回空串。
+    // 引擎界面 id 的显示名（自动 / Web 在线 / 云端 LLM / 本地 LLM / 本地 MT）。
+    // 名字只在 EngineIds.cpp 里定义一次，QML 各处下拉与状态条都调这里。
+    Q_INVOKABLE QString engineName(const QString &engineId) const;
+
     Q_INVOKABLE QString mtRouteFor(const QString &src, const QString &dst) const;
 
     // 读：空串回落默认紫；写：非法颜色直接忽略，配色保持原样。
@@ -389,8 +452,6 @@ public:
     void setLiveIntervalMs(int ms);
     bool liveOnlyOnChange() const { return m_liveOnlyOnChange; }
     void setLiveOnlyOnChange(bool on);
-    bool liveEngineLocked() const { return m_liveEngineLocked; }
-    void setLiveEngineLocked(bool on);
 
     bool historyEnabled() const { return m_historyEnabled; }
     void setHistoryEnabled(bool on);
@@ -460,9 +521,6 @@ public slots:
     // ---- 实时翻译的会话分组 ----
     // 一次会话（开启实时翻译 → 关闭）算一组：中间每轮刷新只往缓冲里追加，
     // 关闭时合成**一条**记录写进 live.db。会话没开始就调 append 会被忽略。
-    Q_INVOKABLE void beginLiveSession();
-    Q_INVOKABLE void appendLiveSession(const QVariantList &blocks);
-    Q_INVOKABLE void finishLiveSession();
 
     // 小窗翻译一条一存（跟截屏同一套字段，只是落进 mini.db）。
     Q_INVOKABLE bool saveMiniRecord(const QVariantList &originals,
@@ -490,6 +548,8 @@ private:
 
     // 重启空闲计时器。本地请求进来时调一次；localIdleStop 关着就什么都不做。
     void touchLocalIdle();
+    // 本地 MT 的空闲释放计时器（0 分钟 = 不自动释放）。
+    void touchMtIdle();
     // 停掉本地服务并按需给一句状态（reason 为空 = 安静地停）。
     // 跟 QML 的 stopLocalServer() 分开：那个是用户点「停止」，这个是我们自己回收。
     void shutdownLocalEngine(const QString &reason);
@@ -542,6 +602,19 @@ public:
     // 退出进程（托盘菜单「退出」与关闭行为都要用）。
     Q_INVOKABLE void quitApplication();
 
+    // ---- 日志窗口 ----
+    // 全文 / 最近 4000 行 / 文件路径。读的都是 logsink 的缓冲，不落盘、不做 IO。
+    QString logText() const;
+    QStringList logLines() const;
+    QString logFilePath() const;
+    // 清空内存缓冲（磁盘文件保留）。
+    Q_INVOKABLE void clearLogs();
+    // 全文写进剪贴板，成功后 statusText 报「已复制 N 行日志」。
+    Q_INVOKABLE void copyLogs();
+    // 用系统默认程序打开 studious.log / 打开它所在的目录（不存在就先建）。
+    Q_INVOKABLE void openLogFile();
+    Q_INVOKABLE void openLogDir();
+
 signals:
     void sourceTextChanged();
     void translatedTextChanged();
@@ -563,6 +636,8 @@ signals:
     void activeDstChanged();
     void themeModeChanged();
     void fontScaleChanged();
+    void hotkeysChanged();
+    void hotkeyStatusChanged();
     void uiLanguageChanged();
     void llmConfigChanged();
     void webProviderIdChanged();
@@ -570,12 +645,15 @@ signals:
     void localUseGpuChanged();
     void localLaunchChanged();
     void mtPairsChanged();
+    void mtStateChanged();
     void localStateChanged();
     void cloudModelsChanged();
     void cloudBusyChanged();
     void cloudProbeResultChanged();
     void accentColorChanged();
     void prefsChanged();
+    // 日志缓冲有更新（已按 200 ms 合并，见 AppBackend.cpp 构造函数）。
+    void logTextChanged();
 
     // 单实例 ping / 托盘菜单要求把窗口叫出来；main() 负责接到 QML 窗口上。
     void restoreWindowRequested();
@@ -600,10 +678,18 @@ private:
 
     studious::cache::TranslationCache *m_cache = nullptr;
     TranslateJob *m_job = nullptr;
-    LocalEngine m_localEngine;   // 懒启动：第一次用本地引擎时才拉 llama-server
+    // 本地引擎实例见 QuickTranslate.cpp 的 sharedLocalEngine()：全进程只有一份，
+    // 配置页、截图、实时、小窗共用同一个 llama-server。
 
     // 空闲自动停用。只在 localIdleStop 打开时走，其余时候是空对象。
     QTimer *m_localIdleTimer = nullptr;
+
+    // 日志窗口的刷新合并器：见构造函数里的注释。
+    // m_logNotifyPosted 在任意线程被读改（去重排队），所以是 atomic；
+    // m_logDirty 只在主线程读写，普通 bool 就够。
+    QTimer *m_logUiTimer = nullptr;
+    std::atomic_bool m_logNotifyPosted{false};
+    bool m_logDirty = false;
 
     QString m_sourceText;
     QString m_translatedText;
@@ -632,6 +718,13 @@ private:
     QString m_activeDst;
     QString m_themeMode = QStringLiteral("system");
     int m_fontScale = 100;
+    int m_readingFontSize = 13;
+    QString m_hotkeyCapture;
+    QString m_hotkeyMini;
+    QString m_hotkeyLive;
+    QString m_hotkeySelection;
+    QString m_hotkeyHome;
+    QVariantMap m_hotkeyStatus;
     QString m_uiLanguage = QStringLiteral("system");
     QVariantMap m_llmConfig;
     QString m_webProviderId;
@@ -643,9 +736,16 @@ private:
     QString m_localExtraArgs;
     bool m_localStopOnSwitch = false;
     bool m_localPreheat = false;
+    // 已经排了一轮 startLocalServer()、还没进 runLocalServerStart()。
+    // 自动拉起（截图 / 实时 / 小窗）会在很密的节奏里反复请求启动，
+    // 没有这个标记就会排出一串 singleShot，每个都去 ensureStarted()。
+    bool m_localStartQueued = false;
     bool m_localIdleStop = false;
     int m_localIdleMinutes = 10;
     QVariantList m_mtPairs;
+    bool m_mtPreload = false;
+    int m_mtIdleMinutes = 10;
+    QTimer *m_mtIdleTimer = nullptr;
     QVariantList m_cloudModels;
     bool m_cloudBusy = false;
     QString m_cloudProbeResult;
@@ -676,7 +776,6 @@ private:
     int m_overlayBackdrop = 70;
     int m_liveIntervalMs = 600;
     bool m_liveOnlyOnChange = true;
-    bool m_liveEngineLocked = true;
     bool m_historyEnabled = false;
     bool m_minimizeToTray = false;
     bool m_miniAlwaysOnTop = true;
@@ -695,9 +794,6 @@ private:
     std::unique_ptr<TranslatorRecords> m_recordsLive;
 
     // 实时翻译的会话缓冲：begin → append* → finish 合成一条记录。
-    bool m_liveSessionActive = false;
-    QStringList m_liveOriginals;
-    QStringList m_liveTranslated;
 
     QVariantList m_engineStatuses;
     QStringList m_enginePriority;

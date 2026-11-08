@@ -525,27 +525,6 @@ Item {
                     }
 
                     FieldRow {
-                        label: qsTr("锁定本地引擎")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.liveEngineLocked
-                            onToggled: {
-                                backend.liveEngineLocked = checked
-                                checked = backend.liveEngineLocked
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("云端和 Web 单次都在 1 秒以上，做实时没有意义，默认只用本地引擎。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
                         label: qsTr("区域底色")
                         NumStepper {
                             from: 0

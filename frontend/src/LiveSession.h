@@ -199,6 +199,9 @@ private:
     // 光看 phase 不够，因为紧接着 start() 又会让 phase 回到 Running。
     quint64 m_frameSession = 0;
     int m_emptyFrames = 0;
+    // 本地 LLM 正在启动时的退避：接下来这几帧直接跳过（不抓屏、不发翻译请求）。
+    // 600 ms 一帧的节奏下，一直硬试只会不断把「它还没起来」再问一遍。
+    int m_retrySkipFrames = 0;
     // 每 start/stop 自增：OCR 与翻译都可能跨局回来，靠它丢掉上一局的结果。
     quint64 m_session = 0;
     quint64 m_pendingSession = 0;

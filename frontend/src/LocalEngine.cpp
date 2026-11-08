@@ -1,6 +1,7 @@
 #include "LocalEngine.h"
 
 #include "AppSettings.h"
+#include "AssetPaths.h"
 #include "platform/IPlatform.h"
 
 #include <QDir>
@@ -158,15 +159,9 @@ LocalEngine::~LocalEngine()
 
 QString LocalEngine::installRoot()
 {
-    // 与资产页 / AssetRegistry 用的是同一个根：默认 %APPDATA%\studious\assets，
-    // 用户在设置里迁移过就跟着 settings/asset/root 走 —— 否则搬完目录，
-    // 资产表找新位置、本地引擎还在老位置找模型，两边各说各话。
-    const QString configured = AppSettings::load().assetRoot;
-    if (!configured.isEmpty()) {
-        return QDir::cleanPath(configured);
-    }
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("assets"));
+    // 与资产页 / AssetRegistry 用同一个根（含设置在「迁移资产根」后改过的情况）。
+    // 以前这里又拼了一遍 %APPDATA%\studious\assets，两边各说各话。
+    return studious::ui::paths::assetsRoot();
 }
 
 QString LocalEngine::modelsDir()
@@ -244,16 +239,7 @@ QString LocalEngine::shortModelName(const QString &fileName)
     return name.isEmpty() ? fileName : name;
 }
 
-QString LocalEngine::backendLabel(const QString &backend)
-{
-    if (backend == QLatin1String("vulkan")) {
-        return QStringLiteral("Vulkan");
-    }
-    if (backend == QLatin1String("cpu")) {
-        return QStringLiteral("CPU");
-    }
-    return backend;
-}
+
 
 // ---------------------------------------------------------------- 生命周期
 
@@ -261,6 +247,25 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
 {
     using studious::i18n::s;
     using studious::i18n::sf;
+
+    // 启动闸门：同一时刻只允许一次真正拉起。
+    //
+    // 现场教训：实时翻译切到本地 LLM 时，QuickTranslate 每 600 ms 帧、ScreenFlow 每
+    // 1 s 重试，每次都会看到一个「没在跑」的引擎 → 各自请求启动。以前没有闸门，
+    // 这些请求会排队，每个都先 shutdown() 再重新加载权重、各挑一个端口（日志里
+    // 18090…18095 一秒内连开六个）—— 显存被反复占用，最后整机卡死。
+    // 现在后到的调用直接拿到「正在启动」，让调用方等这一轮结束再判断。
+    if (m_starting.exchange(true)) {
+        if (error != nullptr) {
+            *error = s("本地引擎正在启动，等它起来再试。",
+                       "The local engine is already starting; wait for it to finish.");
+        }
+        return false;
+    }
+    struct StartingReset {
+        std::atomic_bool &flag;
+        ~StartingReset() { flag.store(false); }
+    } startingReset{m_starting};
 
     // 先把「界面给的原样配置」折算成「实际生效的参数」，后面的比较和起进程都用这一份，
     // 保证「判等时以为要跑的」和「真正跑起来的」不可能出现分歧。
@@ -316,6 +321,18 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
                        "The local engine runtime is missing: %1\nPlease download %2 or %3 "
                        "on the Assets page.",
                        {QDir::toNativeSeparators(exe), cpuRuntimeId(), vulkanRuntimeId()}));
+    }
+    // 安装后复查：这是「外部字节 → 本机可执行」的唯一通道，光判存在不够 ——
+    // 被替换过的 llama-server.exe 一样"存在"。清单里点名的关键文件必须齐全，
+    // 运行时资产必须点名了原生可执行文件（AssetRegistry::verifyInstalled）。
+    const QString runtimeAssetId =
+        backend == QLatin1String("vulkan") ? vulkanRuntimeId() : cpuRuntimeId();
+    QString assetError;
+    if (!studious::ui::paths::verifyInstalled(runtimeAssetId, &assetError)) {
+        return fail(sf("本地引擎运行时校验失败（%1）：%2\n请在「资产」页重新下载这个运行时。",
+                       "The local engine runtime failed verification (%1): %2\n"
+                       "Please download this runtime again on the Assets page.",
+                       {runtimeAssetId, assetError}));
     }
 
     studious::runtime::LlamaServerOptions options;
@@ -380,6 +397,11 @@ void LocalEngine::shutdown()
 bool LocalEngine::isRunning() const
 {
     return m_server != nullptr && m_server->isRunning();
+}
+
+bool LocalEngine::isStarting() const
+{
+    return m_starting.load();
 }
 
 QString LocalEngine::baseUrl() const

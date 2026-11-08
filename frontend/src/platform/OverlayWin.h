@@ -30,7 +30,5 @@ bool winApplyOverlayFlags(QWindow *w, bool clickThrough, bool excludeFromCapture
 // 不要经 Qt 的逻辑坐标换算。
 bool winPlaceOverlay(QWindow *w, const QRect &globalRectPhysical, QString *error);
 
-// 解除浮层状态（关闭时调用，窗口即将销毁，失败可忽略）。
-void winClearOverlayFlags(QWindow *w);
 
 } // namespace studious::platform

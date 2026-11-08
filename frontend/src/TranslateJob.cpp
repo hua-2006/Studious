@@ -6,14 +6,51 @@
 #include <QTimer>
 
 #include <studious/Factory.h>
+#include <studious/contract/ITranslator.h>
 #include <studious/net/QtHttpClient.h>
 #include <studious/router/TranslatorRouter.h>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <utility>
 
 namespace {
+
+// Router 的容器要 unique_ptr，而进程级共享的本地 MT 不能跟着作业一起死，
+// 所以套一层只转发、不释放的壳。
+class BorrowedTranslator final : public studious::core::ITranslator {
+public:
+    explicit BorrowedTranslator(studious::core::ITranslator *inner) : m_inner(inner) {}
+
+    QString id() const override { return m_inner->id(); }
+    bool isReady() const override { return m_inner->isReady(); }
+    studious::core::ResolveResult resolve(const QString &src, const QString &dst) const override
+    {
+        return m_inner->resolve(src, dst);
+    }
+    QStringList supportedTargetLangs() const override { return m_inner->supportedTargetLangs(); }
+    bool supports(const QString &src, const QString &dst) const override
+    {
+        return m_inner->supports(src, dst);
+    }
+    QString detectLanguage(const QStringList &texts) const override
+    {
+        return m_inner->detectLanguage(texts);
+    }
+    QString cacheTag() const override { return m_inner->cacheTag(); }
+    studious::core::TranslateOutcome translate(const QStringList &paragraphs,
+                                              const QString &srcLang,
+                                              const QStringList &dstLangs,
+                                              const QJsonObject &options) override
+    {
+        return m_inner->translate(paragraphs, srcLang, dstLangs, options);
+    }
+    void cancel() override { m_inner->cancel(); }
+
+private:
+    studious::core::ITranslator *m_inner;
+};
 
 // 工作线程入口：所有线程亲和的 Qt 对象都在这函数里生灭。
 //
@@ -37,6 +74,17 @@ TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job,
     const bool wantsMock = job.engineId == QLatin1String("mock");
     auto translators = studious::factory::makeDefaultTranslators(
         http, job.llm, job.webProviders, /*includeMock=*/wantsMock);
+
+    // 本地 MT：用进程级共享实例顶掉工厂现造的那个（模型因此跨作业常驻）。
+    if (job.sharedMt) {
+        translators.erase(
+            std::remove_if(translators.begin(), translators.end(),
+                           [](const std::unique_ptr<studious::core::ITranslator> &t) {
+                               return t && t->id() == QLatin1String("local-mt");
+                           }),
+            translators.end());
+        translators.push_back(std::make_unique<BorrowedTranslator>(job.sharedMt));
+    }
 
     // 优先级为空时用兜底顺序：与后端/界面一致的本地优先（local-mt -> llm -> web）。
     // 这里刻意不含 mock —— mock 输出的是【语言码】原文的假译文，只能由用户显式
@@ -225,3 +273,4 @@ void TranslateJob::reapplyCancel()
     }
     m_cancel->raise();
 }
+

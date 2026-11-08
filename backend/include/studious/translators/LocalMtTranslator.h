@@ -10,6 +10,7 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace studious::mt {
 class MtModel;
@@ -57,6 +58,14 @@ public:
 
     // 当前已安装的语言对（"en-zh" 形式），供 UI 展示。
     QStringList installedPairs() const;
+
+    // ---- 常驻 / 预热 ------------------------------------------------------
+    // 这个组件默认按需加载：一个语言对第一次翻的时候才把 ONNX 会话建起来，
+    // 组件析构时一起释放。界面上的「开机自启」用 warmPair() 提前建好会话，
+    // 「空闲关闭」用 unloadAll() 把权重还给系统。
+    bool warmPair(const QString &pair);      // pair = "en-zh"；已加载直接返回 true
+    void unloadAll();                        // 释放所有已加载的语言对
+    int loadedCount() const;                 // 当前常驻了几个语言对（UI 显示用）
 
     // 一个语言对目录里必须存在的文件（不含可选的 decoder_model_merged_quantized.onnx）。
     // 返回值与 modelFor() 构造 MtPaths 时用的文件名逐字一致，顺序即 UI/自测的展示顺序。
@@ -114,6 +123,11 @@ private:
                       QString &error);
 
     QString m_modelsRoot;
+    // 界面上的「开机自启」把本对象做成进程级共享实例之后，三个页面（截屏 / 小窗 /
+    // 实时）可能在不同工作线程同时用到它 —— ONNX 会话和 m_models 都不是线程安全的，
+    // 所以这里用一把粗锁把调用串起来。本地 MT 本来就是 CPU 满载的活，串行不损失什么。
+    // mutable：loadedCount() 是 const，但读 m_models.size() 也要跟写方互斥。
+    mutable std::mutex m_mutex;
     // 注意：不能用 QHash —— Qt 容器要求元素可拷贝，std::unique_ptr 不能拷贝（实测编译不过）。
     std::map<QString, std::unique_ptr<mt::MtModel>> m_models;   // key: "en-zh"
     // 多语言 token 表缓存（惰性读一次 vocab.json；mutable 因为 resolve()/supports() 是 const）。

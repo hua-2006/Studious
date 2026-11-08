@@ -145,7 +145,6 @@ private:
     void setPhase(const QString &phase);
     void setStatusText(const QString &text);
     void fail(const QString &message);
-    void startRecognition();
     void startTranslation();
     void rebuildBlocks();
 
@@ -165,6 +164,8 @@ private:
     QVariantList m_lastWords;      // OCR 原始结果，重新翻译时不再 OCR
     bool m_showOriginal = false;
     bool m_busy = false;
+    // 本地 LLM 冷启动时的自动重试次数（QuickTranslate 说「等一下就好」时用）。
+    int m_retryLeft = 0;
     // 识别中：OCR 在 工作线程跑，这段时间 m_busy 还没置位（它要到 startTranslation 才置），
     // 所以必须单独挡一次 —— 否则 Recognizing 阶段再按热键会用同一个无锁 OcrEngine 并发识别。
     // 由识别回调清（取消也清不了：线程收不回来，只能等它自己结束）。

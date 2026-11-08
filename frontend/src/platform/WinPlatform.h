@@ -39,7 +39,7 @@ public:
     bool placeOverlay(QWindow *w, const QRect &globalRect, QString *error) override;
 
     void setHotkeyHandler(HotkeyHandler handler) override;
-    bool registerHotkey(const HotkeySpec &) override;
+    bool registerHotkey(const HotkeySpec &, QString *error = nullptr) override;
     void unregisterHotkey(const QString &id) override;
 
     QStringList ocrLanguages() const override;

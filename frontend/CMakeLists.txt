@@ -26,6 +26,10 @@ add_library(studious_platform STATIC
     src/platform/PlatformFactory.cpp
     src/platform/ProcessGuard.cpp
     src/platform/ProcessGuard.h
+    src/platform/SecretStore.cpp
+    src/platform/SecretStore.h
+    src/platform/ScreenCaptureDxgi.cpp
+    src/platform/ScreenCaptureDxgi.h
     src/platform/ScreenCaptureWin.cpp
     src/platform/ScreenCaptureWin.h
     src/platform/WinPlatform.cpp
@@ -37,7 +41,7 @@ target_link_libraries(studious_platform PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
 if(WIN32)
     # gdi32 不在 MinGW 默认链接表里，Qt6::Gui 也不传播它 —— 少了它 BitBlt 就是
     # undefined reference to `__imp_BitBlt`。user32/shell32/advapi32 默认已链。
-    target_link_libraries(studious_platform PRIVATE gdi32)
+    target_link_libraries(studious_platform PRIVATE gdi32 crypt32 d3d11 dxgi)
 endif()
 
 # Windows 可执行文件图标（资源管理器 / 任务栏 / Alt-Tab 用）。
@@ -55,8 +59,18 @@ qt_add_executable(studious
     src/AppBackend.h
     src/AppSettings.cpp
     src/AppSettings.h
+    src/AssetPaths.cpp
+    src/AssetPaths.h
+    src/EngineIds.cpp
+    src/EngineIds.h
+    src/Languages.cpp
+    src/OcrModels.cpp
+    src/Languages.h
+    src/OcrModels.h
     src/LocalEngine.cpp
     src/LocalEngine.h
+    src/LogSink.cpp
+    src/LogSink.h
     src/ScreenFlow.cpp
     src/ScreenFlow.h
     src/OcrLines.cpp
@@ -89,6 +103,7 @@ qt_add_qml_module(studious
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/LogWindow.qml
         qml/Theme.qml
         qml/overlay/CaptureOverlay.qml
         qml/overlay/CaptureSettingsPanel.qml
@@ -203,7 +218,9 @@ qt_add_lupdate(studious TS_FILES ${STUDIOUS_TS_FILES}
                 # 后端也有面向用户的文案（语言名），跟界面一起抽，别让前端各存一份映射表。
                 SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../backend/src/contract/LanguageRegistry.cpp
                         # 平台层文案（托盘菜单 / 开机自启报错）走 QCoreApplication::translate。
-                        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Desktop.cpp)
+                        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/Desktop.cpp
+                        # 引擎显示名（自动 / Web 在线 / 云端 LLM / 本地 LLM / 本地 MT）也走同一个上下文。
+                        ${CMAKE_CURRENT_SOURCE_DIR}/src/EngineIds.cpp)
 qt_add_lrelease(studious TS_FILES ${STUDIOUS_TS_FILES}
                 QM_FILES_OUTPUT_VARIABLE STUDIOUS_QM_FILES)
 qt_add_resources(studious "translations"

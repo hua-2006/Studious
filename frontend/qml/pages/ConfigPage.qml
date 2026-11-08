@@ -135,15 +135,8 @@ Item {
     // 引擎 canonical id → 显示名。
     // 不用 backend.engines 的 label：那套文案在后端 i18n 里，跟界面语言的切换时机不同步。
     function engineDisplayName(key) {
-        if (key === "web")
-            return qsTr("Web")
-        if (key === "llm")
-            return qsTr("云端 LLM")
-        if (key === "llm-local")
-            return qsTr("本地 LLM")
-        if (key === "local-mt")
-            return qsTr("本地 MT")
-        return key
+        // 名字只在后端 EngineIds.cpp 里定义一次（canonical 的 "llm" 折成云端 LLM）。
+        return backend.engineName(key === "llm" ? "llm-cloud" : key)
     }
 
     // 在 engineStatuses 里查某个引擎的一条状态；查不到返回 null。
@@ -1261,10 +1254,10 @@ Item {
                     id: configTabBar
                     Layout.alignment: Qt.AlignLeft
                     items: [
-                        { code: "web", label: qsTr("Web") },
-                        { code: "llm-cloud", label: qsTr("云端 LLM") },
-                        { code: "llm-local", label: qsTr("本地 LLM") },
-                        { code: "local-mt", label: qsTr("本地 MT") }
+                        { code: "web", label: backend.engineName("web") },
+                        { code: "llm-cloud", label: backend.engineName("llm-cloud") },
+                        { code: "llm-local", label: backend.engineName("llm-local") },
+                        { code: "local-mt", label: backend.engineName("local-mt") }
                     ]
                     badges: page.configTabBadges
                     current: page.configTab
@@ -1746,6 +1739,97 @@ Item {
                         }
                     }
 
+                        // ---- 服务生命周期（默认：拉起后一直留到软件关闭） ----
+                        FieldRow {
+                            label: qsTr("切换引擎时关闭")
+                            AppToggle {
+                                Layout.alignment: Qt.AlignVCenter
+                                checked: backend.localStopOnSwitch
+                                onToggled: {
+                                    backend.localStopOnSwitch = checked
+                                    checked = backend.localStopOnSwitch
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("打开后，切到别的翻译引擎就把 llama-server 停掉；关着则一直留到软件退出。")
+                                wrapMode: Text.WordWrap
+                                verticalAlignment: Text.AlignVCenter
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeTiny
+                                color: Theme.inkVariant
+                            }
+                        }
+
+                        FieldRow {
+                            label: qsTr("启动时预热")
+                            AppToggle {
+                                Layout.alignment: Qt.AlignVCenter
+                                checked: backend.localPreheat
+                                onToggled: {
+                                    backend.localPreheat = checked
+                                    checked = backend.localPreheat
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("打开软件就把本地服务跑起来，第一次翻译不用等冷启动；代价是常驻占内存。")
+                                wrapMode: Text.WordWrap
+                                verticalAlignment: Text.AlignVCenter
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeTiny
+                                color: Theme.inkVariant
+                            }
+                        }
+
+                        FieldRow {
+                            label: qsTr("空闲自动停")
+                            AppToggle {
+                                Layout.alignment: Qt.AlignVCenter
+                                checked: backend.localIdleStop
+                                // 「切换引擎时关闭」打开时，离开本地引擎立刻会停，
+                                // 空闲这套就没有意义了 —— 置灰，但仍然记住用户的勾选。
+                                enabled: !backend.localStopOnSwitch
+                                opacity: enabled ? 1.0 : 0.45
+                                onToggled: {
+                                    backend.localIdleStop = checked
+                                    checked = backend.localIdleStop
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: backend.localStopOnSwitch
+                                      ? qsTr("已关闭：上面那个开关打开时，切走就会停，不需要等空闲。")
+                                      : qsTr("连续一段时间没有本地翻译就自动停掉服务，省内存。")
+                                wrapMode: Text.WordWrap
+                                verticalAlignment: Text.AlignVCenter
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeTiny
+                                color: Theme.inkVariant
+                            }
+                        }
+
+                        FieldRow {
+                            label: qsTr("空闲阈值")
+                            ThemedSpin {
+                                from: 1
+                                to: 240
+                                stepSize: 1
+                                value: backend.localIdleMinutes
+                                enabled: backend.localIdleStop && !backend.localStopOnSwitch
+                                opacity: enabled ? 1.0 : 0.45
+                                onValueModified: backend.localIdleMinutes = value
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("分钟。只在「空闲自动停」打开、且「切换引擎时关闭」关着时生效。")
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeTiny
+                                color: Theme.inkVariant
+                            }
+
                     // 这四项直接进 LlamaServerOptions（contextSize / threads / gpuLayers / extraArgs），
                     // 属于调参项，收进「高级设置」；默认值就能跑。
                     // 改完不会立刻重启服务：下次真正要用本地引擎时 ensureStarted() 拿新配置
@@ -1839,90 +1923,6 @@ Item {
                             }
                         }
 
-                        // ---- 服务生命周期（三个开关默认全关：默认行为 = 拉起来就一直留着） ----
-                        FieldRow {
-                            label: qsTr("切走就停")
-                            AppToggle {
-                                Layout.alignment: Qt.AlignVCenter
-                                checked: backend.localStopOnSwitch
-                                onToggled: {
-                                    backend.localStopOnSwitch = checked
-                                    checked = backend.localStopOnSwitch
-                                }
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("换到别的翻译引擎时把 llama-server 停掉。关着则保留热服务，切回来不用冷启动。")
-                                wrapMode: Text.WordWrap
-                                verticalAlignment: Text.AlignVCenter
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.fontSizeTiny
-                                color: Theme.inkVariant
-                            }
-                        }
-
-                        FieldRow {
-                            label: qsTr("启动时预热")
-                            AppToggle {
-                                Layout.alignment: Qt.AlignVCenter
-                                checked: backend.localPreheat
-                                onToggled: {
-                                    backend.localPreheat = checked
-                                    checked = backend.localPreheat
-                                }
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("打开软件就把本地服务跑起来，第一次翻译不用等冷启动；代价是常驻占内存。")
-                                wrapMode: Text.WordWrap
-                                verticalAlignment: Text.AlignVCenter
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.fontSizeTiny
-                                color: Theme.inkVariant
-                            }
-                        }
-
-                        FieldRow {
-                            label: qsTr("空闲自动停")
-                            AppToggle {
-                                Layout.alignment: Qt.AlignVCenter
-                                checked: backend.localIdleStop
-                                onToggled: {
-                                    backend.localIdleStop = checked
-                                    checked = backend.localIdleStop
-                                }
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("连续一段时间没有本地翻译就自动停掉服务，省内存。")
-                                wrapMode: Text.WordWrap
-                                verticalAlignment: Text.AlignVCenter
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.fontSizeTiny
-                                color: Theme.inkVariant
-                            }
-                        }
-
-                        FieldRow {
-                            label: qsTr("空闲阈值")
-                            ThemedSpin {
-                                from: 1
-                                to: 240
-                                stepSize: 1
-                                value: backend.localIdleMinutes
-                                enabled: backend.localIdleStop
-                                opacity: enabled ? 1.0 : 0.45
-                                onValueModified: backend.localIdleMinutes = value
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("分钟。只在「空闲自动停」打开时生效。")
-                                elide: Text.ElideRight
-                                verticalAlignment: Text.AlignVCenter
-                                font.family: Theme.fontUi
-                                font.pixelSize: Theme.fontSizeTiny
-                                color: Theme.inkVariant
-                            }
                         }
                     }
 
@@ -2170,6 +2170,100 @@ Item {
                             text: qsTr("下载 / 导入")
                             onClicked: page.openAssetsRequested("mt")
                         }
+                    }
+
+
+                    // ---- 常驻策略 ----
+                    // 本地 MT 没有独立进程，这里的开关管的是「权重什么时候加载进内存」。
+                    // 一个语言库都没装时整组置灰：开了也没东西可加载。
+                    FieldRow {
+                        label: qsTr("开机自启")
+                        enabled: backend.mtPacksInstalled
+                        opacity: enabled ? 1.0 : 0.45
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.s3
+
+                            AppToggle {
+                                checked: backend.mtPreload
+                                onToggled: {
+                                    backend.mtPreload = checked
+                                    checked = backend.mtPreload
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            Text {
+                                text: backend.mtLoadedPairs > 0
+                                      ? qsTr("常驻 %1 个语言对").arg(backend.mtLoadedPairs)
+                                      : qsTr("未加载")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.inkVariant
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 132 + Theme.s3
+                        text: qsTr("打开后，软件一启动就把已装的语言对全部加载好，第一次翻译不用等加载；关着则谁用谁加载。")
+                        wrapMode: Text.WordWrap
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.inkVariant
+                        opacity: backend.mtPacksInstalled ? 1.0 : 0.45
+                    }
+
+                    FieldRow {
+                        label: qsTr("空闲释放")
+                        enabled: backend.mtPacksInstalled && backend.mtPreload
+                        opacity: enabled ? 1.0 : 0.45
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.s3
+
+                            ThemedSpin {
+                                Layout.fillWidth: false
+                                Layout.preferredWidth: 120
+                                from: 0
+                                to: 180
+                                stepSize: 1
+                                value: backend.mtIdleMinutes
+                                onValueModified: backend.mtIdleMinutes = value
+                            }
+
+                            Text {
+                                text: qsTr("分钟")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeBody
+                                color: Theme.ink
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            Text {
+                                text: backend.mtIdleMinutes === 0 ? qsTr("不自动释放")
+                                                                 : qsTr("到点释放内存")
+                                font.family: Theme.fontUi
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.inkVariant
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 132 + Theme.s3
+                        text: qsTr("闲着这么久没有本地 MT 请求就把常驻的语言对放掉；下次再用会重新加载（几百毫秒）。填 0 表示一直留着。")
+                        wrapMode: Text.WordWrap
+                        font.family: Theme.fontUi
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.inkVariant
+                        opacity: (backend.mtPacksInstalled && backend.mtPreload) ? 1.0 : 0.45
                     }
 
                     // 表头

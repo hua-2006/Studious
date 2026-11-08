@@ -15,7 +15,7 @@ import Studious
 // 结构是「页头 + 左侧二级导航 + 右侧内容区」：
 //   页头（标题 / 副标题）
 //   └ RowLayout
-//       ├ 左栏 190px：七个分区项，选中态高亮
+//       └ 左栏二级导航
 //       └ 右栏 ScrollView：StackLayout 一次只显示当前分区那张卡
 //
 // 开关与输入框全部直连 AppBackend 的 Q_PROPERTY（值落 QSettings，写完即生效）；
@@ -93,13 +93,12 @@ Item {
         { icon: "qrc:/qt/qml/Studious/resources/icons/globe.svg",     label: qsTr("网络") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/download.svg",  label: qsTr("资产") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/folder.svg",    label: qsTr("数据") },
-        { icon: "qrc:/qt/qml/Studious/resources/icons/screenshot.svg", label: qsTr("截图") },
         { icon: "qrc:/qt/qml/Studious/resources/icons/info.svg",      label: qsTr("关于") }
     ]
 
     // ---- 资产表列宽（表头与数据行共用，保证上下对齐）----
-    readonly property int colId: 260
-    readonly property int colState: 84
+    readonly property int colId: 210
+    readonly property int colState: 150
     readonly property int colSize: 96
     readonly property int colAction: 96
 
@@ -235,7 +234,7 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据、截图。")
+                text: qsTr("管「应用怎么跑」：通用行为、翻译行为、缓存、网络、资产、数据。")
                 wrapMode: Text.WordWrap
                 font.family: Theme.fontUi
                 font.pixelSize: Theme.fontSizeBody
@@ -1280,7 +1279,10 @@ Item {
                                                 Badge {
                                                     anchors.left: parent.left
                                                     anchors.verticalCenter: parent.verticalCenter
-                                                    text: page.stateLabel(assetRow.modelData.state)
+                                                    // 用户自己导入的资产不做内容校验（没有可信哈希可比），在状态里写明。
+                                                    text: assetRow.modelData.installed && assetRow.modelData.origin === "import"
+                                                          ? page.stateLabel(assetRow.modelData.state) + " · " + qsTr("用户导入")
+                                                          : page.stateLabel(assetRow.modelData.state)
                                                     filled: assetRow.modelData.installed
                                                 }
                                             }
@@ -1319,14 +1321,21 @@ Item {
                                                             return assetRow.percent >= 0
                                                                    ? qsTr("下载中 %1%").arg(assetRow.percent)
                                                                    : qsTr("下载中…")
-                                                        if (assetRow.modelData.placeholder)
-                                                            return qsTr("暂不支持")
+                                                        if (assetRow.modelData.placeholder) {
+                                                            // 模型条目撤下下载渠道后仍可自行导入：清单里有 id，
+                                                            // 导入就是把它装进 models/ 并记成 Import 来源。
+                                                            return assetRow.modelData.type === "model"
+                                                                   ? qsTr("导入文件")
+                                                                   : qsTr("暂不支持")
+                                                        }
                                                         return assetRow.modelData.installed ? qsTr("卸载") : qsTr("下载")
                                                     }
 
-                                                    // 占位资产（清单里 urls 为空，比如还没发布的 Linux 运行时）不给点。
+                                                    // 占位资产（清单里 urls 为空）：运行时类不给点，
+                                                    // 模型类允许「自行导入」。
                                                     buttonEnabled: assetRow.downloading
                                                                    || !assetRow.modelData.placeholder
+                                                                   || assetRow.modelData.type === "model"
 
                                                     onClicked: {
                                                         if (assetRow.downloading) {
@@ -1334,6 +1343,9 @@ Item {
                                                         } else if (assetRow.modelData.installed) {
                                                             uninstallConfirm.assetId = assetRow.assetId
                                                             uninstallConfirm.open()
+                                                        } else if (assetRow.modelData.placeholder) {
+                                                            page.pendingImportId = assetRow.assetId
+                                                            importFileDialog.open()
                                                         } else {
                                                             backend.downloadAsset(assetRow.assetId)
                                                         }
@@ -1508,118 +1520,6 @@ Item {
                             }
                         }
 
-                        // -------------------------------------------- 截图
-                        ColumnLayout {
-                            spacing: 0
-
-                            SectionCard {
-                                Layout.fillWidth: true
-                                Layout.topMargin: Theme.s4
-                                Layout.bottomMargin: Theme.s4
-                                title: qsTr("截图翻译")
-                                hint: qsTr("框选后的行为、浮层外观、放大镜。这些值只在截屏翻译里生效。")
-
-                                FieldRow {
-                                    label: qsTr("选完直接翻译")
-                                    AppToggle {
-                                        checked: backend.captureAutoRun
-                                        onToggled: {
-                                            backend.captureAutoRun = checked
-                                            checked = backend.captureAutoRun
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    Layout.leftMargin: page.labelWidth + Theme.s3
-                                    Layout.fillWidth: true
-                                    text: qsTr("关掉时按设计稿的二次确认走：松手先出工具栏，按「翻译」或 Enter 才发请求。")
-                                    wrapMode: Text.WordWrap
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.inkVariant
-                                }
-
-                                FieldRow {
-                                    label: qsTr("翻译完自动复制")
-                                    AppToggle {
-                                        checked: backend.captureAutoCopy
-                                        onToggled: {
-                                            backend.captureAutoCopy = checked
-                                            checked = backend.captureAutoCopy
-                                        }
-                                    }
-                                }
-
-                                FieldRow {
-                                    label: qsTr("复制后自动关闭")
-                                    AppToggle {
-                                        checked: backend.captureAutoHide
-                                        onToggled: {
-                                            backend.captureAutoHide = checked
-                                            checked = backend.captureAutoHide
-                                        }
-                                    }
-                                }
-
-                                FieldRow {
-                                    label: qsTr("保留原文标注")
-                                    AppToggle {
-                                        checked: backend.overlayKeepOriginal
-                                        onToggled: {
-                                            backend.overlayKeepOriginal = checked
-                                            checked = backend.overlayKeepOriginal
-                                        }
-                                    }
-                                }
-
-                                FieldRow {
-                                    label: qsTr("浮层不透明度")
-                                    NumStepper {
-                                        from: 40
-                                        to: 100
-                                        step: 4
-                                        unit: "%"
-                                        value: backend.overlayOpacity
-                                        onModified: function (v) { backend.overlayOpacity = v }
-                                    }
-                                }
-
-                                FieldRow {
-                                    label: qsTr("浮层字号")
-                                    NumStepper {
-                                        from: 10
-                                        to: 20
-                                        step: 1
-                                        unit: " px"
-                                        value: backend.overlayFontSize
-                                        onModified: function (v) { backend.overlayFontSize = v }
-                                    }
-                                }
-
-                                FieldRow {
-                                    label: qsTr("放大镜倍率")
-                                    NumStepper {
-                                        from: 2
-                                        to: 8
-                                        step: 1
-                                        unit: "×"
-                                        value: backend.overlayZoom
-                                        onModified: function (v) { backend.overlayZoom = v }
-                                    }
-                                }
-
-                                Text {
-                                    Layout.leftMargin: page.labelWidth + Theme.s3
-                                    Layout.fillWidth: true
-                                    text: qsTr("放大镜只在拖框时出现，收起选区后自动隐藏。")
-                                    wrapMode: Text.WordWrap
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.inkVariant
-                                }
-                            }
-                        }
                         // -------------------------------------------- 关于
                         ColumnLayout {
                             spacing: 0
@@ -2281,52 +2181,4 @@ Item {
          }
     }
 
-    // 截图分区的数值控件：− [值] +，比四处复制的 SpinBox 样式块省事，
-    // 也不会因为 Basic 样式的指示器跟主题打架。
-    component NumStepper: RowLayout {
-        id: stepper
-
-        property int from: 0
-        property int to: 100
-        property int step: 1
-        property int value: 0
-        property string unit: ""
-
-        signal modified(int value)
-
-        function clampTo(v) {
-            return Math.max(stepper.from, Math.min(stepper.to, v));
-        }
-
-        spacing: Theme.s2
-
-        AppButton {
-            text: "−"
-            buttonEnabled: stepper.value > stepper.from
-            onClicked: {
-                const v = stepper.clampTo(stepper.value - stepper.step);
-                stepper.value = v;
-                stepper.modified(v);
-            }
-        }
-
-        Text {
-            Layout.preferredWidth: 66
-            horizontalAlignment: Text.AlignHCenter
-            text: stepper.value + stepper.unit
-            font.family: Theme.fontMono
-            font.pixelSize: Theme.fontSizeBody
-            color: Theme.ink
-        }
-
-        AppButton {
-            text: "+"
-            buttonEnabled: stepper.value < stepper.to
-            onClicked: {
-                const v = stepper.clampTo(stepper.value + stepper.step);
-                stepper.value = v;
-                stepper.modified(v);
-            }
-        }
-    }
 }

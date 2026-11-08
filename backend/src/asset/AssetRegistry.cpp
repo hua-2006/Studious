@@ -2,9 +2,13 @@
 
 #include "i18n/L10n.h"
 
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QStringList>
 
 #include <utility>
@@ -352,6 +356,11 @@ bool AssetRegistry::uninstall(const QString &id, QString *error)
 
 bool AssetRegistry::markInstalled(const QString &id, QString *error)
 {
+    return markInstalled(id, AssetOrigin::Download, error);
+}
+
+bool AssetRegistry::markInstalled(const QString &id, AssetOrigin origin, QString *error)
+{
     if (error != nullptr) {
         error->clear();
     }
@@ -388,7 +397,75 @@ bool AssetRegistry::markInstalled(const QString &id, QString *error)
         }
         return false;
     }
+
+    // 来源决定以后启动前要不要做内容校验：Import 的资产没有可信哈希可比。
+    if (origin != AssetOrigin::Unknown) {
+        saveOrigin(id, origin);
+    }
     return true;
+}
+
+QString AssetRegistry::originsPath() const
+{
+    return joinPath(joinPath(m_root, QStringLiteral("state")),
+                    QStringLiteral("asset-origins.json"));
+}
+
+void AssetRegistry::ensureOriginsLoaded() const
+{
+    if (m_originsLoaded) {
+        return;
+    }
+    m_originsLoaded = true;
+    QFile file(originsPath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    file.close();
+    if (!doc.isObject()) {
+        // 文件坏了就当没有记录：所有资产退回 Unknown（按下载安装处理）。
+        return;
+    }
+    const QJsonObject obj = doc.object();
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const QString value = it.value().toString();
+        if (value == QLatin1String("import")) {
+            m_origins.insert(it.key(), AssetOrigin::Import);
+        } else if (value == QLatin1String("download")) {
+            m_origins.insert(it.key(), AssetOrigin::Download);
+        }
+    }
+}
+
+void AssetRegistry::saveOrigin(const QString &id, AssetOrigin origin)
+{
+    ensureOriginsLoaded();
+    m_origins.insert(id, origin);
+
+    QJsonObject obj;
+    for (auto it = m_origins.constBegin(); it != m_origins.constEnd(); ++it) {
+        obj.insert(it.key(),
+                   it.value() == AssetOrigin::Import ? QStringLiteral("import")
+                                                     : QStringLiteral("download"));
+    }
+
+    const QString path = originsPath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        // 写不进去也不该让安装失败：大不了下次按「下载安装」处理（多校验一次）。
+        qWarning("AssetRegistry: cannot write %s", qUtf8Printable(path));
+        return;
+    }
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+    file.commit();
+}
+
+AssetOrigin AssetRegistry::originOf(const QString &id) const
+{
+    ensureOriginsLoaded();
+    return m_origins.value(id, AssetOrigin::Unknown);
 }
 
 bool AssetRegistry::verifyInstalled(const QString &id, QString *error) const
@@ -431,6 +508,11 @@ bool AssetRegistry::verifyInstalled(const QString &id, QString *error) const
             return fail(i18n::sf("资产 %1 的安装文件为空（0 字节）：%2",
                                  "The installed file for asset %1 is empty (0 bytes): %2",
                                  {id, target}));
+        }
+        // 用户自己导入的文件没有可信来源，只确认"还在、不是空文件"。
+        // 下载安装的资产没有这条豁免：下面必须逐字节对上清单里的 sha256。
+        if (originOf(id) == AssetOrigin::Import) {
+            return pass();
         }
         const QString expected = entry->sha256.trimmed().toLower();
         if (expected.isEmpty()) {

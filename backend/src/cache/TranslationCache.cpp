@@ -48,6 +48,29 @@ bool ensureSchema(QSqlDatabase &db, QString *error)
     return true;
 }
 
+// 线程退出时把该线程的数据库连接摘掉。
+//
+// 连接名带线程 id，QThreadPool 的线程回收/重建会让连接一个个攒下来（QSqlDatabase
+// 只在析构「当前线程」那个连接时才清，其余线程的连接没人管）。thread_local 的析构
+// 恰好在该线程退出时执行，是唯一能自动收尾的位置。
+struct ThreadConnectionCleanup {
+    QString name;
+
+    ~ThreadConnectionCleanup()
+    {
+        if (name.isEmpty() || !QSqlDatabase::contains(name)) {
+            return;
+        }
+        {
+            QSqlDatabase db = QSqlDatabase::database(name, false);
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(name);
+    }
+};
+
+thread_local ThreadConnectionCleanup t_connectionCleanup;
+
 } // namespace
 
 TranslationCache::TranslationCache(const QString &dbPath, int maxEntries)
@@ -80,6 +103,9 @@ QString TranslationCache::connectionName() const
 bool TranslationCache::ensureOpen(QString *error) const
 {
     const QString name = connectionName();
+    if (t_connectionCleanup.name.isEmpty()) {
+        t_connectionCleanup.name = name;   // 线程退出时由 thread_local 析构摘连接
+    }
     if (QSqlDatabase::contains(name)) {
         QSqlDatabase existing = QSqlDatabase::database(name, false);
         if (existing.isOpen()) {

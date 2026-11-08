@@ -1,6 +1,8 @@
 #include "LiveSession.h"
 
 #include "AppSettings.h"
+#include "Languages.h"
+#include "OcrModels.h"
 #include "QuickTranslate.h"
 
 #include "platform/PlatformFactory.h"
@@ -30,86 +32,18 @@ namespace {
 // 不如直接说明，让他去换引擎或接受这个效果。
 constexpr qint64 kSlowThresholdMs = 1000;
 
-// 连续这么多帧认不出字就收单：用户要么切走了、要么把窗口关了。
-// 继续抓只是每 600 ms 空转一次 CPU，浮层还一直亮着。
-constexpr int kMaxEmptyFrames = 3;
+// 连续认不出字时只更新状态文字，不再收单：实时翻译要一直盯着画面，
+// 「这几帧没字」是常态（过场、黑屏、对话框关掉），不该判死。
 
 // 与 ScreenFlow 同一个阈值：图标、边框、半透明文字常被检测成框，
 // 识出来是 "XA""6" 这种噪声。真文字普遍 0.9+，噪声多在 0.3 以下。
 constexpr qreal kMinConfidence = 0.5;
 
-// ---------------------------------------------------------------------------
-// 以下是 ScreenFlow.cpp 里 ocrModelsDir() 的副本。
-//
-// 为什么抄一份：它原本是那个 .cpp 匿名命名空间里的私有函数，要共用就得改
-// ScreenFlow.h 和 CMake（这次不动）。两边的语义必须一模一样 —— 同一个
-// models/ocr 落脚点、同一个「尺寸对不上就当坏文件重来」的判断 —— 所以这里
-// 逐字照抄。将来要合并请把它们一起搬进共享头，别各改各的。
-// ---------------------------------------------------------------------------
+
 QString ocrModelsDir()
 {
-    // 与 AppBackend::assetInstallRootPath() 同一套规则（settings.assetRoot 优先）。
-    const AppSettings settings = AppSettings::load();
-    const QString root = settings.assetRoot.isEmpty()
-                             ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                                   .filePath(QStringLiteral("assets"))
-                             : settings.assetRoot;
-    const QString modelsDir = QDir(root).filePath(QStringLiteral("models"));
-    const QString stagedDir = QDir(modelsDir).filePath(QStringLiteral("ocr"));
-
-    // 资产是「一条资产一个文件/目录」装的：单文件资产的落点是 models/<assetId>（没有扩展名），
-    // 而 OcrEngine 只收一个目录。这里把三个文件收拢到 models/ocr/ 下（优先硬链接，失败再复制），
-    // 三种布局都认：models/ocr/det.onnx、models/ocr.det.ppocrv4（单文件资产）、
-    // models/ocr.det.ppocrv4/det.onnx（压缩包资产）。
-    struct Item {
-        const char *fileName;
-        const char *assetId;
-    };
-    static const Item kItems[] = {
-        {"det.onnx", "ocr.det.ppocrv4"},
-        {"rec.onnx", "ocr.rec.ppocrv4"},
-        {"ppocr_keys_v1.txt", "ocr.dict.ppocrv4"},
-    };
-
-    bool anyStaged = false;
-    for (const Item &item : kItems) {
-        const QString staged = QDir(stagedDir).filePath(QString::fromLatin1(item.fileName));
-
-        const QString assetName = QString::fromLatin1(item.assetId);
-        const QString candidates[] = {
-            QDir(modelsDir).filePath(assetName),
-            QDir(QDir(modelsDir).filePath(assetName)).filePath(QString::fromLatin1(item.fileName)),
-        };
-        QString source;
-        for (const QString &candidate : candidates) {
-            if (QFileInfo(candidate).isFile()) {
-                source = candidate;
-                break;
-            }
-        }
-        if (source.isEmpty())
-            continue;
-
-        // 已经收拢过就跳过；但尺寸对不上说明上次留下的是坏文件（例如 Qt 的
-        // QFile::link() 在 Windows 上会写成 1 KB 的 .lnk 快捷方式，不是硬链接），重来。
-        const QFileInfo stagedInfo(staged);
-        if (stagedInfo.isFile() && stagedInfo.size() == QFileInfo(source).size())
-            continue;
-        if (stagedInfo.exists())
-            QFile::remove(staged);
-
-        QDir().mkpath(stagedDir);
-        if (!QFile::copy(source, staged))
-            qWarning("[ocr] failed to stage %s from %s",
-                     qUtf8Printable(item.fileName),
-                     qUtf8Printable(source));
-        anyStaged = true;
-    }
-
-    if (anyStaged)
-        qInfo("[ocr] staged models into %s", qUtf8Printable(stagedDir));
-
-    return stagedDir;
+    // 三件套的收拢逻辑只有一份（见 OcrModels.cpp）：这里以前抄了一份给 LiveSession 用。
+    return studious::ui::ocr::stageModels();
 }
 
 studious::platform::CaptureRect toCaptureRect(const QRect &r)
@@ -139,8 +73,8 @@ QVariantMap blockMap(const QRect &box, const QString &original, const QString &t
 // 一屏上贴两种译法没法读。
 QString firstDstLang(const AppSettings &settings)
 {
-    const QStringList dst = settings.dstLang.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    return dst.value(0, QStringLiteral("zh")).trimmed();
+    return langs::normalizeTargets(langs::split(settings.dstLang), settings.engineId)
+        .value(0, QStringLiteral("zh"));
 }
 
 } // namespace
@@ -355,12 +289,19 @@ void LiveSession::runFrame()
     if (m_phase != QLatin1String("Running") || m_frameBusy || m_regionPhysical.isEmpty())
         return;
 
+    // 上一次翻译因为「本地 LLM 还在启动」失败：安静地等几帧再试，
+    // 别每 600 ms 去敲一次启动闸门（日志里那种一秒连开好几个 llama-server 就是这么来的）。
+    if (m_retrySkipFrames > 0) {
+        --m_retrySkipFrames;
+        return;
+    }
+
     const AppSettings settings = AppSettings::load();
 
     studious::ocr::OcrOptions options;
     // 源语言给了具体值就只认它，否则中英混合（界面文字的绝大多数情况）。
-    if (!settings.srcLang.isEmpty() && settings.srcLang != QLatin1String("auto"))
-        options.languages = { settings.srcLang };
+    if (!langs::isAuto(settings.srcLang))
+        options.languages = { langs::normalizeSource(settings.srcLang) };
 
     studious::platform::IPlatform *platform = m_platform;
     studious::ocr::OcrEngine *engine = m_ocr.get();
@@ -385,6 +326,24 @@ void LiveSession::runFrame()
         if (raw.isEmpty() && !engine->lastError().isEmpty()) {
             out.error = engine->lastError();
             return out;
+        }
+        if (raw.isEmpty()) {
+            // 认不出字时把「抓到的到底是不是一张空图」记下来：区域选错、抓到自家浮层、
+            // 画面全黑，这几种在界面上都只表现为"没有文字"，日志里得能分开。
+            const QImage &img = cap.image;
+            qint64 sum = 0;
+            int samples = 0;
+            for (int y = 0; y < img.height(); y += qMax(1, img.height() / 24)) {
+                const QRgb *row = reinterpret_cast<const QRgb *>(img.constScanLine(y));
+                for (int x = 0; x < img.width(); x += qMax(1, img.width() / 24)) {
+                    sum += qGray(row[x]);
+                    ++samples;
+                }
+            }
+            qInfo("[live] empty frame: %dx%d mean=%.1f",
+                  img.width(),
+                  img.height(),
+                  samples > 0 ? double(sum) / samples : 0.0);
         }
 
         // 抓到的矩形可能被平台按桌面边界夹过（跨屏、出界），所以坐标要用**实际**
@@ -443,16 +402,9 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
 
     if (paragraphList.isEmpty()) {
         ++m_emptyFrames;
-        if (m_emptyFrames >= kMaxEmptyFrames) {
-            setPhase(QStringLiteral("Error"));
-            setErrorText(tr("连续 %1 帧没有识别到文字，已停止刷新。").arg(kMaxEmptyFrames));
-            stopTimer();
-            m_sessionReported = true;
-            emit sessionFinished(m_originals, m_blocks);
-            return;
-        }
-        // 前两帧先忍着：滚动、切窗口时偶尔会抓到空白帧，立刻判死太急躁。
-        setStatusText(tr("这一帧没有文字（%1/%2）").arg(m_emptyFrames).arg(kMaxEmptyFrames));
+        // 以前连续 3 帧就收单，结果「画面正好没有字」（过场、黑屏、对话框关掉）也会被判死。
+        // 现在只记状态、不停止：用户开着就一直接着看，直到自己关。
+        setStatusText(tr("这一帧没有文字（已连续 %1 帧）").arg(m_emptyFrames));
         return;
     }
     m_emptyFrames = 0;
@@ -498,7 +450,7 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
     setBlocks(pendingBlocks);
 
     const QString dst = firstDstLang(settings);
-    const QString src = settings.srcLang.isEmpty() ? QStringLiteral("auto") : settings.srcLang;
+    const QString src = langs::normalizeSource(settings.srcLang);
     // QuickTranslate 按**空行**切段，所以行与行之间要用两个换行才能保住 1:1；
     // 单换行会被它并成一段，回来的译文就没有块可贴了。
     const QString text = paragraphList.join(QStringLiteral("\n\n"));
@@ -506,6 +458,8 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
     if (!m_qt->translate(text, src, { dst })) {
         // 同步拒绝（引擎起不来 / 没有目标语言）：保留这一帧的原文框，
         // m_lastText 不写，下一拍会重试。
+        qWarning("[live] LiveSession: translate rejected (src=%s, dst=%s, err=%s)",
+                 qUtf8Printable(src), qUtf8Printable(dst), qUtf8Printable(m_qt->lastError()));
         setStatusText(tr("翻译没发出去：%1").arg(m_qt->lastError()));
         return;
     }
@@ -517,6 +471,11 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
 
 void LiveSession::onTranslationFinished(const QuickTranslateResult &result)
 {
+    if (qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE")) {
+        qInfo("[live] translation finished ok=%d err=%s sameSession=%d phase=%s",
+              int(result.ok), qUtf8Printable(result.error),
+              int(m_pendingSession == m_session), qUtf8Printable(m_phase));
+    }
     // 上一局（stop 后又 start 了一单）的结果：直接丢，别贴到新选区上。
     if (m_pendingSession != m_session)
         return;
@@ -532,6 +491,12 @@ void LiveSession::onTranslationFinished(const QuickTranslateResult &result)
         // 引擎暂时失败（网络抖、本地进程崩）不是「这一单完了」：保留最后一帧译文，
         // 下一拍会重试（m_lastText 没被写脏）。
         m_pendingText.clear();
+        // 「本地 LLM 正在启动」属于可重试：退避几帧，别一帧一次地敲启动。
+        if (m_qt != nullptr && m_qt->lastFailureRetryable()) {
+            m_retrySkipFrames = 3;
+            setStatusText(tr("本地 LLM 正在启动，稍后自动重试…"));
+            return;
+        }
         setStatusText(tr("翻译失败：%1").arg(result.error));
         return;
     }
@@ -553,7 +518,11 @@ void LiveSession::applyTranslation(const QuickTranslateResult &result)
             continue;
         // 段落与块 1:1：QuickTranslate 保证 byLang 的列表跟输入段落等长（缺的空串），
         // 所以按下标取就是这一行的译文。缺的 → text 空 → untranslated，露出原文。
-        const QString text = index < texts.size() ? texts.at(index).trimmed() : QString();
+        QString text = index < texts.size() ? texts.at(index).trimmed() : QString();
+        // 模型把原文原样退回来（菜单名、型号、已经是目标语言的短句）时，
+        // 别把原文当译文贴上去 —— 那样用户看不出这句到底翻过没有。
+        if (!text.isEmpty() && text == line.text.trimmed())
+            text.clear();
         ++index;
         blocks.append(blockMap(line.box, line.text, text, line.confidence));
     }

@@ -63,6 +63,61 @@ QString mulSourceError(const QString &src)
                     {src});
 }
 
+// 长段必须按句切开再逐句翻：OPUS-MT 一次吞多句会进入复读/退化
+// （实测 8 行 587 字 → decode 5903 ms、123 个退化 id，最后还原成空串）。
+// 切点优先找句末标点，单句本身超长就硬切。
+constexpr int kMtChunkChars = 180;
+
+bool isSentenceEnd(QChar ch)
+{
+    return ch == QChar(0x3002)        // 。
+        || ch == QChar(0xFF01)        // ！
+        || ch == QChar(0xFF1F)        // ？
+        || ch == QChar(0xFF1B)        // ；
+        || ch == QLatin1Char('!')
+        || ch == QLatin1Char('?')
+        || ch == QLatin1Char(';')
+        || ch == QLatin1Char('\n');
+}
+
+QStringList splitSentences(const QString &text, int maxChars)
+{
+    QStringList out;
+    QString current;
+    int lastBreak = -1;   // current 里最后一个句末标点的位置
+
+    for (const QChar ch : text) {
+        current.append(ch);
+        if (isSentenceEnd(ch)) {
+            lastBreak = current.size() - 1;
+        }
+        if (current.size() < maxChars) {
+            continue;
+        }
+
+        // 到上限了：能在标点后切就在标点后切（标点跟着前一句），否则硬切。
+        if (lastBreak >= 8) {
+            out << current.left(lastBreak + 1).trimmed();
+            current = current.mid(lastBreak + 1);
+        } else {
+            out << current.trimmed();
+            current.clear();
+        }
+        lastBreak = -1;
+    }
+    if (!current.trimmed().isEmpty()) {
+        out << current.trimmed();
+    }
+    return out;
+}
+
+// 目标语言是中日韩时句子之间不补空格。
+bool targetWantsSpace(const QString &dst)
+{
+    return dst != QLatin1String("zh") && dst != QLatin1String("zh-TW")
+        && dst != QLatin1String("ja") && dst != QLatin1String("ko");
+}
+
 } // namespace
 
 LocalMtTranslator::LocalMtTranslator(const QString &modelsRoot)
@@ -133,6 +188,34 @@ QStringList LocalMtTranslator::installedPairs() const
         }
     }
     return pairs;
+}
+
+bool LocalMtTranslator::warmPair(const QString &pair)
+{
+    const int dash = pair.indexOf(QLatin1Char('-'));
+    if (dash <= 0) {
+        return false;
+    }
+    const QString src = pair.left(dash);
+    const QString dst = pair.mid(dash + 1);
+    if (!pairAvailable(src, dst)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> guard(m_mutex);
+    // modelFor() 内部就是「有就返回、没有就建」，这里只是把"建"的时机提前。
+    return modelFor(src, dst) != nullptr;
+}
+
+void LocalMtTranslator::unloadAll()
+{
+    std::lock_guard<std::mutex> guard(m_mutex);
+    m_models.clear();
+}
+
+int LocalMtTranslator::loadedCount() const
+{
+    std::lock_guard<std::mutex> guard(m_mutex);
+    return static_cast<int>(m_models.size());
 }
 
 QStringList LocalMtTranslator::requiredFiles()
@@ -622,6 +705,10 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
 {
     Q_UNUSED(options)
 
+    // 共享实例可能被多个工作线程同时调到（截屏 / 小窗 / 实时各有一个 QuickTranslate），
+    // 模型的 ONNX 会话不可重入，这里整段串起来。
+    std::lock_guard<std::mutex> guard(m_mutex);
+
     core::TranslateOutcome out;
 
     // 取消标志不在这里清：清零权归 Router（每次请求开始清一次，见 ICancelControl.h）。
@@ -680,16 +767,43 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
                 continue;
             }
 
-            QString one;
+            // 长段按句切开逐句翻再拼回去：整段一次性喂进去会让模型进复读/退化。
+            const QStringList chunks = trimmed.size() <= kMtChunkChars
+                                           ? QStringList{trimmed}
+                                           : splitSentences(trimmed, kMtChunkChars);
+            QString joined;
             QString err;
-            if (!translateOne(trimmed, src, dst, one, err)) {
+            bool chunkFailed = false;
+            for (const QString &chunk : chunks) {
+                if (m_cancelRequested) {
+                    out.error = i18n::s("本地 MT 已取消", "Local MT was cancelled");
+                    return out;
+                }
+                if (chunk.isEmpty()) {
+                    continue;
+                }
+                QString part;
+                if (!translateOne(chunk, src, dst, part, err)) {
+                    chunkFailed = true;
+                    break;
+                }
+                if (joined.isEmpty()) {
+                    joined = part;
+                } else if (targetWantsSpace(dst)) {
+                    joined += QLatin1Char(' ') + part;
+                } else {
+                    joined += part;
+                }
+            }
+
+            if (chunkFailed) {
                 translated << QString();
                 if (firstError.isEmpty()) {
                     firstError = err;
                 }
                 continue;
             }
-            translated << one;
+            translated << joined;
         }
 
         out.byLang.insert(rawDst, translated);

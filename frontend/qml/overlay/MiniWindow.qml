@@ -35,6 +35,9 @@ Window {
     transientParent: null
     title: qsTr("小窗翻译")
 
+    // 译文正文字号：只作用于译文/原文正文，控件字号另有 Theme.fontScale 统一缩放。
+    readonly property int readingPx: Math.max(11, Math.round(backend.readingFontSize * Theme.fontScale))
+
     readonly property color ink: Theme.ink
     readonly property color inkVariant: Theme.inkVariant
     readonly property color line: Theme.outlineVariant
@@ -216,22 +219,14 @@ Window {
     // 和主页、截图翻译、实时翻译共用一个值：`settings/engine/id`（backend.engineId）。
     // 这里不做任何"本窗覆盖" —— 在这切了，主页和控制条下一帧就跟着变。
     function engineName() {
-        const id = backend.engineId
-        if (id === "web")
-            return qsTr("Web 在线")
-        if (id === "llm-cloud")
-            return qsTr("云端 LLM")
-        if (id === "llm-local")
-            return qsTr("本地 LLM")
-        if (id === "local-mt")
-            return qsTr("本地 MT")
-        return qsTr("自动")
+        // 名字统一由后端给（同一个 id 在四个入口里必须长得一样）。
+        return backend.engineName(backend.engineId)
     }
 
     function engineChoices() {
         const ids = ["", "web", "llm-cloud", "llm-local", "local-mt"]
-        const labels = [qsTr("自动"), qsTr("Web 在线"), qsTr("云端 LLM"),
-                        qsTr("本地 LLM"), qsTr("本地 MT")]
+        const labels = [backend.engineName(""), backend.engineName("web"), backend.engineName("llm-cloud"),
+                        backend.engineName("llm-local"), backend.engineName("local-mt")]
         const statuses = backend.engineStatuses
         const out = []
         for (let i = 0; i < ids.length; ++i) {
@@ -675,6 +670,17 @@ Window {
                     color: inkVariant
                 }
 
+                // 划词热键的说明（图片 / 空 / 太长只填不翻）；平时不占位。
+                Text {
+                    Layout.fillWidth: true
+                    visible: miniSession.noticeText.length > 0
+                    text: miniSession.noticeText
+                    wrapMode: Text.WordWrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeTiny
+                    color: Theme.caution
+                }
+
                 // 结果区
                 Rectangle {
                     id: resultArea
@@ -844,7 +850,7 @@ Window {
                                     textFormat: Text.PlainText
                                     wrapMode: Text.Wrap
                                     font.family: Theme.fontContent
-                                    font.pixelSize: Theme.fontSizeBody
+                                    font.pixelSize: win.readingPx
                                     color: modelData.empty || modelData.passthrough ? inkVariant : ink
                                 }
 

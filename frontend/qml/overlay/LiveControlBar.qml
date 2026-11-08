@@ -447,8 +447,8 @@ Window {
     function engineOptions() {
         const statuses = backend.engineStatuses
         const ids = ["", "web", "llm-cloud", "llm-local", "local-mt"]
-        const labels = [qsTr("自动"), qsTr("Web 在线"), qsTr("云端 LLM"),
-                        qsTr("本地 LLM"), qsTr("本地 MT")]
+        const labels = [backend.engineName(""), backend.engineName("web"), backend.engineName("llm-cloud"),
+                        backend.engineName("llm-local"), backend.engineName("local-mt")]
         const out = []
         for (let i = 0; i < ids.length; ++i) {
             let state = "ready"

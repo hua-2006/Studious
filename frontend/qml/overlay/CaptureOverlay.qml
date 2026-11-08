@@ -129,12 +129,13 @@ Window {
     }
 
     // 引擎选项与配置页、翻译页用的是同一批 id（空串 = 自动，按优先级降级）。
+    // 名字统一由后端给（EngineIds.cpp 一份，界面语言切了也跟着变）。
     readonly property var engineChoices: [
-        { code: "", label: qsTr("自动") },
-        { code: "web", label: "Web" },
-        { code: "llm-cloud", label: qsTr("云端 LLM") },
-        { code: "llm-local", label: qsTr("本地 LLM") },
-        { code: "local-mt", label: qsTr("本地 MT") }
+        { code: "", label: backend.engineName("") },
+        { code: "web", label: backend.engineName("web") },
+        { code: "llm-cloud", label: backend.engineName("llm-cloud") },
+        { code: "llm-local", label: backend.engineName("llm-local") },
+        { code: "local-mt", label: backend.engineName("local-mt") }
     ]
 
     // 后端报的引擎状态（id → "ready" / "not-ready" / "missing-assets"）。

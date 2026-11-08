@@ -6,7 +6,7 @@
 
 跨平台截图翻译工具（Windows 优先）。
 
-> **状态：基础设施已全部落地（当前版本 0.9.9 Erstling）—— 四类翻译引擎、六页桌面界面、
+> **状态：基础设施已全部落地（当前版本 1.0.0 Erstling）—— 四类翻译引擎、六页桌面界面、
 > 截屏 / 小窗 / 实时三种翻译形态、OCR、三分库记录、可取消翻译、平台层与审计加固都已完成。
 > 接下来是测试与打磨。**
 
@@ -216,7 +216,7 @@ studious.exe --asset-download backend\asset\manifest.json <assetId>
 版本号 / 渠道名读仓库根的 `version.json`；提交号在构建期从 git 取，Qt 版本与架构运行期取。
 发版只需改 `version.json`，再打一个 `vX.Y.Z` 标签。
 
-当前：`0.9.9`，版名 **Erstling**（channel `separate` / 分离版）。
+当前：`1.0.0`，版名 **Erstling**（channel `separate` / 分离版）。
 
 ---
 

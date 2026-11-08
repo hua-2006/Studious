@@ -95,6 +95,8 @@ Window {
         // 强调色：启动就按用户配置生成整套调色板（非法值由 Theme 内部回落默认紫）。
         Theme.applySeed(backend.accentColor)
         syncInterfacePalette()
+        // 先把日志窗口造出来（隐藏），双击 logo 时只是 show，不用等首帧。
+        ensureLogWindow()
     }
 
     Connections {
@@ -182,14 +184,29 @@ Window {
                         Image {
                             anchors.centerIn: parent
                             source: "qrc:/qt/qml/Studious/resources/icons/brand.svg"
-                            sourceSize.width: 22
-                            sourceSize.height: 22
+                            // brand.svg 的 viewBox 是 40×24（横向字标），原来把 sourceSize
+                            // 写成 22×22 会让它被拉伸成方的：竖笔画被拉长，看着像歪的。
+                            // 按原始比例给 24×14.4，并开 PreserveAspectFit 兜住小数误差。
+                            sourceSize.width: 52
+                            sourceSize.height: 32
+                            width: 26
+                            height: 15.6
+                            fillMode: Image.PreserveAspectFit
                             // SVG 描边是写死的深紫，换主题不会变色，这里按主色底重新上色。
                             layer.enabled: true
                             layer.effect: MultiEffect {
                                 colorizationColor: Theme.primaryText
                                 colorization: 1.0
                             }
+                        }
+
+                        // 双击 logo 开日志窗口。这里既不在 dragArea（顶栏）里、
+                        // 也没有别的 MouseArea，双击不会被 startSystemMove 吞掉。
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                        TapHandler {
+                            acceptedButtons: Qt.LeftButton
+                            onDoubleTapped: root.openLogWindow()
                         }
                     }
 
@@ -520,6 +537,35 @@ Window {
         }
     }
 
+    // ---------------- 日志窗口 ----------------
+    // 左上角 logo 双击打开（见上面的 TapHandler）。
+    // 关键：用 createObject(null) 现造一个**根对象**窗口。直接写成 `Window { }`
+    // 子项的话，QML 会把它挂成主窗口的 transient 子窗口 —— 主窗口最小化它就跟着
+    // 消失、还永远压在主窗口上面，那不叫独立窗口。
+    property var logWindow: null
+
+    Component {
+        id: logWindowComponent
+        LogWindow {}
+    }
+
+    function ensureLogWindow() {
+        if (logWindow === null) {
+            logWindow = logWindowComponent.createObject(null)
+        }
+        return logWindow
+    }
+
+    function openLogWindow() {
+        var win = ensureLogWindow()
+        if (win === null) {
+            return
+        }
+        win.show()
+        win.raise()
+        win.requestActivate()
+    }
+
     // ---------------- 实时翻译的两块界面 ----------------
     // 贴纸窗口：完全透明、点击穿透、不被自己截图拍到（这三条都在 platform 层设，
     // QML 这边只负责画行）。它永远不该拿到焦点，所以没有任何可点元素。
@@ -600,6 +646,17 @@ Window {
             miniWindow.show()
             miniWindow.raise()
             miniWindow.requestActivate()
+        } else if (kind === "selection") {
+            // 划词翻译：开小窗 → 读剪贴板填进去 → 短文本直接翻（长文只填不翻）。
+            miniWindow.show()
+            miniWindow.raise()
+            miniWindow.requestActivate()
+            miniSession.grabSelection()
+        } else if (kind === "home") {
+            // 打开主页：托盘/后台时也叫到最前，并切回翻译页。
+            root.show()
+            root.raise()
+            root.requestActivate()
         }
     }
 

@@ -216,43 +216,6 @@ bool winPlaceOverlay(QWindow *w, const QRect &globalRectPhysical, QString *error
 #endif
 }
 
-void winClearOverlayFlags(QWindow *w)
-{
-#if defined(Q_OS_WIN)
-    HWND hwnd = hwndOf(w);
-    if (hwnd == nullptr || ::IsWindow(hwnd) == FALSE) {
-        return;   // 窗口已经在销毁了，没什么可清的
-    }
 
-    // 先把截图排除摘掉再改样式：顺序反过来的话，中间那几个毫秒的窗口状态没意义，
-    // 但 affinity 失败不该拦住样式回滚。
-    if (::SetWindowDisplayAffinity(hwnd, WDA_NONE) == FALSE) {
-        qWarning("[overlay] 清除截图排除失败：%lu",
-                 static_cast<unsigned long>(::GetLastError()));
-    }
-
-    // 读样式同样按「值为 0 且确实出错才算失败」判 —— 与 winApplyOverlayFlags 保持一致。
-    ::SetLastError(ERROR_SUCCESS);
-    const LONG_PTR previous = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if (previous == 0 && ::GetLastError() != ERROR_SUCCESS) {
-        qWarning("[overlay] 读取窗口扩展样式失败（回滚跳过）：%lu",
-                 static_cast<unsigned long>(::GetLastError()));
-        return;
-    }
-
-    const LONG_PTR wanted =
-        previous & ~(kClickThroughExStyles | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW);
-    if (wanted != previous) {
-        ::SetLastError(ERROR_SUCCESS);
-        if (::SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) == 0
-            && ::GetLastError() != ERROR_SUCCESS) {
-            qWarning("[overlay] 回滚浮层扩展样式失败：%lu",
-                     static_cast<unsigned long>(::GetLastError()));
-        }
-    }
-#else
-    Q_UNUSED(w);
-#endif
-}
 
 } // namespace studious::platform

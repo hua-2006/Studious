@@ -2,6 +2,8 @@
 
 #include <QString>
 
+#include <atomic>
+
 #include <optional>
 
 namespace studious::cache {
@@ -65,8 +67,9 @@ private:
     QString dbPath_;
     int maxEntries_ = 100000;
 
-    mutable qint64 hits_ = 0;
-    mutable qint64 misses_ = 0;
+    // 统计会被多个工作线程同时累加（命中/未命中都在 worker 里发生），必须是原子的。
+    mutable std::atomic<qint64> hits_{0};
+    mutable std::atomic<qint64> misses_{0};
 
     // 每个线程一个连接：连接名 = 前缀 + 线程 id。
     QString connectionName() const;

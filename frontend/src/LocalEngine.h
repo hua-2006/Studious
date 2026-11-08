@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <memory>
 
 namespace studious::runtime {
@@ -70,6 +71,10 @@ public:
 
     void shutdown();
     bool isRunning() const;
+    // 「正在拉起中」：ensureStarted() 还没返回。调用方（尤其是 QuickTranslate 的
+    // 自动拉起）必须看它，否则一次没起来就会触发第二次、第三次启动 —— 每次都要
+    // 重新把上 GB 的权重塞进显存，实测能把整机拖死。
+    bool isStarting() const;
     QString baseUrl() const;        // 就绪后 http://127.0.0.1:<port>/v1；未就绪为空串
     QString currentBackend() const; // "vulkan" / "cpu" / ""（未运行）
     QString currentModel() const;   // 正在跑的模型文件名（不是路径）；未运行为空
@@ -94,8 +99,6 @@ public:
     // 显示用短名："model.qwen2.5-0.5b-instruct.q4km" -> "qwen2.5-0.5b"。
     // 纯粹是界面文案，不参与任何路径拼接。
     static QString shortModelName(const QString &fileName);
-    // "vulkan" -> "Vulkan"；"cpu" -> "CPU"；其余原样返回。
-    static QString backendLabel(const QString &backend);
 
 private:
     std::unique_ptr<studious::runtime::LlamaServer> m_server;
@@ -108,6 +111,9 @@ private:
     // shutdown() 会把它清回默认值，保证下次 ensureStarted 必然重新拉起。
     LocalEngineConfig m_runningCfg;
     qint64 m_lastStartupMs = 0;
+    // 启动闸门：ensureStarted() 里 exchange(true)，RAII 在返回时清回。
+    // 用原子量是因为「自动拉起」这条路上可能同时从 GUI 线程和一个定时器进来。
+    std::atomic_bool m_starting{false};
     // 孤儿兜底：正常退出走 shutdown()，被强杀时只有这个能让系统顺手收掉子进程。
     // 实现全在 platform/ProcessGuard.cpp，本文件不含任何平台头。
     studious::platform::ProcessGuard m_guard;

@@ -10,7 +10,8 @@
 // ── GDI 覆盖不了的两类场景（已知缺口，不要假装能抓）──────────────────────────
 // ① 独占全屏：游戏/DirectX flip 独占时桌面合成被绕过，BitBlt 常拿到全黑。
 // ② HDR 输出：DXGI 输出是 scRGB / PQ，GDI 拿到的往往全黑或过曝。
-// 目前策略：抓到「全黑」就返回 Failed + 中文提示（见 capturePhysical 里的 looksAllBlack），
+// 目前策略：BitBlt 拿到全黑时先用 DXGI Output Duplication 兜底重抓一帧
+// （见 ScreenCaptureDxgi.cpp），还拿不到才返回 Failed + 中文提示。
 // 不做静默降级 —— 宁可让上层提示用户，也不要把一张黑图当成功。
 //
 // TODO(dxgi): 在这两个场景加 DXGI Output Duplication 兜底：
@@ -26,6 +27,7 @@
 // GetSystemMetrics / EnumDisplayMonitors / BitBlt 也在同一套物理坐标里；调用结束复原。
 // 这样「虚拟桌面原点」在三种进程 DPI 感知模式下都一致，不会出现主屏和副屏错位。
 
+#include "platform/ScreenCaptureDxgi.h"
 #include "platform/ScreenCaptureWin.h"
 
 #include <QtGlobal>
@@ -354,9 +356,41 @@ CaptureResult capturePhysical(const QRect &target)
     // 但 RGB32 在 Qt 里就是「不透明 0xffRRGGBB」语义，绘制与 RGB32→ARGB32 转换都会强制
     // alpha=0xff；换成 ARGB32 反而会让整张图变透明。别改。
 
+    // 诊断用：设了 STUDIOUS_FORCE_DXGI 就跳过 BitBlt，直接用屏幕复制抓。
+    // 用来确认「黑图是 GDI 读不到硬件平面」而不是别的原因（见 _log.md 的排查记录）。
+    if (qEnvironmentVariableIsSet("STUDIOUS_FORCE_DXGI")) {
+        QString forcedError;
+        const QImage forced = captureWithDxgi(target, &forcedError);
+        CaptureResult forcedResult;
+        if (!forced.isNull()) {
+            forcedResult.status = PlatformStatus::Ok;
+            forcedResult.image = forced;
+            forcedResult.rect = CaptureRect { target.x(), target.y(), forced.width(), forced.height() };
+            forcedResult.devicePixelRatio = devicePixelRatioForRect(target);
+            forcedResult.error.clear();
+            return forcedResult;
+        }
+        return failedCapture(QStringLiteral("抓屏失败（强制 DXGI）：%1").arg(forcedError));
+    }
+
     if (looksAllBlack(image)) {
+        // GDI 读不到硬件平面（MPO / independent flip 的游戏窗口）时整块是黑的。
+        // 换成屏幕复制（DXGI Output Duplication）再抓一次：它复制的是扫描输出。
+        QString dxgiError;
+        const QImage dxgiImage = captureWithDxgi(target, &dxgiError);
+        if (!dxgiImage.isNull()) {
+            CaptureResult fallback;
+            fallback.status = PlatformStatus::Ok;
+            fallback.image = dxgiImage;
+            fallback.rect = CaptureRect { target.x(), target.y(), dxgiImage.width(), dxgiImage.height() };
+            fallback.devicePixelRatio = devicePixelRatioForRect(target);
+            fallback.error.clear();
+            return fallback;
+        }
         return failedCapture(QStringLiteral(
-            "抓屏失败：抓到的画面全黑（独占全屏 / HDR 输出 / 锁屏会话，GDI 无法覆盖，需 DXGI 兜底）"));
+                                 "抓屏失败：抓到的画面全黑（游戏窗口的硬件平面 / HDR 输出 / 锁屏会话），"
+                                 "DXGI 兜底也没成功：%1")
+                                 .arg(dxgiError));
     }
 
     CaptureResult result;

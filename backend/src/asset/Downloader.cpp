@@ -913,30 +913,34 @@ DownloadResult Downloader::installFromFile(const QString &assetId, const QString
         return result;
     }
 
+    // 用户导入的文件不要求先发布哈希：清单里有哈希就顺手比一次（防止选错文件），
+    // 没有就照装，并把这条资产登记成 Import —— 启动前的 verifyInstalled() 不再对它做
+    // 内容校验（用户自己的文件，没有可信来源可比）。
     const QString expectedSha = entry->sha256.trimmed().toLower();
     if (expectedSha.isEmpty()) {
-        result.error = i18n::s("该资产尚未发布正式哈希，无法校验导入文件，暂不支持手动导入",
-                               "This asset has no published checksum, so an imported file cannot be "
-                               "verified; manual import is not supported for it yet.");
-        return result;
+        qInfo("[asset] %s 没有清单哈希，按「用户导入」安装，不做内容校验",
+              qUtf8Printable(assetId));
     }
 
-    QString hashError;
-    const QString actualSha = sha256File(localFilePath, &hashError);
-    if (actualSha.isEmpty()) {
-        result.error = hashError.isEmpty()
-                           ? i18n::sf("无法读取导入文件以计算校验值：%1",
-                                      "Unable to read the imported file to compute its checksum: %1",
-                                      {localFilePath})
-                           : hashError;
-        return result;
-    }
-    if (actualSha != expectedSha) {
-        result.error = i18n::sf("导入文件与清单哈希不一致：实际 %1，期望 %2。未做任何安装。",
-                                "The imported file does not match the manifest checksum: got %1, "
-                                "expected %2. Nothing was installed.",
-                                {actualSha, expectedSha});
-        return result;
+    QString actualSha;
+    if (!expectedSha.isEmpty()) {
+        QString hashError;
+        actualSha = sha256File(localFilePath, &hashError);
+        if (actualSha.isEmpty()) {
+            result.error = hashError.isEmpty()
+                               ? i18n::sf("无法读取导入文件以计算校验值：%1",
+                                          "Unable to read the imported file to compute its checksum: %1",
+                                          {localFilePath})
+                               : hashError;
+            return result;
+        }
+        if (actualSha != expectedSha) {
+            result.error = i18n::sf("导入文件与清单哈希不一致：实际 %1，期望 %2。未做任何安装。",
+                                    "The imported file does not match the manifest checksum: got %1, "
+                                    "expected %2. Nothing was installed.",
+                                    {actualSha, expectedSha});
+            return result;
+        }
     }
 
     QString installError;
@@ -952,7 +956,7 @@ DownloadResult Downloader::installFromFile(const QString &assetId, const QString
     result.installedPath = installedPath;
 
     QString registerError;
-    if (!m_registry.markInstalled(assetId, &registerError)) {
+    if (!m_registry.markInstalled(assetId, AssetOrigin::Import, &registerError)) {
         result.error = registerError;
         return result;
     }

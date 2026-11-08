@@ -275,6 +275,62 @@ Item {
                         color: Theme.ink
                     }
                 }
+                FieldRow {
+                    label: qsTr("翻译字号")
+
+                    // 只影响译文/原文正文（小窗结果、记录详情，将来的主界面译文栏），
+                    // 上面的「字号缩放」管整个界面。两者相乘，互不覆盖。
+                    Slider {
+                        id: readingSlider
+                        Layout.preferredWidth: 220
+                        from: 11
+                        to: 24
+                        stepSize: 1
+                        value: backend.readingFontSize
+
+                        onMoved: backend.readingFontSize = Math.round(value)
+
+                        Connections {
+                            target: backend
+                            function onFontScaleChanged() { readingSlider.value = backend.readingFontSize }
+                        }
+
+                        background: Rectangle {
+                            x: readingSlider.leftPadding
+                            y: readingSlider.topPadding + readingSlider.availableHeight / 2 - height / 2
+                            width: readingSlider.availableWidth
+                            height: 4
+                            radius: height / 2
+                            color: Theme.surfaceHighest
+
+                            Rectangle {
+                                width: readingSlider.visualPosition * parent.width
+                                height: parent.height
+                                radius: height / 2
+                                color: Theme.primary
+                            }
+                        }
+
+                        handle: Rectangle {
+                            x: readingSlider.leftPadding + readingSlider.visualPosition
+                               * (readingSlider.availableWidth - width)
+                            y: readingSlider.topPadding + readingSlider.availableHeight / 2 - height / 2
+                            width: 18
+                            height: 18
+                            radius: width / 2
+                            color: Theme.primary
+                            border.width: 2
+                            border.color: Theme.surface
+                        }
+                    }
+
+                    Text {
+                        text: backend.readingFontSize + " px"
+                        font.family: Theme.fontMono
+                        font.pixelSize: Theme.fontSizeBody
+                        color: Theme.ink
+                    }
+                }
             }
 
             SectionCard {

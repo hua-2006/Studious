@@ -95,15 +95,8 @@ Item {
     // local-mt），直接把 id 印出来是给开发者看的，不是给用户看的。
     // 只在本页做这一份映射，不去调 ConfigPage 的 engineName（跨文件调用会把两页耦死）。
     function statusEngineName(id) {
-        if (id === "web")
-            return qsTr("Web 在线")
-        if (id === "llm-cloud")
-            return qsTr("云端 LLM")
-        if (id === "llm-local")
-            return qsTr("本地 LLM")
-        if (id === "local-mt")
-            return qsTr("本地 MT")
-        return id
+        // 状态条只带裸 id，名字由后端统一给（与三个浮层的下拉一致）。
+        return backend.engineName(id)
     }
 
     // 目标语言下拉的条目：从 languages 里去掉「自动检测」。

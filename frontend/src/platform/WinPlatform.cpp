@@ -201,14 +201,14 @@ void WinPlatform::setHotkeyHandler(HotkeyHandler handler)
     m_hotkeyHandler = std::move(handler);
 }
 
-bool WinPlatform::registerHotkey(const HotkeySpec &spec)
+bool WinPlatform::registerHotkey(const HotkeySpec &spec, QString *error)
 {
-    QString error;
-    const bool ok = m_hotkeys.registerHotkey(spec, &error);
+    QString local;
+    const bool ok = m_hotkeys.registerHotkey(spec, error ? error : &local);
     if (!ok)
         qWarning("[platform] registerHotkey(%s) failed: %s",
                  qUtf8Printable(spec.id),
-                 qUtf8Printable(error));
+                 qUtf8Printable(error ? *error : local));
     return ok;
 }
 

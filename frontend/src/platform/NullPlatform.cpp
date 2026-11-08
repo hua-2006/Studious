@@ -109,8 +109,10 @@ bool NullPlatform::placeOverlay(QWindow *, const QRect &, QString *error)
     return false;
 }
 
-bool NullPlatform::registerHotkey(const HotkeySpec &)
+bool NullPlatform::registerHotkey(const HotkeySpec &, QString *error)
 {
+    if (error)
+        *error = QStringLiteral("当前平台没有全局热键能力。");
     return false;
 }
 

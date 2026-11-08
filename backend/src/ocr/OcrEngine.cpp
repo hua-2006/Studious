@@ -1095,8 +1095,8 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
         }
 
         const int dictSize = static_cast<int>(dict.size());
-        // 类别数 = 1(blank) + 字典 + 1(空格)：PP-OCR 的中英模型都是这个布局
-        // （ppocr_keys_v1.txt 6623 行 → 6625 类）。多出的一类就是空格。
+        // 类别数 = 1(blank) + 字典 + 1(空格)：PP-OCR 的模型都是这个布局
+        // （v4 中文表 6623 行 → 6625 类；v5 多语种表 18384 行 → 18386 类）。多出的一类就是空格。
         const bool hasSpace = classes > dictSize + 1;
         if (classes != dictSize + 1 && classes != dictSize + 2) {
             // 字典与模型不配套：能跑，但映射会错位。只提示一次，不中断识别。
@@ -1105,7 +1105,7 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
                 warned = true;
                 qWarning().noquote()
                     << QStringLiteral("[ocr] 字典与模型类别数不匹配：字典 %1 行，模型 %2 类。"
-                                      "请确认 rec.onnx 与 ppocr_keys_v1.txt 来自同一套 PP-OCRv4 资产")
+                                      "请确认 rec.onnx 与 ppocr_keys_v1.txt 来自同一套 PP-OCR 资产（v4 与 v5 不能混搭）")
                            .arg(dictSize)
                            .arg(classes);
             }
