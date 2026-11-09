@@ -34,11 +34,12 @@ AppSettings AppSettings::defaults()
 {
     AppSettings s;
 
-    // 本机网关默认值（与 backend_selftest 的 --llm 模式保持一致）。
-    s.llm.baseUrl = QStringLiteral("http://127.0.0.1:3065/v1");
-    // 不自带任何默认 Key：以前这里硬编码了 "12345678"，既像弱口令又会被打进发行包。
+    // 不带任何默认端点 / Key / 模型名：包里以前写死了开发机的本机网关
+    // （http://127.0.0.1:3065/v1 + deepseek-v4.1-flash），发出去就是一条别人永远连不上的地址，
+    // 而且把测试配置直接印在了发行版里。留空 = 「未配置」，界面会明说，用户自己填。
+    s.llm.baseUrl.clear();
     s.llm.apiKey.clear();
-    s.llm.model = QStringLiteral("deepseek-v4.1-flash");
+    s.llm.model.clear();
     s.llm.timeoutMs = 60000;
     s.llm.maxTokens = 2048;
     s.llm.temperature = 0.2;
@@ -311,6 +312,10 @@ AppSettings AppSettings::load()
     s.hotkeyLive = hotkey("hotkey/live", def.hotkeyLive);
     s.hotkeySelection = hotkey("hotkey/selection", def.hotkeySelection);
     s.hotkeyHome = hotkey("hotkey/home", def.hotkeyHome);
+
+    // 更新检查：两个时间戳都允许空（空 = 从没跳/从没查过），所以不走空值回落。
+    s.updateSkippedDate = store.value(key("update/skippedDate"), def.updateSkippedDate).toString().trimmed();
+    s.updateLastCheckAt = store.value(key("update/lastCheckAt"), def.updateLastCheckAt).toString().trimmed();
 
     return s;
 }

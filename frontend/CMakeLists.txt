@@ -45,8 +45,9 @@ if(WIN32)
 endif()
 
 # Windows 可执行文件图标（资源管理器 / 任务栏 / Alt-Tab 用）。
-# 走 .rc 而不是 WIN32_EXECUTABLE：本项目保留控制台子系统，
-# 否则 --smoke / --assets-cli 这些命令行模式的 stdout 就没了。
+# 子系统是 GUI（见文件末尾 WIN32_EXECUTABLE ON）：双击不再弹黑框。
+# 命令行模式的输出靠 main() 里的 AttachConsole 把父进程控制台接回来，
+# --smoke / --assets-cli / --ui-shot 在终端里跑照样能看到日志。
 if(WIN32)
     set(STUDIOUS_WIN_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc")
 else()
@@ -190,8 +191,11 @@ target_link_libraries(studious PRIVATE
     Qt6::Sql
 )
 
+# GUI 子系统：双击 exe 不弹控制台黑框。
+# 代价是进程没有 stdout —— main() 开头会在"带参数运行"时 AttachConsole 接回父控制台，
+# 所以 --smoke / --list-models / --assets-cli / --ui-shot 这些诊断模式不受影响。
 set_target_properties(studious PROPERTIES
-    WIN32_EXECUTABLE OFF
+    WIN32_EXECUTABLE ON
 )
 
 # 本地 MT（OPUS-MT）运行期需要 onnxruntime.dll 与 exe 同目录。

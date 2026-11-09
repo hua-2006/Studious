@@ -245,6 +245,14 @@ struct AppSettings {
     // 整套调色板由 Theme 单例在 OKLab 空间从这个种子混出来。
     QString accentSeed;
 
+    // ---- 更新检查（键 update/skippedDate、update/lastCheckAt）----
+    // skippedDate：用户在「发现新版本」弹窗里勾了「今日不再提醒」时记下的日期
+    //   （yyyy-MM-dd）。空 = 从没跳过；等于今天 = 今天不再弹。
+    QString updateSkippedDate;
+    // lastCheckAt：上次自动检查的 UTC 时间（ISO 8601）。用于节流：
+    //   6 小时内重复启动不去打 GitHub API（未认证额度只有 60 次/小时）。
+    QString updateLastCheckAt;
+
     // 从 QSettings 读；缺失 / 空值回落 defaults()。
     static AppSettings load();
 

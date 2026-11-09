@@ -58,8 +58,14 @@ function Invoke-Tool {
         [string[]] $Argv,
         [string]   $Label
     )
+    # 原生工具（cmake / ninja）会把 CMake 的 dev warning 写到 stderr，
+    # 在 Stop 偏好下会被当成异常抛出、把整个构建判死 —— 这里临时放宽，
+    # 成败只看 $LASTEXITCODE。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $lines = & $Exe @Argv 2>&1 | ForEach-Object { "$_" }
     $code  = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
     foreach ($l in $lines) { Write-Host "    $l" }
     if ($code -ne 0) {
         Write-Host "!! $Label 失败（exit $code）" -ForegroundColor Red

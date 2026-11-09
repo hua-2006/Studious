@@ -56,6 +56,10 @@ namespace engine = studious::ui::engine;
 #include <cstdio>
 #include <cstring>
 
+#ifdef Q_OS_WIN
+#  include <windows.h>
+#endif
+
 #include <atomic>
 
 namespace {
@@ -1376,6 +1380,21 @@ void installLogSink(QCoreApplication &app)
 
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_WIN
+    // 这个进程是 GUI 子系统（双击不弹控制台黑框），默认没有 stdout/stderr。
+    // 带参数从终端里启动时把父进程的控制台接回来，命令行模式的输出才看得见；
+    // 已经有输出句柄（被管道 / 文件重定向，比如 `studious.exe --smoke | more`）就别动它，
+    // 否则输出会从管道跑到控制台上、脚本抓不到。接不上父控制台就算了，logsink 的日志文件照旧。
+    const HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (argc > 1 && (stdOut == nullptr || stdOut == INVALID_HANDLE_VALUE)
+        && AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE *stream = nullptr;
+        freopen_s(&stream, "CONOUT$", "w", stdout);
+        freopen_s(&stream, "CONOUT$", "w", stderr);
+        freopen_s(&stream, "CONIN$", "r", stdin);
+    }
+#endif
+
     // 先看命令行：--list-models / --smoke / --assets-cli 都只起 QCoreApplication，
     // 不碰 GUI 平台插件（无桌面 / 无 DISPLAY 也能跑）。
     if (hasFlag(argc, argv, "--list-models")) {
