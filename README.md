@@ -4,7 +4,7 @@
 
 <h1 align="center">Studious</h1>
 
-<p align="center">把屏幕上看到的外语，就地变成看得懂的中文。</p>
+<p align="center">把屏幕上看到的外语，就地变成看得懂的语言。</p>
 
 <p align="center">
   <img alt="version" src="https://img.shields.io/badge/version-1.1.1-informational">
