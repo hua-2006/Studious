@@ -2,6 +2,7 @@
 
 #include "asset/Manifest.h"
 
+#include <QFileInfo>
 #include <QHash>
 #include <QString>
 #include <QVector>
@@ -58,6 +59,12 @@ public:
     QVector<AssetStatus> listStatus() const;
     AssetStatus status(const QString &id) const;
 
+    // 便宜判定：这个资产现在算不算「装好了」——等价于 status(id).state == Installed，
+    // 只 stat 不读内容、不做哈希。给"要不要把这条资产列出来 / 显示成可用"这类高频判断用；
+    // 决定"能不能启动 / 能不能信这份字节"仍然必须调 verifyInstalled()。
+    // 走与 status() 同一份懒加载缓存（refresh 之后就是查表）；清单外的 id 返回 false。
+    bool isPresent(const QString &id) const;
+
     // 重新扫描磁盘，更新内部状态缓存。
     void refresh();
 
@@ -88,6 +95,11 @@ public:
 private:
     AssetStatus computeStatus(const AssetEntry &entry) const;
     void ensureFresh() const;
+
+    // 「这个文件看起来装好了」的唯一判据：普通文件且非空。
+    // computeStatus()（便宜判定）与 verifyInstalled()（深度校验）都走它 ——
+    // 以前两边各写一套，目录分支漏了 isFile/size，0 字节占位文件就被算成已安装。
+    static bool fileLooksInstalled(const QFileInfo &info);
 
     // targetPath 的实现：清单查找 + id 白名单 + cleanPath 前缀断言，任何一道不过都返回空串，
     // 并把中文原因写进 *error（可空）。

@@ -147,12 +147,19 @@ private:
     void fail(const QString &message);
     void startTranslation();
     void rebuildBlocks();
+    // 释放本次截屏的整屏位图，并把落盘的临时 PNG 删掉。
+    // 调用点：换新图之前（begin）、整个流程结束（cancel）、对象析构。
+    void releaseShotFile();
 
     studious::platform::IPlatform *platform() const;
 
     studious::platform::IPlatform *m_platform = nullptr;
     std::unique_ptr<studious::platform::IPlatform> m_ownedPlatform;
     QImage m_shot;                 // 整屏，物理像素
+    // QML 的 Image 只能吃 URL，所以这一份要落成 PNG。路径与 URL 缓存住：同一张图只存一次，
+    // 否则 QML 每求值一次 imageSourceUrl() 就多一张几十 MB 的临时文件（且永不删除）。
+    mutable QString m_shotPath;    // 落盘的那一张；releaseShotFile() 会删它
+    mutable QString m_shotUrl;     // imageSourceUrl() 是 const，缓存只能 mutable
     QRect m_virtualLogical;        // 抓屏那一刻的虚拟桌面逻辑矩形
     qreal m_pixelScale = 1.0;
     QRect m_selectionLogical;      // 逻辑像素

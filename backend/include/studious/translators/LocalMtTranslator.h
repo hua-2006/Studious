@@ -7,6 +7,7 @@
 
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include <map>
 #include <memory>
@@ -101,6 +102,11 @@ private:
         RouteKind kind = RouteKind::None;
         QString targetToken;   // 仅 en-mul 侧需要：Marian token（如 "zho_Hans"）
         QString error;         // 非空 = 有明确不可用原因（如韩语目标没有 token）
+        // 走不通时缺哪些资产，形如 "mt.opus.en-zh"（目录 id，不是绝对路径）。
+        // 只在这条路"既没有可用方案、也没有更具体原因"时填写：plan.error 已经有
+        // 一句人话（韩语这类），再贴一长串缺文件只会把重点冲淡。
+        // resolve() 直接搬进 ResolveResult，不再自己反推一遍直连 / 中转 / mul。
+        QStringList missingAssets;
     };
 
     Plan planFor(const QString &src, const QString &dst) const;
@@ -131,6 +137,9 @@ private:
     // 注意：不能用 QHash —— Qt 容器要求元素可拷贝，std::unique_ptr 不能拷贝（实测编译不过）。
     std::map<QString, std::unique_ptr<mt::MtModel>> m_models;   // key: "en-zh"
     // 多语言 token 表缓存（惰性读一次 vocab.json；mutable 因为 resolve()/supports() 是 const）。
+    // 单独一把锁：supports()/planFor() 会在 translate() 已经持着 m_mutex 的时候被调用，
+    // 共用 m_mutex 就是 std::mutex 自死锁（非递归），所以这里必须是一把独立的锁。
+    mutable std::mutex m_mulTokensMutex;
     mutable bool m_mulTokensLoaded = false;
     mutable QSet<QString> m_mulTokens;
     std::atomic_bool m_cancelRequested{false};

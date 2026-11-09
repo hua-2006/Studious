@@ -178,6 +178,15 @@ QString AssetRegistry::partialPath(const QString &id) const
     return joinPath(joinPath(m_root, QStringLiteral("downloads")), safe + QStringLiteral(".part"));
 }
 
+bool AssetRegistry::fileLooksInstalled(const QFileInfo &info)
+{
+    // 只要不是"普通文件 + 非空"，就不算装好：
+    //   · 目录只是"存在"（下载中途的临时目录也会存在）；
+    //   · 0 字节文件最典型——下载被打断 / 杀毒软件隔离内容后留下的空壳，
+    //     光判 exists() 会让界面显示"已安装"，真正打开时才炸。
+    return info.isFile() && info.size() > 0;
+}
+
 AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
 {
     AssetStatus st;
@@ -203,7 +212,7 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
     // 单文件资产（.gguf 之类）：整份文件就是一个原子安装单位，不看 files 列表。
     if (target.isFile()) {
         st.installedBytes = target.size();
-        if (st.installedBytes <= 0) {
+        if (!fileLooksInstalled(target)) {
             st.state = AssetState::Corrupted;
             st.detail = i18n::s("安装文件为空（0 字节）", "The installed file is empty (0 bytes)");
         } else {
@@ -224,6 +233,7 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
     }
 
     QStringList missing;
+    QStringList emptyOrOdd;
     QString unsafeFile;
     for (const QString &relative : entry.files) {
         const QString normalized = normalizeRelative(relative);
@@ -237,8 +247,13 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
             unsafeFile = normalized;
             continue;
         }
-        if (!QFileInfo::exists(full)) {
+        // 目录型资产的关键文件不能只判 exists()：0 字节的 det.onnx / llama-server.exe
+        // 一样"存在"，装上去就是"界面说已安装、一用就崩"。判据与 verifyInstalled() 同一个。
+        const QFileInfo info(full);
+        if (!info.exists()) {
             missing << normalized;
+        } else if (!fileLooksInstalled(info)) {
+            emptyOrOdd << normalized;
         }
     }
 
@@ -256,6 +271,15 @@ AssetStatus AssetRegistry::computeStatus(const AssetEntry &entry) const
         st.detail = i18n::sf("缺少关键文件：%1",
                              "Missing required files: %1",
                              {missing.join(QStringLiteral(", "))});
+        return st;
+    }
+    if (!emptyOrOdd.isEmpty()) {
+        // 与"缺文件"分开报：文件在、内容是空的（或根本不是普通文件），
+        // 修法是"重新下载/检查磁盘"，不是"去资产页装一遍"。
+        st.state = AssetState::Corrupted;
+        st.detail = i18n::sf("关键文件为空或不是普通文件：%1",
+                             "The required files are empty or not regular files: %1",
+                             {emptyOrOdd.join(QStringLiteral(", "))});
         return st;
     }
 
@@ -308,6 +332,24 @@ AssetStatus AssetRegistry::status(const QString &id) const
     st.state = AssetState::NotInstalled;
     st.detail = i18n::s("清单中不存在该资产", "This asset is not listed in the manifest");
     return st;
+}
+
+bool AssetRegistry::isPresent(const QString &id) const
+{
+    // 与 status() 共用同一份缓存：refresh() 之后这里只是查表 + 比一个枚举，
+    // 不会因为多了一个"便宜判定"就把扫盘次数翻倍。
+    ensureFresh();
+    if (m_cache.contains(id)) {
+        return m_cache.value(id).state == AssetState::Installed;
+    }
+
+    // 清单外 / 缓存里没有（清单刚换过但还没 refresh）：现算一次，不入缓存 ——
+    // 保持"刷新由 refresh() / setManifest() 触发"的既有策略。
+    const AssetEntry *entry = m_manifest.find(id);
+    if (entry == nullptr) {
+        return false;
+    }
+    return computeStatus(*entry).state == AssetState::Installed;
 }
 
 bool AssetRegistry::uninstall(const QString &id, QString *error)
@@ -519,7 +561,9 @@ bool AssetRegistry::verifyInstalled(const QString &id, QString *error) const
 
     // —— 单文件资产（.gguf 之类）：整份文件就是唯一真值，直接对清单里的 sha256 ——
     if (targetInfo.isFile()) {
-        if (targetInfo.size() <= 0) {
+        // 判据与 computeStatus() 同一个谓词：这里曾经是 size() <= 0，两边哪天分叉就会出现
+        // 「状态页说已安装、启动校验说文件是空的」。
+        if (!fileLooksInstalled(targetInfo)) {
             return fail(i18n::sf("资产 %1 的安装文件为空（0 字节）：%2",
                                  "The installed file for asset %1 is empty (0 bytes): %2",
                                  {id, target}));
@@ -594,7 +638,7 @@ bool AssetRegistry::verifyInstalled(const QString &id, QString *error) const
             missing << normalized;
             continue;
         }
-        if (!info.isFile() || info.size() <= 0) {
+        if (!fileLooksInstalled(info)) {
             emptyOrOdd << normalized;
             continue;
         }

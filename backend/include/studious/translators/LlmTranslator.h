@@ -51,9 +51,6 @@ public:
     void resetCancel() override;
 
 private:
-    // 拼 baseUrl + /chat/completions（容忍 baseUrl 末尾带斜杠）。
-    QString chatCompletionsUrl() const;
-
     // system prompt：用户填了就用用户的，空则用内置默认。
     QString effectiveSystemPrompt() const;
 
@@ -65,7 +62,6 @@ private:
     // 批量的逐段补救传 1 —— 那里已经失败过一轮，再各跑 5 次会让请求数按段数放大。
     bool translateOne(const QString &text,
                       const QString &dstLang,
-                      const QString &endpoint,
                       QString &outText,
                       QString &outError,
                       int maxAttempts = 5);
@@ -74,7 +70,6 @@ private:
     // 解析失败内部会重试 1 次；仍失败返回 false，由调用方回退到逐段。
     bool translateBatch(const QStringList &texts,
                         const QString &dstLang,
-                        const QString &endpoint,
                         QStringList &outTexts,
                         QString &outError);
 
@@ -87,8 +82,9 @@ private:
                   QString &outContent,
                   QString &outError);
 
-    // 唯一一份"配置 -> HTTP 请求"的构造逻辑：payload（model / temperature /
-    // max_tokens / reasoning_effort / thinking）、URL、鉴权头全在这里。
+    // 单段 / 批量共用的请求构造：两条 message -> translators::makeChatRequest()。
+    // payload 字段、URL 拼接、鉴权头、超时都在 LlmRequest.h（与 llm::probeReasoning
+    // 共用同一份实现），这里只决定"这次翻译要说什么"。
     // postChat() 调它，所以单段与批量两条路径拿到的参数一定同源——
     // 之前批量路径自己硬编码 prompt / 温度 / maxTokens，用户的设置会静默失效。
     net::HttpRequest buildChatRequest(const QString &systemPrompt,
@@ -105,8 +101,7 @@ private:
     // 从模型输出里抠出 JSON 字符串数组，并校验长度与内容非空。
     static bool parseJsonStringArray(const QString &content, int expected, QStringList &out);
 
-    // 把 HTTP 层失败映射成中文原因。
-    static QString describeHttpFailure(const net::HttpResponse &resp);
+    // HTTP 层失败 -> 中文原因：见 LlmRequest.h 的 describeHttpFailure()（唯一一份文案表）。
 
     // 剥掉模型偶发包裹的 ``` 代码块 / 成对引号。
     static QString stripWrapper(QString text);
@@ -118,6 +113,9 @@ private:
     config::LlmConfig m_cfg;
     net::IHttpClient *m_http = nullptr;   // 不持有，生命周期由调用方保证
     std::atomic_bool m_cancelRequested{false};
+    // postChat() 上一次失败是不是「连不上 / 对面一声不响」。
+    // 这种失败重试几次都一样，还白白让用户多等 40 秒。
+    bool m_lastTransportFailure = false;
 
     // 本次 translate() 的时间基准，retryBudgetExhausted() 用它取 elapsed()。
     // 每次 translate() 开头重置一次，整次调用的所有段 / 所有目标语言共用一个 deadline。

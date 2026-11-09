@@ -563,11 +563,17 @@ struct OcrEngine::Session {
     bool loaded = false;
     int threads = 0;                 // 建会话时用的线程数（首次 load 固定，之后不再变）
     int warnedThreads = -1;          // 已经 warning 过的"不同线程数"请求，避免每帧刷日志
+    // 字典与模型类别数不匹配只提示一次。以前是函数级 static bool —— 前台截屏与实时翻译
+    // 各有一个 OcrEngine/Session（各持各的锁），两个工作线程会并发写同一个 bool。
+    // 放成员 + 原子交换，跨实例也不再有数据竞争。
+    std::atomic<bool> warnedClassMismatch{false};
     bool loadFailed = false;         // 文件齐但加载失败：不再反复重试
     QString loadError;               // 最近一次加载失败的原因
     QString lastError;               // 最近一次操作（isAvailable / recognize）的错误
 
-    QStringList missingFilesNow() const;
+    // 三件套的现场体检。返回"不在 / 不是普通文件"的文件名；
+    // 普通文件但 0 字节的写进 *emptyFiles（可空）——这两类修法不同，文案也要分开。
+    QStringList missingFilesNow(QStringList *emptyFiles = nullptr) const;
     // 调用方必须持有 mutex。
     bool load(int wantThreads);
     bool loadDict(QString *error);
@@ -582,18 +588,31 @@ struct OcrEngine::Session {
                        QString *error);
 };
 
-QStringList OcrEngine::Session::missingFilesNow() const
+QStringList OcrEngine::Session::missingFilesNow(QStringList *emptyFiles) const
 {
+    if (emptyFiles != nullptr) {
+        emptyFiles->clear();
+    }
+
+    // 以前三件套只看 QFileInfo::exists()：一个 0 字节的 det.onnx 会被判成"就绪"，
+    // 界面亮绿灯，等真正识别时才炸在 onnxruntime 里（报的是"加载失败"，看不出是文件没下完）。
+    // 现在统一按"普通文件且非空"判，并且把「不在」和「在但是空的」分成两份报：
+    // 前者去资产页下载，后者得重新下载 / 查磁盘。
     QStringList missing;
-    if (!QFileInfo::exists(detPath)) {
-        missing << QString::fromLatin1(kDetFile);
-    }
-    if (!QFileInfo::exists(recPath)) {
-        missing << QString::fromLatin1(kRecFile);
-    }
-    if (!QFileInfo::exists(dictPath)) {
-        missing << QString::fromLatin1(kDictFile);
-    }
+    const auto check = [emptyFiles, &missing](const QString &path, const char *name) {
+        const QFileInfo info(path);
+        if (!info.exists() || !info.isFile()) {
+            missing << QString::fromLatin1(name);   // 不在，或者被同名的目录占了位
+            return;
+        }
+        if (info.size() <= 0 && emptyFiles != nullptr) {
+            *emptyFiles << QString::fromLatin1(name);
+        }
+    };
+
+    check(detPath, kDetFile);
+    check(recPath, kRecFile);
+    check(dictPath, kDictFile);
     return missing;
 }
 
@@ -644,16 +663,23 @@ bool OcrEngine::Session::load(int wantThreads)
 {
     // 前置条件：调用方持有 mutex（见 OcrEngine::isAvailable / recognize）。
     // 1) 文件检查放最前面：缺文件是最常见的情形（资产还没下），别为它建会话。
-    const QStringList missing = missingFilesNow();
-    if (!missing.isEmpty()) {
+    QStringList emptyFiles;
+    const QStringList missing = missingFilesNow(&emptyFiles);
+    if (!missing.isEmpty() || !emptyFiles.isEmpty()) {
         det.reset();
         rec.reset();
         loaded = false;
         ready = false;
         loadFailed = false;   // 文件又缺了：等补装之后再试
-        loadError = i18n::sf("OCR 模型缺失：%1（目录 %2）",
-                             "OCR models are missing: %1 (directory %2)",
-                             {missing.join(QStringLiteral("、")), modelsDir});
+        // 「没下载」和「下下来了但内容是空的」修法不同，文案必须分开 ——
+        // 后者说成"缺失"会让用户反复点下载，点完还是 0 字节。
+        loadError = missing.isEmpty()
+                        ? i18n::sf("OCR 模型文件是空的：%1",
+                                   "The OCR model file is empty (0 bytes): %1",
+                                   {emptyFiles.join(QStringLiteral("、"))})
+                        : i18n::sf("缺少 OCR 模型：%1（目录 %2）",
+                                   "Missing OCR models: %1 (directory %2)",
+                                   {missing.join(QStringLiteral("、")), modelsDir});
         return false;
     }
 
@@ -1100,9 +1126,7 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
         const bool hasSpace = classes > dictSize + 1;
         if (classes != dictSize + 1 && classes != dictSize + 2) {
             // 字典与模型不配套：能跑，但映射会错位。只提示一次，不中断识别。
-            static bool warned = false;
-            if (!warned) {
-                warned = true;
+            if (!warnedClassMismatch.exchange(true, std::memory_order_relaxed)) {
                 qWarning().noquote()
                     << QStringLiteral("[ocr] 字典与模型类别数不匹配：字典 %1 行，模型 %2 类。"
                                       "请确认 rec.onnx 与 ppocr_keys_v1.txt 来自同一套 PP-OCR 资产（v4 与 v5 不能混搭）")

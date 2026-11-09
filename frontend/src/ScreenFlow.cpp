@@ -23,6 +23,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
@@ -41,7 +42,8 @@ constexpr const char *kTempDirName = "studious-capture";
 
 // 整屏位图与 QML 的 Image 之间只能走文件/URL，所以每次截屏落一个临时 PNG。
 // 用固定目录 + 递增序号而不是 QTemporaryDir：QML 的 Image 是异步加载的，
-// 目录一旦在加载前被删就会白屏，所以清理交给系统的临时目录策略。
+// 目录一旦在加载前被删就会白屏。文件的生命周期由 ScreenFlow 自己管 ——
+// m_shotPath 记着当前这一张，releaseShotFile() 负责删（不再指望系统清理临时目录）。
 QString shotFilePath()
 {
     static quint64 counter = 0;
@@ -188,6 +190,8 @@ ScreenFlow::~ScreenFlow()
     m_recognizing = false;   // 已等回来了，不再有线程在跑
     // 引擎由 shared_ptr 持有：这里只是放掉自己那一份，线程里那份撑到 recognize() 返回。
     m_ocr.reset();
+    // 最后一张整屏 PNG 也删掉：进程退出后没人会再来清临时目录。
+    releaseShotFile();
 }
 
 studious::platform::IPlatform *ScreenFlow::platform() const
@@ -346,6 +350,8 @@ bool ScreenFlow::begin()
         return false;
     }
 
+    // 上一张整屏图与它的临时 PNG 已经没有用了：先还掉再换新的。
+    releaseShotFile();
     m_shot = shot.image;
     m_virtualLogical = QGuiApplication::primaryScreen()
                             ? QGuiApplication::primaryScreen()->virtualGeometry()
@@ -560,12 +566,16 @@ void ScreenFlow::cancel()
     }
     m_busy = false;
     ++m_shotToken;   // 作废在途的 OCR 结果（识别线程本身收不回来，靠代号丢弃）
+    // 整个流程结束：整屏位图（双 4K ≈ 30-60MB）和落盘的 PNG 都该还回去了。
+    // m_shot 以前只在下次截屏时被覆盖 —— 浮层关掉之后这份图没人再用，却常驻到进程结束。
+    releaseShotFile();
     m_selectionLogical = QRect();
     m_blocks.clear();
     m_lastWords.clear();
     m_errorText.clear();
     setPhase(QStringLiteral("Idle"));
     setStatusText(QString());
+    emit screenChanged();   // 整屏图已经放掉了：尺寸归零，QML 的遮罩底图跟着关
     emit selectionChanged();
     emit blocksChanged();
     emit errorTextChanged();
@@ -658,10 +668,28 @@ QString ScreenFlow::imageSourceUrl() const
 {
     if (m_shot.isNull())
         return QString();
+    // 同一张图只落一次盘：QML 里每求值一次绑定都会调到这里，以前是每调一次写一张新 PNG
+    // （文件名带自增计数，永远不重复、也永远不删）。
+    if (!m_shotUrl.isEmpty())
+        return m_shotUrl;
     const QString path = shotFilePath();
-    if (!m_shot.save(path, "PNG"))
+    if (!m_shot.save(path, "PNG")) {
+        QFile::remove(path);
         return QString();
-    return QUrl::fromLocalFile(path).toString();
+    }
+    m_shotPath = path;
+    m_shotUrl = QUrl::fromLocalFile(path).toString();
+    return m_shotUrl;
+}
+
+void ScreenFlow::releaseShotFile()
+{
+    if (!m_shotPath.isEmpty()) {
+        QFile::remove(m_shotPath);
+    }
+    m_shotPath.clear();
+    m_shotUrl.clear();
+    m_shot = QImage();
 }
 
 QVariantMap ScreenFlow::pixelInfoAt(int x, int y) const

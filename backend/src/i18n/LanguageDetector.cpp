@@ -71,11 +71,22 @@ QSet<QString> buildStops(const char *const *list)
 
 const QSet<QString> &stopsFor(int index)
 {
-    static QVector<QSet<QString>> cache;
-    if (cache.isEmpty()) {
+    // magic static：C++11 保证多线程下只构造一次，且构造完成前其它线程阻塞。
+    // 以前的写法是 `static QVector; if (cache.isEmpty()) { append... }` ——
+    // 两个工作线程同时首次进来时，B 可能看到 size==1 就直接 at(index) 越界，
+    // 而 A 的 append 触发 realloc 又会让已返回的 QSet 引用悬垂（memsafety #4）。
+    static const QVector<QSet<QString>> cache = [] {
+        constexpr int kCount = int(sizeof(kLatinProfiles) / sizeof(kLatinProfiles[0]));
+        QVector<QSet<QString>> out;
+        out.reserve(kCount);
         for (const LatinProfile &profile : kLatinProfiles) {
-            cache.append(buildStops(profile.stops));
+            out.append(buildStops(profile.stops));
         }
+        return out;
+    }();
+    if (index < 0 || index >= cache.size()) {
+        static const QSet<QString> empty;
+        return empty;
     }
     return cache.at(index);
 }

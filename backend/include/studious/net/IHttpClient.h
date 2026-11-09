@@ -17,6 +17,10 @@ struct HttpRequest {
     QList<QPair<QByteArray, QByteArray>> headers;
     QByteArray body;
     int timeoutMs = 15000;
+    // 「多久连一个字都没收到就算失败」。0 = 不单独判。
+    // 大模型不是流式返回时，timeoutMs 管的是整段生成时间（几十秒很正常），
+    // 而用户真正会以为「卡死了」的是：连服务都没连上 / 对面一声不响。
+    int firstByteTimeoutMs = 0;
 };
 
 struct HttpResponse {
@@ -27,6 +31,11 @@ struct HttpResponse {
     // 传输是不是被调用方（onStart / onData 返回 false）主动中止的。
     // 中止不等于网络故障：下载器据此区分"用户取消 / 服务端 416"与"真的连不上"。
     bool aborted = false;
+    // 是「首字节超时」（连上了但对面一直不出声），不是整段请求超时。
+    // 上层据此给用户一句人话，而不是把毫秒数甩给他。
+    bool firstByteTimedOut = false;
+    // 连不上（拒绝连接 / 域名解析失败 / 网络不可达）—— 这类失败重试没有意义。
+    bool connectionFailed = false;
 };
 
 // 流式接收回调。大文件（模型包动辄几个 GB）绝不能整份读进内存再落盘，

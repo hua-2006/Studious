@@ -9,6 +9,7 @@
 #include <QStandardPaths>
 
 #include <studious/asset/AssetRegistry.h>
+#include <studious/asset/DataRoots.h>
 #include <studious/asset/Manifest.h>
 #include <studious/asset/TrustKeys.h>
 
@@ -16,23 +17,9 @@ namespace studious::ui::paths {
 
 QString dataRoot()
 {
-    // 从 exe 目录往上找 version.json 当作"应用目录"。开发期 exe 在
-    // frontend/build（version.json 在仓库根，隔两层），打包后一般就在 exe 旁边。
-    // 最多找四层，找不到就用 exe 目录 —— 宁可放在 exe 边上，也不要再散回 AppData。
-    static const QString resolved = [] {
-        QDir dir(QCoreApplication::applicationDirPath());
-        for (int depth = 0; depth < 4; ++depth) {
-            if (QFileInfo::exists(dir.filePath(QStringLiteral("version.json")))) {
-                break;
-            }
-            if (!dir.cdUp()) {
-                dir = QDir(QCoreApplication::applicationDirPath());
-                break;
-            }
-        }
-        return QDir::cleanPath(dir.filePath(QStringLiteral("data")));
-    }();
-    return resolved;
+    // 推导只有一份实现，在 backend/include/studious/asset/DataRoots.h —— 本地 MT、
+    // CLI、自测程序也用同一份，别再在这里抄一遍向上查找。
+    return studious::asset::dataRoot();
 }
 
 QString assetsRoot()
@@ -64,7 +51,8 @@ QString modelsOcrDir()
 
 QString logsDir()
 {
-    return QDir(dataRoot()).filePath(QStringLiteral("logs"));}
+    return QDir(dataRoot()).filePath(QStringLiteral("logs"));
+}
 
 QString recordsDir()
 {
@@ -125,6 +113,9 @@ bool loadManifest(studious::asset::Manifest *out)
     opts.trustedPublicKey = QByteArray::fromHex(studious::asset::kManifestPublicKeyHex);
     // 发版 / 验收时设 STUDIOUS_REQUIRE_SIGNED_MANIFEST=1：没有签名直接拒绝加载。
     opts.requireSignature = qEnvironmentVariableIsSet("STUDIOUS_REQUIRE_SIGNED_MANIFEST");
+    // 只在开发期喊「清单未验签」：那时读的是仓库里这份示例清单，被改过没人知道。
+    // 正式包内置的清单同样没签名，但那是已知状态，不该每次启动刷一行告警。
+    opts.warnWhenUnsigned = qEnvironmentVariableIsSet("STUDIOUS_DEV_MANIFEST");
     opts.allowMissingSha256 = true;
     opts.maxSchemaVersion = 1;
 

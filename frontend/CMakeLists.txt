@@ -61,6 +61,8 @@ qt_add_executable(studious
     src/AppSettings.h
     src/AssetPaths.cpp
     src/AssetPaths.h
+    src/CacheHandle.cpp
+    src/CacheHandle.h
     src/EngineIds.cpp
     src/EngineIds.h
     src/Languages.cpp
@@ -79,6 +81,8 @@ qt_add_executable(studious
     src/LiveSession.h
     src/MiniSession.cpp
     src/MiniSession.h
+    src/Paragraphs.cpp
+    src/Paragraphs.h
     src/TranslateJob.cpp
     src/TranslateJob.h
     src/QuickTranslate.cpp
@@ -107,6 +111,7 @@ qt_add_qml_module(studious
         qml/Theme.qml
         qml/overlay/CaptureOverlay.qml
         qml/overlay/CaptureSettingsPanel.qml
+ qml/overlay/OverlaySettingsGroups.qml
         qml/overlay/LiveOverlay.qml
     qml/overlay/MiniWindow.qml
         qml/overlay/LiveControlBar.qml
@@ -114,9 +119,14 @@ qt_add_qml_module(studious
         qml/components/FieldRow.qml
         qml/components/AppChip.qml
         qml/components/Segmented.qml
+        qml/components/MenuPanel.qml
+        qml/components/MenuRow.qml
+qml/components/Toast.qml
         qml/components/AppToggle.qml
         qml/components/Badge.qml
         qml/components/StatusDot.qml
+ qml/components/NumStepper.qml
+ qml/components/CloseButton.qml
         qml/components/AppButton.qml
         qml/components/AppTextField.qml
         qml/components/AppComboBox.qml

@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include <QThread>
 
+#include <studious/asset/AssetRegistry.h>
 #include <studious/i18n/L10n.h>
 #include <studious/runtime/LlamaServer.h>
 
@@ -71,23 +72,27 @@ int preferredThreads(const QString &backend)
 //   绝对路径      -> 原样用
 QString resolveModelPath(const QString &requested)
 {
-    const QString trimmed = requested.trimmed();
-    if (!trimmed.isEmpty()) {
-        const QFileInfo info(trimmed);
-        return info.isAbsolute() ? info.absoluteFilePath()
-                                 : QDir(LocalEngine::modelsDir()).filePath(trimmed);
+    const QString direct = LocalEngine::pathForName(requested);
+    if (!direct.isEmpty()) {
+        return direct;
     }
     const QStringList models = LocalEngine::availableModels();
     if (models.isEmpty()) {
         return QString();
     }
-    return QDir(LocalEngine::modelsDir()).filePath(models.first());
+    return QDir(LocalEngine::llmModelsDir()).filePath(models.first());
 }
 
 // 实际会用哪个运行时：只有一个判据，任何地方要问「这次是 Vulkan 还是 CPU」都走这里，
 // 免得 ensureStarted 里算一套、比较里算另一套，两边口径一歪就变成永远重启或永远不重启。
 QString resolveBackend(bool preferGpu)
 {
+    // 只装了 Vulkan 运行时（没有 CPU 版 exe）时，preferGpu=false 只是让引擎起不来，
+    // 不是省资源：这里按实际装了什么兜底，保证"有得跑"永远优先于"用户偏好"。
+    // 想真正走纯 CPU，用「GPU 层数 = 0」表达（Vulkan exe 也照样不卸载层）。
+    if (!preferGpu && !LocalEngine::isCpuAvailable() && LocalEngine::isGpuAvailable()) {
+        return QStringLiteral("vulkan");
+    }
     return (preferGpu && LocalEngine::isGpuAvailable()) ? QStringLiteral("vulkan")
                                                         : QStringLiteral("cpu");
 }
@@ -164,7 +169,7 @@ QString LocalEngine::installRoot()
     return studious::ui::paths::assetsRoot();
 }
 
-QString LocalEngine::modelsDir()
+QString LocalEngine::llmModelsDir()
 {
     // 只有本地 LLM 的 GGUF 在这里；模型目录按用途分了三格（llm / mt / ocr），
     // 平铺在一起时 llama-server、opus-mt 和 OCR 的条目互相看起来都像"模型"。
@@ -173,34 +178,43 @@ QString LocalEngine::modelsDir()
 
 QStringList LocalEngine::availableModels()
 {
-    const QDir dir(modelsDir());
-    if (!dir.exists()) {
+    // 单一真源：清单 + AssetRegistry::isPresent()（存在且非空，不哈希）。
+    //
+    // 以前这里自己扫 <root>/models/llm，再用后缀白名单（onnx/txt/json/spm）挡掉
+    // OCR 的伴随文件 —— 那套只有"目录里躺着的都是 llama 权重"时才成立：
+    //   · 用户手放一个别的 .gguf 也算"可用"，选中后 llama-server 直接启动失败；
+    //   · 目录里出现新的非权重文件（比如 tokenizer 副本）就得再往白名单里加一条。
+    // 现在只认清单里 type=="model" 的条目，且 AssetRegistry 认为它真的装好了。
+    studious::asset::Manifest manifest;
+    if (!studious::ui::paths::loadManifest(&manifest)) {
+        // 清单读不到就当作"没有模型"：宁可让界面报"缺资产"，也不凭文件名猜一个能启动的东西。
         return {};
     }
 
-    // 只收普通文件：我们的资产就是 models/ 下的无扩展名文件，
-    // 目录（比如下载中的临时目录）不能进下拉框，否则选中就会启动失败。
-    const QFileInfoList entries =
-        dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort);
-
-    // 同一个 models/ 目录还躺着视觉模型的单文件资产（ocr.det/rec 的 .onnx、字典 .txt）。
-    // 它们是给 OcrEngine 用的，不是 llama 权重，选了只会让 llama-server 启动失败，
-    // 所以这里按扩展名挡掉。
-    const QStringList nonWeightSuffixes = { QStringLiteral("onnx"),
-                                            QStringLiteral("txt"),
-                                            QStringLiteral("json"),
-                                            QStringLiteral("spm") };
+    studious::asset::AssetRegistry registry(installRoot(), manifest);
+    const QString llmDir = QDir::cleanPath(llmModelsDir());
 
     QStringList names;
-    names.reserve(entries.size());
-    for (const QFileInfo &entry : entries) {
-        if (!entry.isFile())
+    const QVector<studious::asset::AssetStatus> statuses = registry.listStatus();
+    names.reserve(statuses.size());
+    for (const studious::asset::AssetStatus &status : statuses) {
+        if (!registry.isPresent(status.id)) {
             continue;
-        if (entry.fileName().startsWith(QLatin1String("ocr.")))
+        }
+
+        const studious::asset::AssetEntry *entry = manifest.find(status.id);
+        if (entry == nullptr || !entry->isModel()) {
             continue;
-        if (nonWeightSuffixes.contains(entry.suffix().toLower()))
+        }
+
+        // 清单里 type=="model" 的不只有 LLM：本地 MT（models/mt/<id>，目录）与 OCR 三件套
+        // （models/ocr/...）也是 model。交给 llama-server 只会启动失败，所以按布局筛：
+        // LLM 一律在 models/llm 下（见 AssetRegistry::resolveTarget），不靠 id 前缀猜。
+        const QFileInfo info(status.installPath);
+        if (!info.isFile() || QDir::cleanPath(info.absolutePath()) != llmDir) {
             continue;
-        names << entry.fileName();
+        }
+        names << info.fileName();
     }
 
     // 稳定且确定的顺序：先大小写不敏感，再按原始串兜底（避免只差大小写时顺序随平台变）。
@@ -209,6 +223,16 @@ QStringList LocalEngine::availableModels()
         return cmp != 0 ? cmp < 0 : a < b;
     });
     return names;
+}
+
+QString LocalEngine::pathForName(const QString &fileName)
+{
+    const QString trimmed = fileName.trimmed();
+    if (trimmed.isEmpty()) {
+        return QString();
+    }
+    const QFileInfo info(trimmed);
+    return info.isAbsolute() ? info.absoluteFilePath() : QDir(llmModelsDir()).filePath(trimmed);
 }
 
 bool LocalEngine::isGpuAvailable()
@@ -304,10 +328,13 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
 
     // 资产检查放在起进程之前：缺文件时给"缺哪个"，而不是让 llama-server 报个退出码。
     if (model.isEmpty()) {
-        return fail(sf("本地引擎没有可用模型：%1 里没有任何文件。\n请在「资产」页下载模型。",
-                       "The local engine has no model available: %1 contains no files.\n"
-                       "Please download a model on the Assets page.",
-                       {QDir::toNativeSeparators(modelsDir())}));
+        // 空名 = 「自动（第一个可用）」，而 availableModels() 现在只认清单里装好的资产，
+        // 所以这里的原因不是"目录里没文件"，而是"清单里没有一条可用的 model 资产"。
+        return fail(sf("本地引擎没有可用模型：%1 里没有清单登记且已安装的模型。\n"
+                       "请在「资产」页下载模型（或导入一个）。",
+                       "The local engine has no usable model: %1 holds no installed model listed in "
+                       "the manifest.\nPlease download a model on the Assets page (or import one).",
+                       {QDir::toNativeSeparators(llmModelsDir())}));
     }
     // 目录也算"没有模型"：ui 里选「自动（第一个可用）」时，如果上游把 modelsDir 当成
     // 文件路径传下来，llama-server 只会回一句 gguf_init_from_file failed，用户看不懂。
@@ -316,6 +343,14 @@ bool LocalEngine::ensureStarted(const LocalEngineConfig &cfg, QString *error)
         return fail(sf("本地引擎缺少模型：%1\n请在「资产」页下载这个模型。",
                        "The local engine model is missing: %1\n"
                        "Please download this model on the Assets page.",
+                       {QDir::toNativeSeparators(model)}));
+    }
+    // 0 字节与非空是两回事：explicit 传进来的路径不经过 availableModels()，
+    // 而空的 .gguf 一样"存在"，llama-server 只会给一句看不懂的加载失败。
+    if (modelInfo.size() <= 0) {
+        return fail(sf("本地引擎的模型文件是空的（0 字节）：%1\n请重新下载这个模型。",
+                       "The local engine model file is empty (0 bytes): %1\n"
+                       "Please download this model again.",
                        {QDir::toNativeSeparators(model)}));
     }
     if (!QFileInfo::exists(exe)) {

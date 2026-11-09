@@ -177,6 +177,10 @@ QtObject {
     readonly property color goodContainer: dark ? mixOklab("#14512F", "#0D1411", 0.70)
                                                 : "#DDF2E6"
 
+    // 表单标签列宽：FieldRow 的默认 labelWidth，也是「说明文字左缩进」的基准。
+    // 以前这个 132 散落在 14 处「132 + Theme.s3」里。
+    readonly property int formLabelWidth: 132
+
     // ---- 间距 ----
     readonly property int s1: 4
     readonly property int s2: 8
@@ -220,4 +224,67 @@ QtObject {
     // ---- 动效 ----
     readonly property int durFast: 150
     readonly property int durBase: 250
+
+    // ---- 引擎（翻译引擎下拉 / 状态栏共用）----
+    // 顺序就是下拉里的顺序：自动、Web 在线、云端 LLM、本地 LLM、本地 MT。
+    // 空串是「自动」的 id（后端历史遗留，不要改成 "auto"）。
+    readonly property var engineIds: ["", "web", "llm-cloud", "llm-local", "local-mt"]
+
+    // 老别名一律归一到 engineIds 里的那个 id；认不出来就当「自动」。
+    // 之前本地 MT 的绿点/黄点对不上，就是因为 "localmt" 没归一，
+    // 查不到状态行 → 按未就绪画成黄点。
+    function canonicalEngineId(id) {
+        var v = (id === undefined || id === null) ? "" : String(id).trim().toLowerCase()
+        if (v === "web")
+            return "web"
+        if (v === "llm-cloud" || v === "llm")
+            return "llm-cloud"
+        if (v === "llm-local" || v === "llamacpp" || v === "local-llm")
+            return "llm-local"
+        if (v === "local-mt" || v === "localmt")
+            return "local-mt"
+        return ""
+    }
+
+    // 状态行的真实状态。后端有两种字段可能打架：
+    // state === "ready" 但 ready === false —— 一律以 ready 为准当 "not-ready"。
+    function engineStateOf(row) {
+        var raw = row && row.state ? row.state : (row && row.ready ? "ready" : "not-ready")
+        return (raw === "ready" && row && !row.ready) ? "not-ready" : raw
+    }
+
+    function engineUsable(row) {
+        return theme.engineStateOf(row) === "ready"
+    }
+
+    // 状态 → 颜色令牌。只用已有的语义色，不新造色板。
+    function engineStateColor(state) {
+        if (state === "ready")
+            return theme.good
+        if (state === "not-ready")
+            return theme.caution
+        if (state === "missing-assets" || state === "missing-config")
+            return theme.danger
+        return theme.inkVariant
+    }
+
+    // 下拉/状态点里的短名：优先后端给的 shortName，
+    // 否则把 "model.qwen2.5-3b-instruct.q4km" 这类 id 削成 "qwen2.5-3b"。
+    // 注意 "qwen2.5-3b" 自己带点，只削「点 + 纯字母数字下划线」的尾段（.q4km / .gguf）。
+    function engineShortName(row) {
+        if (!row)
+            return ""
+        if (row.shortName)
+            return String(row.shortName)
+        var s = row.model ? String(row.model) : ""
+        if (s.length > 0) {
+            if (s.indexOf("model.") === 0)
+                s = s.substring(6)
+            s = s.replace(/\.[A-Za-z0-9_]+$/, "")
+            s = s.replace("-instruct", "")
+            if (s.length > 0)
+                return s
+        }
+        return String(row.name || row.id || "")
+    }
 }

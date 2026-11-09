@@ -12,6 +12,7 @@
 #    define NOMINMAX
 #  endif
 #  include <windows.h>
+#  include <tlhelp32.h>
 #endif
 
 namespace studious::platform {
@@ -86,6 +87,40 @@ bool ProcessGuard::active() const
     return m_handle != nullptr;
 }
 
+void killChildProcesses()
+{
+    const DWORD self = ::GetCurrentProcessId();
+    HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        qWarning("[guard] killChildProcesses: snapshot failed (err=%lu)", ::GetLastError());
+        return;
+    }
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    int killed = 0;
+    if (::Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ParentProcessID != self || entry.th32ProcessID == self) {
+                continue;
+            }
+            HANDLE child = ::OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+            if (child == nullptr) {
+                continue;
+            }
+            if (::TerminateProcess(child, 1)) {
+                ++killed;
+            }
+            ::CloseHandle(child);
+        } while (::Process32NextW(snapshot, &entry));
+    }
+    ::CloseHandle(snapshot);
+
+    if (killed > 0) {
+        qInfo("[guard] terminated %d child process(es)", killed);
+    }
+}
+
 #else
 
 // POSIX 对应物是 prctl(PR_SET_PDEATHSIG, SIGKILL)（Linux）或设置父进程为 init。
@@ -104,6 +139,8 @@ bool ProcessGuard::active() const
 {
     return false;
 }
+
+void killChildProcesses() {}
 
 #endif
 

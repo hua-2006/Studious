@@ -7,7 +7,9 @@
 #include "Languages.h"
 #include "LocalEngine.h"
 #include "LogSink.h"
+#include "Paragraphs.h"
 #include "QuickTranslate.h"
+#include "platform/ProcessGuard.h"
 #include "TranslateJob.h"
 #include "i18n/Strings.h"
 
@@ -48,6 +50,7 @@
 #include <studious/translators/WebProvider.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace studious::ui {
@@ -197,44 +200,15 @@ bool copyDirRecursive(const QString &from, const QString &to)
     return true;
 }
 
-// 把「设置里存的模型文件名」翻成 LocalEngineConfig.modelPath。// 空文件名必须原样传空串：LocalEngine::resolveModelPath() 的「空 = 第一个可用模型」
-// 分支只在真正收到空串时才走。以前这里写的是 modelsDir() + "/" + fileName，空名字就变成
-// "…\assets\models\"（一个目录），绕过那条分支后 llama-server 拿到 -m <目录>，
-// 直接 gguf_init_from_file: failed to open GGUF file —— 界面就只剩一串英文日志。
+// 模型路径 / 短名 / 标签只有 LocalEngine 一份实现，这里留薄壳只为调用点少改动。
 QString localModelPathFrom(const QString &fileName)
 {
-    const QString trimmed = fileName.trimmed();
-    if (trimmed.isEmpty()) {
-        return QString();
-    }
-    const QFileInfo info(trimmed);
-    return info.isAbsolute() ? info.absoluteFilePath()
-                             : QDir(LocalEngine::modelsDir()).filePath(trimmed);
+    return LocalEngine::pathForName(fileName);
 }
 
-// "model.qwen2.5-0.5b-instruct.q4km" → "qwen2.5-0.5b-instruct"
-// 引擎列表的副标题、翻译页状态条都只有一行宽度，只留"能认出是哪个模型"的中间那段。
 QString shortModelName(const QString &raw)
 {
-    QString name = raw.trimmed();
-    if (name.isEmpty()) {
-        return QString();
-    }
-    const int slash = qMax(name.lastIndexOf(QLatin1Char('/')), name.lastIndexOf(QLatin1Char('\\')));
-    if (slash >= 0) {
-        name = name.mid(slash + 1);
-    }
-    if (name.startsWith(QLatin1String("model."))) {
-        name = name.mid(6);
-    }
-    for (const QLatin1String suffix : {QLatin1String(".q4km"), QLatin1String(".q8_0"),
-                                      QLatin1String(".gguf"), QLatin1String(".bin")}) {
-        if (name.endsWith(suffix)) {
-            name.chop(static_cast<int>(suffix.size()));
-            break;
-        }
-    }
-    return name;
+    return LocalEngine::shortModelName(raw);
 }
 
 // 本地引擎实际会加载哪个模型：设置里选了就用它，选「自动」就是第一个可用模型。
@@ -244,7 +218,7 @@ QString localModelLabel(const AppSettings &settings)
     if (name.isEmpty()) {
         name = LocalEngine::availableModels().value(0);
     }
-    return shortModelName(name);
+    return LocalEngine::shortModelName(name);
 }
 
 } // namespace
@@ -300,10 +274,8 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
 
     m_srcLang = langs::normalizeSource(settings.srcLang);
     m_dstLangs = langs::split(settings.dstLang);
-    if (m_dstLangs.isEmpty()) {
-        m_dstLangs = {QStringLiteral("zh")};
-    }
-
+    // 空列表不在这里兜底：等 m_engineId 解析出来后由 langs::normalizeTargets 一次归一
+    // （空 -> {zh}，本地 MT 收成单选），这里先取一个占位值给界面读。
     m_activeDst = m_dstLangs.value(0, QStringLiteral("zh"));
     m_themeMode = settings.themeMode;
     m_fontScale = settings.fontScale;
@@ -338,7 +310,7 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_llmConfig = llmConfigToMap(settings.llm);
     m_webProviderId = settings.webProviderId;
     m_localModel = settings.localModelFileName;
-    m_localUseGpu = settings.localUseGpu;
+    m_localUseGpu = settings.localUseGpu || localGpuLocked();
     m_localContextSize = settings.localContextSize;
     m_localThreads = settings.localThreads;
     m_localGpuLayers = settings.localGpuLayers;
@@ -403,7 +375,8 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
 
     // 启动时就守着「本地 MT 只翻一个目标语言」这条规则：注册表里可能是上一次
     // 多选留下来的组合（比如 zh,ja），本地 MT 根本翻不了第二个。
-    const QStringList normalized = langs::normalizeTargets(m_dstLangs, m_engineId);
+    const QStringList normalized =
+        langs::normalizeTargetsAgainstSource(langs::normalizeTargets(m_dstLangs, m_engineId), m_srcLang);
     if (normalized != m_dstLangs) {
         m_dstLangs = normalized;
         m_activeDst = m_dstLangs.first();
@@ -413,7 +386,7 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
 
     m_statusText = i18n::s().common.ready;
 
-    // 首次启动的示例原文：三段，段间用空行分隔（splitParagraphs 按空行切段）。
+    // 首次启动的示例原文：三段，段间用空行分隔（paragraphs::split 按空行切段）。
     // 用户输入不会覆盖它 —— 这里只做初始值。
     m_sourceText = QStringLiteral("Hello, world!\n"
                                   "\n"
@@ -533,6 +506,11 @@ AppBackend::~AppBackend()
     // 注销日志回调：退出阶段 logsink 可能还在别的线程打最后几行，
     // 不能再往一个正在拆的 QObject 上投事件。
     logsink::setNotify(nullptr);
+    // 同理：这两个钩子也是进程级 static std::function，捕获了裸 this。
+    // 退出时若还有一单翻译在飞，QuickTranslate 会在收尾时回调它们 ——
+    // 不摘掉就是拿已析构的 AppBackend 去 touchMtIdle()/startLocalServer()。
+    studious::ui::setMtUsedHook(nullptr);
+    studious::ui::setLocalEngineStarter(nullptr);
 }
 
 // ---------------------------------------------------------------- 属性 setter
@@ -553,16 +531,29 @@ void AppBackend::setSrcLang(const QString &code)
         return;
     }
     m_srcLang = normalized;
+    // 源语言改成和目标语言一样就没得翻了：把撞上的目标语言换掉。
+    const QStringList fixedDst = langs::normalizeTargetsAgainstSource(m_dstLangs, m_srcLang);
+    const bool dstChanged = fixedDst != m_dstLangs;
+    if (dstChanged) {
+        m_dstLangs = fixedDst;
+        if (!m_dstLangs.contains(m_activeDst))
+            m_activeDst = m_dstLangs.first();
+    }
     saveSettings();
     emit srcLangChanged();
+    if (dstChanged) {
+        emit dstLangsChanged();
+        emit activeDstChanged();
+        emit blocksChanged();
+    }
     refreshEngineStatuses();
 }
 
 void AppBackend::setDstLangs(const QStringList &codes)
 {
-    // 空兜底 + 本地 MT 收成单选，规则只在 langs::normalizeTargets() 里写一遍。
-    // 界面已按 dstMultiSupported 禁掉多选，这里兜住其它入口（配置页、设置、脚本）。
-    const QStringList next = langs::normalizeTargets(codes, m_engineId);
+    // 空兜底 + 本地 MT 收成单选 + 不许和源语言重复，规则只在 langs 里写一遍。
+    const QStringList next =
+        langs::normalizeTargetsAgainstSource(langs::normalizeTargets(codes, m_engineId), m_srcLang);
     if (m_dstLangs == next) {
         return;
     }
@@ -585,7 +576,8 @@ void AppBackend::reloadLanguagesFromSettings()
     // Main.qml 的 Connections 里：backend 变了就调 miniSession.reloadLanguagesFromSettings()。
     const AppSettings settings = AppSettings::load();
     const QString src = langs::normalizeSource(settings.srcLang);
-    const QStringList dsts = langs::normalizeTargets(langs::split(settings.dstLang), m_engineId);
+    const QStringList dsts =
+        langs::normalizeTargetsAgainstSource(langs::normalizeTargets(langs::split(settings.dstLang), m_engineId), m_srcLang);
 
     if (m_srcLang != src) {
         m_srcLang = src;
@@ -615,7 +607,8 @@ void AppBackend::setEngineId(const QString &id)
     emit engineIdChanged();
     // 换到本地 MT 时把多选的目标语言收成一个 —— 否则下一次翻译会因为
     // "某个目标语言没有对应模型"整单失败，界面上还会留着几个用不上的标签。
-    const QStringList clamped = langs::normalizeTargets(m_dstLangs, next);
+    const QStringList clamped =
+        langs::normalizeTargetsAgainstSource(langs::normalizeTargets(m_dstLangs, next), m_srcLang);
     if (clamped != m_dstLangs) {
         m_dstLangs = clamped;
         m_activeDst = m_dstLangs.first();
@@ -658,6 +651,19 @@ QVariantList AppBackend::languages() const
     return list;
 }
 
+QVariantList AppBackend::targetLanguages() const
+{
+    // 目标语言不能是「自动检测」：源语言才需要它。
+    QVariantList list;
+    for (const QVariant &item : languages()) {
+        const QVariantMap map = item.toMap();
+        if (map.value(QStringLiteral("code")).toString() == QLatin1String("auto"))
+            continue;
+        list.append(item);
+    }
+    return list;
+}
+
 QVariantList AppBackend::engines() const
 {
     QVariantList list;
@@ -686,7 +692,7 @@ int AppBackend::cacheMisses() const
 
 int AppBackend::paragraphCount() const
 {
-    return splitParagraphs(m_sourceText).size();
+    return studious::ui::paragraphs::split(m_sourceText).size();
 }
 
 int AppBackend::charCount() const
@@ -1533,9 +1539,26 @@ bool AppBackend::trayAvailable()
     return m_desktop.trayAvailable();
 }
 
+bool AppBackend::ensureTrayIcon()
+{
+    // 点「最小化到托盘」是临时决定，不该被「设置里两个开关都关着」拦住 ——
+    // 否则窗口一 hide 就没有任何入口能叫回来。
+    m_desktop.setTrayEnabled(true);
+    m_trayForced = true;
+    const bool ok = m_desktop.trayAvailable();
+    if (!ok) {
+        qWarning("[tray] ensureTrayIcon failed: shell rejected the icon");
+        setStatus(studious::i18n::s("这个会话里装不上托盘图标，窗口先不藏。",
+                                    "The tray icon cannot be installed in this session; keeping the window open."),
+                  true);
+    }
+    emit prefsChanged();
+    return ok;
+}
+
 void AppBackend::syncTrayState()
 {
-    const bool needed = m_minimizeToTray || m_closeToTray;
+    const bool needed = m_minimizeToTray || m_closeToTray || m_trayForced;
     m_desktop.setTrayEnabled(needed);
     if (needed && !m_desktop.trayAvailable()) {
         setStatus(studious::i18n::s("这个会话里装不上托盘图标，托盘相关设置暂时无效。",
@@ -1610,9 +1633,29 @@ void AppBackend::resetApplication()
 
 void AppBackend::quitApplication()
 {
-    // 退出前把托盘摘掉，否则任务栏通知区会留一个点不动的幽灵图标，
-    // 要等鼠标划过去才消失。
+    // 用户明确要退出：先停常驻的 llama-server（关窗不关进程最典型的残留就是它，
+    // 留着会一直占显存），再把日志刷到盘上，最后退事件循环。
+    qInfo("[app] quit requested: stopping local engine and exiting");
+    m_quitting = true;
+    shutdownLocalEngine(QStringLiteral("quit requested"));
+
+    // 引擎可能正在启动（runner 还没交给 LocalEngine），这时 shutdown 是空操作，
+    // 子进程会在我们退出后活下来占着显存。按父进程号兜底清一遍。
+    studious::platform::killChildProcesses();
+
+    // 托盘图标也要摘掉，否则通知区会留一个点不动的幽灵图标，要等鼠标划过去才消失。
     m_desktop.shutdown();
+
+    logsink::flushToDisk();
+
+    // 兜底：清场里任何一步卡住（子进程不响应 terminate、析构里等锁、某个线程不退出），
+    // 用户看到的就是「点了关闭但进程还在」。给两秒，过了先补一刀子进程再硬退。
+    QTimer::singleShot(2000, qApp, [] {
+        qWarning("[app] graceful shutdown timed out, forcing exit");
+        studious::platform::killChildProcesses();
+        std::_Exit(0);
+    });
+
     QCoreApplication::quit();
 }
 
@@ -1770,7 +1813,7 @@ void AppBackend::translate()
         return;
     }
 
-    const QStringList paragraphs = splitParagraphs(m_sourceText);
+    const QStringList paragraphs = studious::ui::paragraphs::split(m_sourceText);
     if (paragraphs.isEmpty()) {
         setStatus(i18n::s().translate.emptyOriginal, true);
         return;
@@ -2000,7 +2043,7 @@ void AppBackend::refreshEngineStatuses()
     // 本地 MT 的「装好没有」看的是语言对，而不是当前请求能不能路由：
     // 源语言是「自动检测」时 Router 必然拒绝（本地 MT 不支持自动检测后再选模型），
     // 但引擎本身是能用的，报「未就绪」会让人以为还得去下载东西。
-    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    const studious::translate::LocalMtTranslator mt(studious::ui::paths::modelsMtDir());
     const QStringList mtPairs = mt.installedPairs();
 
     for (const auto &row : router.status(m_srcLang, dst)) {
@@ -2027,6 +2070,10 @@ void AppBackend::refreshEngineStatuses()
             state = QStringLiteral("not-ready");
         }
         item.insert(QStringLiteral("state"), state);
+        // 界面据此把这一项压暗、点了只给一句提示。三态里 missing-assets 是
+        // "去资产页补就能用"，missing-config 是"去配置页填就能用" —— 两者都
+        // 不该让用户选了之后等到翻译时才被拒。
+        item.insert(QStringLiteral("blocked"), state == QLatin1String("missing-assets"));
         item.insert(QStringLiteral("missingAssets"), row.second.missingAssets.size());
 
         // 云端 LLM：配好了就报"实际会用哪个模型"；没配好要说清缺哪一项 ——
@@ -2043,7 +2090,8 @@ void AppBackend::refreshEngineStatuses()
             } else {
                 QStringList missing;
                 if (settings.llm.baseUrl.trimmed().isEmpty()) {
-                    missing << QStringLiteral("Base URL");
+                    // 界面上这项叫「服务地址」，这里别再用 Base URL 这种开发词。
+                    missing << studious::i18n::s("服务地址", "endpoint URL");
                 }
                 if (settings.llm.model.trimmed().isEmpty()) {
                     missing << studious::i18n::s("模型名", "model");
@@ -2053,6 +2101,11 @@ void AppBackend::refreshEngineStatuses()
                                 studious::i18n::sf("缺 %1 · 去下面的「引擎配置」填",
                                                    "Missing %1 - fill it in the engine config below",
                                                    {missing.join(studious::i18n::s("、", ", "))}));
+                    // 没填地址/模型 = 这条引擎根本发不出请求，和"缺资产"一样
+                    // 该在选的时候就拦住，别等按了翻译再报错。
+                    item.insert(QStringLiteral("state"),
+                                QStringLiteral("missing-config"));
+                    item.insert(QStringLiteral("blocked"), true);
                 }
                 // 都没缺时保留后端原话（比如地址格式不对、请求被拒之类）。
             }
@@ -2068,8 +2121,8 @@ void AppBackend::refreshEngineStatuses()
             QString detail;
             if (!hasPairs) {
                 detail = studious::i18n::s(
-                    "没装任何语言对，去资产页下载或用「下载 / 导入」",
-                    "No language pair installed. Download one on the Assets page.");
+                    "没装语言包，去资产页下载或用「下载 / 导入」",
+                    "No language pack installed. Download one on the Assets page.");
             } else if (row.second.ready) {
                 // 副标题给用户看的是「英语 → 中文」，而不是资产 id / 路由细节。
                 // 真正的诊断信息（哪条模型缺失、为什么拒绝）留在状态栏和日志里。
@@ -2089,6 +2142,7 @@ void AppBackend::refreshEngineStatuses()
             item.insert(QStringLiteral("available"), hasPairs);
             item.insert(QStringLiteral("state"),
                         hasPairs ? QStringLiteral("ready") : QStringLiteral("missing-assets"));
+            item.insert(QStringLiteral("blocked"), !hasPairs);
             item.insert(QStringLiteral("ready"), hasPairs && row.second.ready);
             item.insert(QStringLiteral("detail"), detail);
             item.insert(QStringLiteral("missingAssets"), hasPairs ? 0 : 1);
@@ -2113,8 +2167,12 @@ void AppBackend::refreshEngineStatuses()
     // 设置里点名的模型文件可能已经被删了，而 models/ 里还留着别的模型 ——
     // 只按 availableModels() 判会报"就绪"，一点翻译就变成"缺少模型"，两处打脸。
     const QString configuredModelPath = localModelPathFrom(settings.localModelFileName);
-    const bool configuredModelExists =
-        !configuredModelPath.isEmpty() && QFileInfo(configuredModelPath).isFile();
+    // 0 字节的模型文件不算"有模型"：资产那边已经把 0 字节判成损坏，
+    // 这里再放行就会变成"配置页说就绪、一点翻译就报缺模型"。
+    const QFileInfo configuredModelInfo(configuredModelPath);
+    const bool configuredModelExists = !configuredModelPath.isEmpty()
+                                       && configuredModelInfo.isFile()
+                                       && configuredModelInfo.size() > 0;
     const bool configuredModelMissing = !configuredModelPath.isEmpty() && !configuredModelExists;
     // 绝对路径点到 models/ 外面的模型也算有模型（ensureStarted 认绝对路径）。
     const bool localHasModel = !LocalEngine::availableModels().isEmpty() || configuredModelExists;
@@ -2155,7 +2213,7 @@ void AppBackend::refreshEngineStatuses()
     } else {
         // 没跑的时候按"待会儿会用哪份配置"报：模型 + 会不会走 GPU。
         const QString model = localModelLabel(settings);
-        const QString mode = (settings.localUseGpu && localGpuAvailable())
+        const QString mode = ((settings.localUseGpu || localGpuLocked()) && localGpuAvailable())
                                  ? QStringLiteral("GPU")
                                  : QStringLiteral("CPU");
         localDetail = studious::i18n::sf("%1 · %2 · 翻译时自动启动服务",
@@ -2174,6 +2232,7 @@ void AppBackend::refreshEngineStatuses()
                  localUsable ? QStringLiteral("ready")
                              : (localAvailable ? QStringLiteral("not-ready")
                                                : QStringLiteral("missing-assets")));
+    local.insert(QStringLiteral("blocked"), !localAvailable);
     local.insert(QStringLiteral("missingAssets"),
                  (localRuntime ? 0 : 1) + (localHasModel ? 0 : 1));
     list.append(local);
@@ -2232,6 +2291,9 @@ void AppBackend::startLocalServer()
     // 「自动拉起」同时调用。以前每次都排一个 singleShot，串起来就是一串
     // shutdown() + 重新加载权重 + 各挑一个端口 —— 实测能把显存拖到整机卡死。
     const LocalEngine &engine = studious::ui::sharedLocalEngine();
+    if (m_quitting) {
+        return;
+    }
     if (m_localStartQueued || engine.isStarting() || engine.isRunning()) {
         refreshLocalState();
         refreshEngineStatuses();
@@ -2252,6 +2314,10 @@ void AppBackend::startLocalServer()
 void AppBackend::runLocalServerStart()
 {
     m_localStartQueued = false;
+    if (m_quitting) {
+        // 已经在退出：这条是退出前排队的那一轮，别再把模型往显存里塞。
+        return;
+    }
     // 没装运行时 / 没模型就别去拉进程：那种失败只会给出一条看不懂的日志尾巴。
     // 界面上「启动」按钮同样会禁用，这里再兜一层（CLI、快捷键、预热都走这个函数）。
     if (!llamaRuntimeInstalled() || LocalEngine::availableModels().isEmpty()) {
@@ -2581,6 +2647,11 @@ void AppBackend::setLocalModel(const QString &fileName)
 
 void AppBackend::setLocalUseGpu(bool enabled)
 {
+    // 只装了 Vulkan 运行时时不允许关：backend 会退回 cpu，而 cpu 版 exe 根本不在，
+    // 结果只是"引擎起不来"。界面那边开关也是 disabled，这里再兜一道。
+    if (localGpuLocked()) {
+        enabled = true;
+    }
     if (m_localUseGpu == enabled) {
         return;
     }
@@ -2756,7 +2827,7 @@ void AppBackend::refreshMtPairs()
 {
     // 本地 MT 的"装了什么"完全由磁盘决定，所以这里现扫一遍，
     // 不复用资产清单 —— 资产页只管下载，用户也可能手动把目录拷进来。
-    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    const studious::translate::LocalMtTranslator mt(studious::ui::paths::modelsMtDir());
 
     QVariantList list;
     const QStringList pairs = mt.installedPairs();
@@ -2766,7 +2837,7 @@ void AppBackend::refreshMtPairs()
         QVariantMap item;
         item.insert(QStringLiteral("pair"), pair);
         item.insert(QStringLiteral("path"),
-                    QDir(LocalEngine::modelsDir()).filePath(QStringLiteral("mt.opus.") + pair));
+                    QDir(studious::ui::paths::modelsMtDir()).filePath(QStringLiteral("mt.opus.") + pair));
         item.insert(QStringLiteral("missing"), missing);
         // 目录在 ≠ 能用：缺了 config.json / vocab.json 一样加载不了。
         item.insert(QStringLiteral("usable"), missing.isEmpty());
@@ -2858,7 +2929,7 @@ QString AppBackend::engineName(const QString &engineId) const
 
 QString AppBackend::mtRouteFor(const QString &src, const QString &dst) const
 {
-    const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+    const studious::translate::LocalMtTranslator mt(studious::ui::paths::modelsMtDir());
     // routeId() 为空 = 这条语言对根本没有可用路线（含"源语言是 auto"）。
     // 这种情况返回空串，让界面说人话；错误细节（vocab.json 里没有 auto 的 token 之类）
     // 不该直接怼到用户脸上。
@@ -2904,13 +2975,19 @@ void AppBackend::restartApplication()
     }
 }
 
-void AppBackend::copyText(const QString &text)
+bool AppBackend::copyText(const QString &text)
 {
     if (text.isEmpty()) {
         qWarning("[clipboard] AppBackend::copyText: empty text ignored");
-        return;
+        return false;
     }
-    QGuiApplication::clipboard()->setText(text);
+    QClipboard *clip = QGuiApplication::clipboard();
+    if (clip == nullptr) {
+        qWarning("[clipboard] AppBackend::copyText: no clipboard available");
+        return false;
+    }
+    clip->setText(text);
+    return true;
 }
 
 // ------------------------------------------------------------------ 日志窗口
@@ -3058,6 +3135,12 @@ bool AppBackend::localGpuAvailable() const
 bool AppBackend::localCpuAvailable() const
 {
     return LocalEngine::isCpuAvailable();
+}
+
+// 只有 Vulkan 版、没有 CPU 版时「优先 GPU」就变成唯一可行解，界面据此把它锁成常开。
+bool AppBackend::localGpuLocked() const
+{
+    return localGpuAvailable() && !localCpuAvailable();
 }
 
 int AppBackend::localPort() const

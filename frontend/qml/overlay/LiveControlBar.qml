@@ -445,34 +445,25 @@ Window {
     // 值就是全局的 `settings/engine/id`（backend.engineId）—— 和主界面、截图翻译、
     // 小窗共用一个，这里**不保留**任何本会话覆盖。
     function engineOptions() {
+        // id 列表和状态口径都在 Theme（四处共用一份，避免同一引擎多处异色）。
         const statuses = backend.engineStatuses
-        const ids = ["", "web", "llm-cloud", "llm-local", "local-mt"]
-        const labels = [backend.engineName(""), backend.engineName("web"), backend.engineName("llm-cloud"),
-                        backend.engineName("llm-local"), backend.engineName("local-mt")]
         const out = []
-        for (let i = 0; i < ids.length; ++i) {
+        for (let i = 0; i < Theme.engineIds.length; ++i) {
+            const id = Theme.engineIds[i]
             let state = "ready"
             let detail = ""
-            if (ids[i] !== "") {
+            if (id !== "") {
                 for (let j = 0; j < statuses.length; ++j) {
-                    if (statuses[j].id === ids[i]) {
-                        state = statuses[j].state
+                    if (Theme.canonicalEngineId(statuses[j].id) === id) {
+                        state = Theme.engineStateOf(statuses[j])
                         detail = statuses[j].detail || ""
                         break
                     }
                 }
             }
-            out.push({ "id": ids[i], "label": labels[i], "state": state, "detail": detail })
+            out.push({ "id": id, "label": backend.engineName(id), "state": state, "detail": detail })
         }
         return out
-    }
-
-    function engineDotColor(state) {
-        if (state === "ready")
-            return Theme.good
-        if (state === "missing-assets")
-            return Theme.danger
-        return Theme.caution
     }
 
     function engineShortName() {
@@ -501,7 +492,7 @@ Window {
 
     // 菜单画在控制条窗口里，不用 Popup：Popup 是独立顶层窗口，在置顶浮层旁边
     // 会被抢焦点、也会被系统截图排除掉，而且 x/y 跟着 mapToItem 算容易飘。
-    Rectangle {
+    MenuPanel {
         id: engineMenu
 
         visible: bar.engineMenuOpen
@@ -512,65 +503,22 @@ Window {
                                 bar.width - engineMenu.width))
         y: Math.round(card.y + card.height + Theme.s1)
         width: 168
-        height: menuColumn.implicitHeight + Theme.s1 * 2
-        radius: Theme.rSm
-        color: Theme.surfaceHigh
-        border.width: 1
-        border.color: Theme.outlineVariant
 
-        Column {
-            id: menuColumn
-            anchors.fill: parent
-            anchors.margins: Theme.s1
-            spacing: 0
+        Repeater {
+            model: bar.engineOptions()
 
-            Repeater {
-                model: bar.engineOptions()
+            delegate: MenuRow {
+                required property var modelData
 
-                delegate: Rectangle {
-                    id: option
-                    required property var modelData
-
-                    readonly property bool current: backend.engineId === modelData.id
-                    readonly property bool usable: modelData.state !== "missing-assets"
-
-                    width: parent.width
-                    height: 26
-                    radius: Theme.rXs
-                    color: optionHover.hovered && option.usable ? Theme.surfaceHighest : "transparent"
-
-                    HoverHandler { id: optionHover }
-
-                    Rectangle {
-                        id: dot
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.s2
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 6
-                        height: 6
-                        radius: 3
-                        visible: option.modelData.id !== ""
-                        color: bar.engineDotColor(option.modelData.state)
-                    }
-
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: option.modelData.id === "" ? Theme.s2 : Theme.s2 + 12
-                        anchors.rightMargin: Theme.s2
-                        verticalAlignment: Text.AlignVCenter
-                        text: option.modelData.label
-                        color: !option.usable ? Theme.inkVariant
-                             : option.current ? Theme.primary : Theme.ink
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: option.current ? Font.DemiBold : Font.Normal
-                    }
-
-                    TapHandler {
-                        enabled: option.usable
-                        onTapped: bar.selectEngine(option.modelData.id)
-                    }
-                }
+                text: modelData.label
+                selected: backend.engineId === modelData.id
+                // 「自动」没有引擎状态，不画灯；其余每行都亮（绿/黄/红）。
+                showDot: modelData.id !== ""
+                dotColor: Theme.engineStateColor(modelData.state)
+                // 缺资产 / 缺配置的行压暗且不响应。
+                enabled: modelData.state !== "missing-assets"
+                         && modelData.state !== "missing-config"
+                onActivated: bar.selectEngine(modelData.id)
             }
         }
     }

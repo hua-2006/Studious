@@ -2,7 +2,6 @@
 
 #include <QtConcurrent/QtConcurrentRun>
 
-#include <QRegularExpression>
 #include <QTimer>
 
 #include <studious/Factory.h>
@@ -140,37 +139,8 @@ TranslateJobResult translateInWorkerThread(const TranslateJobRequest &job,
 
 } // namespace
 
-QStringList splitParagraphs(const QString &text)
-{
-    // 规则：空行（可含空白字符）是段落分隔；连续空行算一个；首尾空白去掉；丢弃空段。
-    static const QRegularExpression lineBreak(QStringLiteral("\r\n|\n|\r"));
-
-    QStringList paragraphs;
-    QStringList current;
-
-    const auto flush = [&paragraphs, &current]() {
-        if (current.isEmpty()) {
-            return;
-        }
-        const QString para = current.join(QLatin1Char('\n')).trimmed();
-        current.clear();
-        if (!para.isEmpty()) {
-            paragraphs << para;
-        }
-    };
-
-    const QStringList lines = text.split(lineBreak);
-    for (const QString &line : lines) {
-        if (line.trimmed().isEmpty()) {
-            flush();
-        } else {
-            current << line;
-        }
-    }
-    flush();
-
-    return paragraphs;
-}
+// 段落切分已搬到 Paragraphs.h（paragraphs::split）——它是缓存键的一部分，
+// 不能和 QuickTranslate / MiniSession 各留一份。
 
 void TranslateCancelState::raise()
 {

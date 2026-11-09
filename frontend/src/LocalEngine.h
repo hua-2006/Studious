@@ -37,7 +37,7 @@ struct LocalEngineConfig {
 // 资产布局（后缀与可执行名由平台层给，见 IPlatform::runtimeAssetSuffix /
 // serverExecutableName，Windows 是 win-x64 / llama-server.exe）：
 //   runtime: <installRoot>/runtime/runtime.llama.{cpu,vulkan}.<平台后缀>/<服务端可执行名>
-//   model  : <installRoot>/models/<任意普通文件>（我们的资产就是无扩展名文件）
+//   model  : <installRoot>/models/llm/<资产 id>（清单里的 model.qwen2.5-* 就是无扩展名文件）
 //
 // 线程约束（重要）：ensureStarted() 会阻塞数百毫秒到数秒（GPU 冷启动实测约 2.2 秒），
 // 且内部是 QProcess（主线程亲和），**只能在主线程调用**；
@@ -56,7 +56,10 @@ public:
     LocalEngine(const LocalEngine &) = delete;
     LocalEngine &operator=(const LocalEngine &) = delete;
 
-    // 扫描 <installRoot>/models/ 下的普通文件，返回文件名（不含目录）。
+    // 清单里 type=="model"、位于 <installRoot>/models/llm 且 AssetRegistry::isPresent()
+    // （存在且非空，不哈希）成立的资产，返回文件名（不含目录，等于资产 id）。
+    // 不再自己扫目录 / 按后缀猜：用户手放的 .gguf 不会被当成可用模型
+    // （真要用就「导入」成清单里的那条资产）。
     // 排序按文件名做稳定排序（大小写不敏感，同名再按原始串兜底）：
     // 不用修改时间是因为重下一次资产就会让下拉框顺序整体乱跳，用户点错模型代价是几秒重启。
     static QStringList availableModels();
@@ -94,7 +97,11 @@ public:
     QString executablePath() const;   // 当前后端对应的 exe 路径
     QString modelPath() const;        // 当前模型绝对路径
     static QString installRoot();
-    static QString modelsDir();
+    static QString llmModelsDir();
+
+    // 把「设置里存的模型文件名」翻成绝对路径。空串原样返回空串（不是"第一个模型"）：
+    // 调用方要区分「用户没选」和「选的那个不在了」。
+    static QString pathForName(const QString &fileName);
 
     // 显示用短名："model.qwen2.5-0.5b-instruct.q4km" -> "qwen2.5-0.5b"。
     // 纯粹是界面文案，不参与任何路径拼接。

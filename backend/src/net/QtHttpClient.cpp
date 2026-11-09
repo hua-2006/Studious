@@ -171,9 +171,8 @@ QNetworkProxy proxyFromEnvironment()
     return QNetworkProxy(QNetworkProxy::NoProxy);
 }
 
-QtHttpClient::QtHttpClient(QString userAgent, QObject *parent)
-    : m_nam(parent)
-    , m_userAgent(std::move(userAgent))
+QtHttpClient::QtHttpClient(QString userAgent)
+    : m_userAgent(std::move(userAgent))
 {
     if (m_userAgent.isEmpty()) {
         m_userAgent = QStringLiteral("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
@@ -244,9 +243,34 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
 
     QEventLoop loop;
     bool timedOut = false;
+    bool firstByteTimedOut = false;
     bool tooLarge = false;
     // 响应体上限：防住"无限 chunked"把进程吃干。翻译接口正常响应都在几百 KB 内。
     constexpr qint64 kMaxBodyBytes = 32LL * 1024 * 1024;
+
+    // 首字节计时：连不上 / 对面不回应时，不该让用户盯着转圈等到整段超时。
+    QTimer firstByte;
+    firstByte.setSingleShot(true);
+    QObject::connect(&firstByte, &QTimer::timeout, &loop,
+                     [&loop, &firstByteTimedOut, reply]() {
+                         firstByteTimedOut = true;
+                         reply->abort();
+                         loop.quit();
+                     });
+    if (req.firstByteTimeoutMs > 0) {
+        firstByte.start(req.firstByteTimeoutMs);
+    }
+    // 收到任何响应头/数据就说明对面活着，后面交给整段超时管。
+    QObject::connect(reply, &QNetworkReply::metaDataChanged, &loop, [&firstByte]() {
+        if (firstByte.isActive()) {
+            firstByte.stop();
+        }
+    });
+    QObject::connect(reply, &QNetworkReply::readyRead, &loop, [&firstByte]() {
+        if (firstByte.isActive()) {
+            firstByte.stop();
+        }
+    });
 
     // 边收边看，超限立刻掐断，不等到 readAll 才后悔。
     QObject::connect(reply, &QNetworkReply::downloadProgress, &loop,
@@ -276,6 +300,9 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
     if (timer.isActive()) {
         timer.stop();
     }
+    if (firstByte.isActive()) {
+        firstByte.stop();
+    }
 
     res.status = statusOf(reply);
     // 超时路径里上面调过 abort()，Qt 会把 reply 的设备关掉；
@@ -288,7 +315,13 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
     const QNetworkReply::NetworkError netError = reply->error();
     const QString netErrorStr = reply->errorString();
 
-    if (timedOut) {
+    if (firstByteTimedOut) {
+        res.ok = false;
+        res.firstByteTimedOut = true;
+        res.error = i18n::sf("等待响应超时（%1 ms 内没有收到任何数据）：%2",
+                             "Timed out waiting for the first byte (%1 ms): %2",
+                             {req.firstByteTimeoutMs, req.url.toString()});
+    } else if (timedOut) {
         res.ok = false;
         res.error = i18n::sf("请求超时（%1 ms）：%2",
                              "Request timed out after %1 ms: %2",
@@ -302,6 +335,17 @@ HttpResponse QtHttpClient::send(const HttpRequest &req)
         res.error = i18n::s("跳转目标指向本机，已拒绝", "Redirect pointed at a loopback host, refused");
     } else if (netError != QNetworkReply::NoError) {
         res.ok = false;
+        // 这几类重试没意义：地址/端口/网络本身就不通，重发只会再等一遍。
+        switch (netError) {
+        case QNetworkReply::ConnectionRefusedError:
+        case QNetworkReply::HostNotFoundError:
+        case QNetworkReply::NetworkSessionFailedError:
+        case QNetworkReply::TemporaryNetworkFailureError:
+            res.connectionFailed = true;
+            break;
+        default:
+            break;
+        }
         res.error = i18n::sf("网络错误(%1)：%2",
                              "Network error (%1): %2",
                              {static_cast<int>(netError), netErrorStr});

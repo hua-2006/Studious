@@ -7,7 +7,7 @@
 //  * 不持有、也不 include AppBackend；引擎 id 换算与本地引擎懒启动照着 AppBackend 的做法抄，
 //    但配置来源只有 AppSettings::load()（每次 translate() 重新读，配置改完立刻生效）。
 //  * 头文件里只前向声明 TranslateJob / TranslateJobResult，不 include 任何前端实现头
-//    （本地引擎与缓存都藏在 .cpp 的进程级单例里，见 QuickTranslate.cpp）。
+//    （本地引擎藏在 .cpp 的进程级单例里，翻译缓存走 CacheHandle.h 的 sharedCache()）。
 //  * 线程：全部在主线程，工作线程由 TranslateJob 自己管。
 //
 // 用法（C++ 侧）：
@@ -76,7 +76,7 @@ public:
 
     bool isBusy() const;
 
-    // 上一次 translate() 被同步拒绝的原因（busy / 空输入 / 没有目标语言 / 本地引擎起不来）。
+    // 上一次 translate() 被同步拒绝的原因（busy / 空输入 / 本地引擎起不来）。
     // 异步失败的原因在 finished().error 里，不在这里。
     QString lastError() const;
 
@@ -84,10 +84,14 @@ public:
     // 调用方看到 true 应该自己安排重试，而不是把错误摆到用户脸上。
     bool lastFailureRetryable() const;
 
-    // text 会按空行切段（连续空行算一个分隔，段内单换行保留）。
-    // dstLangs 至少一个；srcLang 可为 "auto"/空。
+    // text 按空行切段（规则见 Paragraphs.h，与主页 / 小窗完全同一份实现）。
+    // dstLangs 走 langs::normalizeTargets：trim / 去重 / 空则回落 {zh} / 本地 MT 只留第一个。
+    // srcLang 可为 "auto"/空（内部折成 "auto"）。
     // 同一个 QuickTranslate 上并发调用 → 返回 false 并设置 error（不排队）。
-    bool translate(const QString &text, const QString &srcLang, const QStringList &dstLangs);
+    // bypassCache=true：这一次不读也不写翻译缓存（界面上「重新翻译」用它 ——
+    // 走缓存会立刻把上一份结果原样拿回来，按了像没反应）。
+    bool translate(const QString &text, const QString &srcLang, const QStringList &dstLangs,
+                   bool bypassCache = false);
 
     // 这一次调用用哪个引擎（界面 id：web / llm-cloud / llm-local / local-mt），
     // 空串 = 跟设置走。实时翻译的引擎下拉用它 —— 只影响这一处，不动全局设置。

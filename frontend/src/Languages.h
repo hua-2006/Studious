@@ -22,8 +22,14 @@ QStringList split(const QString &joined);
 // {"zh","ja"} → "zh,ja"。
 QString join(const QStringList &langs);
 
-// 发单前归一：空 → {"zh"}；local-mt 只留第一个（它按语言对装模型）。
+// 发单前归一：丢掉「自动」（目标语言不能是自动检测）；空 → {"zh"}；
+// local-mt 只留第一个（它按语言对装模型）。
 QStringList normalizeTargets(const QStringList &targets, const QString &engineUiId);
+
+// 源语言与目标语言不能是同一个：把等于 source 的目标语言剔掉。
+// source 为「自动」时不做剔除（还没确定源语言，谈不上重复）。
+// 剔完为空就从候选里挑一个不等于 source 的（先 zh，再 en）。
+QStringList normalizeTargetsAgainstSource(const QStringList &targets, const QString &source);
 
 // 源语言：「自动」只有一种编码 —— "auto"。
 //

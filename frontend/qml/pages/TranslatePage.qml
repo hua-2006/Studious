@@ -99,13 +99,71 @@ Item {
         return backend.engineName(id)
     }
 
-    // 目标语言下拉的条目：从 languages 里去掉「自动检测」。
+    // 缺资产的引擎：不给选（选了也翻不了），但仍然接点击 —— 用来告诉用户差什么。
+    // 空 id（自动）永远可选：它自己会降级到能用的引擎。
+    readonly property var blockedEngines: {
+        var out = []
+        var rows = backend.engineStatuses || []
+        for (var i = 0; i < rows.length; ++i) {
+            var row = rows[i]
+            if (!row || !row.id)
+                continue
+            // blocked 由后端给（缺资产 / 缺配置）；口径再叠一层 Theme.engineUsable，
+            // 保证和三个浮层的置灰判断永远一致。
+            if (row.blocked === true || !Theme.engineUsable(row))
+                out.push(Theme.canonicalEngineId(row.id))
+        }
+        return out
+    }
+
+    // 点到不能选的引擎时那一句话。具体缺什么由后端 detail 说清 ——
+    // 三类原因（缺驱动 / 缺模型或语言包 / 没配地址和模型）措辞差很远，
+    // 在这里拼「还差 N 个组件」只会让用户去资产页乱找。
+    function blockedEngineHint(id) {
+        var detail = ""
+        var rows = backend.engineStatuses || []
+        for (var i = 0; i < rows.length; ++i) {
+            if (rows[i] && rows[i].id === id) {
+                detail = (rows[i].detail || "").trim()
+                break
+            }
+        }
+        var name = page.engineName(id)
+        if (detail.length > 0)
+            return qsTr("「%1」：%2").arg(name).arg(detail)
+        return qsTr("「%1」现在还不可用，先去「设置」里补齐。").arg(name)
+    }
+
+    // 给 --ui-shot 取证用（STUDIOUS_UI_CALL 只认零参方法）。
+    // preferredId 只给取证钩子用（--ui-shot 的 CALL 会带一个字符串实参）；
+    // 正常调用不带参，取第一个被挡住的引擎。
+    function showEngineBlockedHint(preferredId) {
+        var id = preferredId || ""
+        if (id === "") {
+            var list = page.blockedEngines
+            if (list.length > 0)
+                id = list[0]
+        }
+        if (id !== "")
+            page.noticeRequested(page.blockedEngineHint(id))
+    }
+
+    // 轻提示交给主窗口那一份 Toast：页面被 StackLayout 裁切，自己贴边的会被切掉。
+    signal noticeRequested(string text)
+
+    // 目标语言下拉的条目：去掉「自动检测」，也去掉和源语言相同的那一项
+    // （源=目标时后端只会原样回填，等于白按一次）。
     readonly property var targetLanguages: {
         var out = []
         var list = page.languages
+        var src = backend.srcLang
         for (var i = 0; i < list.length; ++i) {
-            if (entryCode(list[i]) !== "auto")
-                out.push(list[i])
+            var code = page.entryCode(list[i])
+            if (code === "auto")
+                continue
+            if (src !== "auto" && code === src)
+                continue
+            out.push(list[i])
         }
         return out
     }
@@ -561,7 +619,25 @@ Item {
                     id: engineSeg
                     items: backend.engines
                     current: backend.engineId
+                    blockedCodes: page.blockedEngines
+                    // 红/黄小圆点沿用后端状态：缺资产/缺配置红、未就绪黄、就绪绿。
+                    // 规则只有 Theme 那一份（主栏、三个浮层、状态条同色）。
+                    badges: {
+                        var map = ({})
+                        var rows = backend.engineStatuses || []
+                        for (var i = 0; i < rows.length; ++i) {
+                            var row = rows[i]
+                            if (!row || !row.id)
+                                continue
+                            map[Theme.canonicalEngineId(row.id)] =
+                                    Theme.engineStateColor(Theme.engineStateOf(row))
+                        }
+                        return map
+                    }
                     onSelected: function (code) { backend.engineId = code }
+                    onBlocked: function (code) {
+                        page.noticeRequested(page.blockedEngineHint(code))
+                    }
                 }
             }
         }
@@ -742,10 +818,12 @@ Item {
                                     // 让第四项也完整露出来；真放不下还有外面的横向滚动兜底。
                                     detailMaxWidth: 120
                                     // 颜色分三层：装好了且这条请求能走 = 绿；装好了但当前源语言/目标语言
-                                    // 走不通（比如本地 MT 不支持自动检测源语言）= 黄；缺资产 = 红。
+                                    // 走不通（比如本地 MT 不支持自动检测源语言）= 黄；
+                                    // 缺资产 / 缺配置（根本发不出请求）= 红。
                                     state: statusSlot.modelData.state === "ready"
                                            ? (statusSlot.modelData.ready ? 0 : 1)
-                                           : (statusSlot.modelData.state === "missing-assets" ? 2 : 1)
+                                           : ((statusSlot.modelData.state === "missing-assets"
+                                               || statusSlot.modelData.state === "missing-config") ? 2 : 1)
                                 }
                             }
                         }

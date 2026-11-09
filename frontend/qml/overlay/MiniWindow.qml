@@ -72,30 +72,13 @@ Window {
 
     function dstSummary() {
         const dsts = miniSession.dstLangs || []
-        if (dsts.length === 0)
-            return qsTr("选择目标语言")
-        if (dsts.length === 1)
-            return langName(dsts[0])
-        return langName(dsts[0]) + " +" + (dsts.length - 1)
+        return dsts.length === 0 ? qsTr("选择目标语言") : langName(dsts[0])
     }
 
     function toggleDst(code) {
-        const current = (miniSession.dstLangs || []).slice()
-        // 当前引擎（本地 MT）只能翻一个目标语言：单选式替换，不累加。
-        if (!backend.dstMultiSupported) {
-            miniSession.dstLangs = [code]
-            openMenu = 0
-            return
-        }
-        const at = current.indexOf(code)
-        if (at >= 0) {
-            if (current.length === 1)   // 至少留一个，不然翻译按钮就没意义了
-                return
-            current.splice(at, 1)
-        } else {
-            current.push(code)
-        }
-        miniSession.dstLangs = current
+        // 小窗只翻一个目标语言：点一下就是换到它，不累加、不取消。
+        miniSession.dstLangs = [code]
+        openMenu = 0
     }
 
     function refreshRecords() {
@@ -113,6 +96,38 @@ Window {
     }
     function showTranslateTab() { showTab("translate") }
     function showRecordsTab() { showTab("records") }
+
+    // 取证钩子（--ui-shot 的 CALL 只认零参方法）：展开目标语言菜单 / 选中最新一条记录。
+    function openDstMenu() { openLangMenu(2) }
+    function selectFirstRecord() {
+        showTab("records")
+        if (records.length > 0) selectRecord(0)
+    }
+
+    // 语言菜单的锚点：`srcField.x/y` 是它**父容器**里的坐标，而菜单挂在窗口根上，
+    // 直接拿来用会飘到左上角（截图里就压在标签栏上）。打开时换算一次屏幕内的位置，
+    // 之后窗口被拖动也不影响 —— 菜单本来就是跟着窗口一起走的。
+    property real langMenuX: 0
+    property real langMenuY: 0
+    property int langMenuKind: 2
+
+    function openLangMenu(kind) {
+        const field = kind === 1 ? srcField : dstField
+        if (!field)
+            return
+        const p = field.mapToItem(win.contentItem, 0, 0)
+        langMenuKind = kind
+        langMenuX = p.x
+        langMenuY = p.y + field.height + 4
+        openMenu = kind
+    }
+
+    // 取证钩子：打开齿轮面板（--ui-shot 的 CALL 用 `miniWindow:openSettingsPanel`）。
+    function openSettingsPanel() {
+        const p = gearButton.mapToItem(null, 0, 0)
+        miniSettings.openAt(win.x + p.x, win.y + p.y, gearButton.width, gearButton.height)
+        miniSettings.visible = true
+    }
 
     // 点列表行：再点一次收起。正文在这里一次性取好放进属性，
     // 详情面板只做绑定，不在 delegate 里跨 item 抓引用。
@@ -224,30 +239,30 @@ Window {
     }
 
     function engineChoices() {
-        const ids = ["", "web", "llm-cloud", "llm-local", "local-mt"]
-        const labels = [backend.engineName(""), backend.engineName("web"), backend.engineName("llm-cloud"),
-                        backend.engineName("llm-local"), backend.engineName("local-mt")]
+        // id 列表与状态口径都在 Theme 里（以前这里、控制条、截图浮层各抄一份，
+        // 同一个引擎在四处一绿一黄就是这么来的）。
         const statuses = backend.engineStatuses
         const out = []
-        for (let i = 0; i < ids.length; ++i) {
-            let state = "ready"
+        for (let i = 0; i < Theme.engineIds.length; ++i) {
+            const id = Theme.engineIds[i]
+            let row = null
             for (let j = 0; j < statuses.length; ++j) {
-                if (statuses[j].id === ids[i]) {
-                    state = statuses[j].state
+                if (Theme.canonicalEngineId(statuses[j].id) === id) {
+                    row = statuses[j]
                     break
                 }
             }
-            out.push({ "id": ids[i], "label": labels[i], "state": state })
+            const state = row ? Theme.engineStateOf(row) : "ready"
+            out.push({ "id": id,
+                       "label": backend.engineName(id),
+                       "state": state,
+                       // 缺资产（要下载）和缺配置（要填地址/模型）都不给选：
+                       // 与截图翻译、实时翻译一致 —— 选了也翻不了，只会等按了才报错。
+                       // 空串（自动）始终可选。
+                       "usable": id === "" || (state !== "missing-assets"
+                                                && state !== "missing-config") })
         }
         return out
-    }
-
-    function engineDotColor(state) {
-        if (state === "ready")
-            return Theme.good
-        if (state === "missing-assets")
-            return Theme.danger
-        return Theme.caution
     }
 
     function selectEngine(uiEngineId) {
@@ -453,21 +468,11 @@ Window {
                         }
                     }
 
-                    // 关闭（和另外两处 ✕ 同一套尺寸：22 宽 / 26 高 / rSm / 悬浮 surfaceHigh）
-                    Rectangle {
+                    // 关闭（统一组件：22 × 26 / rSm / 悬浮台面色）
+                    CloseButton {
                         Layout.preferredWidth: 22
                         Layout.preferredHeight: 26
-                        radius: Theme.rSm
-                        color: closeHover.hovered ? Theme.surfaceHighest : "transparent"
-                        Text {
-                            anchors.centerIn: parent
-                            text: "✕"
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.inkVariant
-                        }
-                        HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
-                        TapHandler { onTapped: win.close() }
+                        onClicked: win.close()
                     }
                 }
 
@@ -524,11 +529,11 @@ Window {
                             color: inkVariant
                         }
                         TapHandler {
-                            onTapped: win.openMenu = (win.openMenu === 1 ? 0 : 1)
+                            onTapped: if (win.openMenu === 1) win.openMenu = 0; else win.openLangMenu(1)
                         }
                     }
 
-                    // 目标语言（多选）
+                    // 目标语言（单选：点一项就换）
                     Rectangle {
                         id: dstField
                         Layout.fillWidth: true
@@ -552,21 +557,6 @@ Window {
                                 font.pixelSize: Theme.fontSizeBody
                                 color: ink
                             }
-                            Rectangle {
-                                Layout.preferredWidth: multiLabel.implicitWidth + 10
-                                Layout.preferredHeight: 18
-                                radius: 4
-                                color: Theme.surfaceHighest
-                                Text {
-                                    id: multiLabel
-                                    anchors.centerIn: parent
-                                    // 本地 MT 只能翻一个目标语言，别再显示「多选」误导用户。
-                                    text: backend.dstMultiSupported ? qsTr("多选") : qsTr("单选")
-                                    font.family: Theme.fontUi
-                                    font.pixelSize: 9
-                                    color: inkVariant
-                                }
-                            }
                             Text {
                                 text: "▾"
                                 font.pixelSize: 10
@@ -574,7 +564,7 @@ Window {
                             }
                         }
                         TapHandler {
-                            onTapped: win.openMenu = (win.openMenu === 2 ? 0 : 2)
+                            onTapped: if (win.openMenu === 2) win.openMenu = 0; else win.openLangMenu(2)
                         }
                     }
                 }
@@ -1002,7 +992,7 @@ Window {
                         }
                     }
 
-                    // 翻译 / 取消 / 保存
+                    // 翻译 / 取消 / 重新翻译（保存记录由设置里的历史开关决定，这里没有按钮）
                     Rectangle {
                         Layout.preferredHeight: 32
                         Layout.preferredWidth: mainText.implicitWidth + 24
@@ -1016,7 +1006,7 @@ Window {
                             id: mainText
                             anchors.centerIn: parent
                             text: miniSession.phase === "Translating" ? qsTr("取消")
-                                  : (miniSession.phase === "Done" ? qsTr("保存到记录") : qsTr("翻译"))
+                                  : (miniSession.phase === "Done" ? qsTr("重新翻译") : qsTr("翻译"))
                             font.family: Theme.fontUi
                             font.pixelSize: Theme.fontSizeBody
                             font.weight: Font.DemiBold
@@ -1028,7 +1018,7 @@ Window {
                                 if (miniSession.phase === "Translating")
                                     miniSession.cancel()
                                 else if (miniSession.phase === "Done")
-                                    miniSession.saveRecord()
+                                    miniSession.retranslate()
                                 else
                                     miniSession.translate()
                             }
@@ -1192,6 +1182,44 @@ Window {
                                 color: inkVariant
                             }
                             Item { Layout.fillWidth: true }
+                            // 记录详情里的两个复制：原文与译文分开给，别让人手动框选。
+                            Repeater {
+                                model: [
+                                    { label: qsTr("复制原文"), field: "original" },
+                                    { label: qsTr("复制翻译"), field: "translated" }
+                                ]
+                                delegate: Text {
+                                    id: copyButton
+                                    required property var modelData
+                                    readonly property string payload: {
+                                        const rec = win.records[win.recordIndex]
+                                        if (!rec) return ""
+                                        if (modelData.field === "original") return rec.originalText || ""
+                                        // 没有译文（只识别没翻）时退回原文，免得按钮点了一点反应都没有。
+                                        return rec.translatedText || rec.originalText || ""
+                                    }
+                                    text: modelData.label
+                                    font.family: Theme.fontUi
+                                    font.pixelSize: Theme.fontSizeTiny
+                                    color: payload.length > 0 ? Theme.primary : inkVariant
+                                    // 点按反馈：按下去缩一点、淡一点，松开回弹。
+                                    // 光标也变手型 —— 这两个按钮长得像纯文字，没有反馈就像没点上。
+                                    opacity: copyTap.pressed ? 0.65 : 1.0
+                                    scale: copyTap.pressed ? 0.94 : 1.0
+                                    Behavior on opacity { NumberAnimation { duration: Theme.durFast } }
+                                    Behavior on scale { NumberAnimation { duration: Theme.durFast; easing.type: Easing.OutCubic } }
+                                    HoverHandler { cursorShape: payload.length > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                                    TapHandler {
+                                        id: copyTap
+                                        enabled: payload.length > 0
+                                        onTapped: {
+                                            const ok = backend.copyText(payload)
+                                            miniToast.showMessage(ok ? qsTr("已复制")
+                                                                     : qsTr("复制失败：剪贴板不可用"))
+                                        }
+                                    }
+                                }
+                            }
                             Text {
                                 text: qsTr("关闭")
                                 font.family: Theme.fontUi
@@ -1236,87 +1264,48 @@ Window {
         }
     }
 
-    // ------------------------------------------------------------ 下拉菜单（窗内）
-    Rectangle {
+    // ------------------------------------------------------------ 语言下拉（窗内）
+    // 与引擎菜单同一套外壳（MenuPanel + MenuRow）：以前这里自己搭了层
+    // Rectangle + Flickable + 手写 hover，还留着一列给多选用的勾选框。
+    // 目标语言现在只选一个，勾选框撤掉，行样式交给 MenuRow。
+    MenuPanel {
         id: langMenu
+        objectName: "miniLangMenu"
         visible: win.openMenu !== 0
         z: 60
-        x: win.openMenu === 1 ? srcField.x : dstField.x
-        y: srcField.y + srcField.height + 4
-             + (win.openMenu === 1 ? 0 : 0)
-        width: 240
-        height: Math.min(280, menuColumn.implicitHeight + Theme.s2 * 2)
-        radius: Theme.rSm
-        color: Theme.surfaceHigh
-        border.width: 1
-        border.color: line
+        // 位置在 openLangMenu() 里算好（字段坐标 → 窗口坐标），不在这里 mapToItem：
+        // 写在绑定里不会产生依赖，永远是 (0,0)。
+        x: win.langMenuX
+        y: win.langMenuY
+        width: Math.max(200, langMenuKind === 1 ? srcField.width : dstField.width)
 
-        Flickable {
-            anchors.fill: parent
-            anchors.margins: Theme.s1
-            clip: true
-            contentHeight: menuColumn.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
-
-            Column {
-                id: menuColumn
-                width: parent.width
-
-                Repeater {
-                    model: backend.languages
-                    delegate: Item {
-                        required property var modelData
-                        width: menuColumn.width
-                        height: 28
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: Theme.rXs
-                            color: itemHover.hovered ? Theme.surfaceHighest : "transparent"
-                        }
-                        HoverHandler { id: itemHover }
-
-                        // 目标语言多选时左面带勾选方块
-                        Rectangle {
-                            visible: win.openMenu === 2
-                            x: Theme.s2
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 14
-                            height: 14
-                            radius: 3
-                            color: (miniSession.dstLangs || []).indexOf(modelData.code) >= 0
-                                   ? Theme.primary : "transparent"
-                            border.width: 1
-                            border.color: (miniSession.dstLangs || []).indexOf(modelData.code) >= 0
-                                          ? Theme.primary : line
-                            Text {
-                                anchors.centerIn: parent
-                                visible: (miniSession.dstLangs || []).indexOf(modelData.code) >= 0
-                                text: "✓"
-                                font.pixelSize: 9
-                                color: Theme.primaryText
-                            }
-                        }
-
-                        Text {
-                            x: win.openMenu === 2 ? Theme.s2 + 22 : Theme.s2
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.label
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: win.openMenu === 1 && miniSession.srcLang === modelData.code
-                                   ? Theme.primary : ink
-                        }
-
-                        TapHandler {
-                            onTapped: {
-                                if (win.openMenu === 2) {
-                                    win.toggleDst(modelData.code)
-                                } else {
-                                    miniSession.srcLang = modelData.code
-                                    win.openMenu = 0
-                                }
-                            }
-                        }
+        Repeater {
+            // 目标语言列表本身就不含「自动检测」（后端 targetLanguages），
+            // 源语言列表仍含 —— 「自动」只对源语言有意义。
+            model: win.openMenu === 1 ? backend.languages : backend.targetLanguages
+            delegate: MenuRow {
+                required property var modelData
+                readonly property string code: modelData.code
+                // 源与目标不能是同一个：在源菜单里挡住"等于当前目标"的行，
+                // 在目标菜单里挡住"等于当前源语言"的行（源是自动时不算重复）。
+                readonly property bool clash: win.openMenu === 1
+                                              ? (code !== "" && ((miniSession.dstLangs || [])[0] || "") === code)
+                                              : (miniSession.srcLang !== "auto"
+                                                 && miniSession.srcLang === code)
+                text: modelData.label
+                selected: win.openMenu === 1
+                          ? miniSession.srcLang === code
+                          : (miniSession.dstLangs || []).indexOf(code) >= 0
+                showDot: false
+                // 挡住的那行压暗且点不动，用户能看见"为什么不给选"。
+                enabled: !clash
+                opacity: clash ? 0.4 : 1.0
+                onActivated: {
+                    if (win.openMenu === 2) {
+                        win.toggleDst(modelData.code)
+                    } else {
+                        miniSession.srcLang = modelData.code
+                        win.openMenu = 0
                     }
                 }
             }
@@ -1325,7 +1314,7 @@ Window {
 
     // ------------------------------------------------------------ 引擎下拉（窗内）
     // 菜单往上弹：按钮在左下角，往下画会出窗口。
-    Rectangle {
+    MenuPanel {
         id: engineMenu
         objectName: "miniEngineMenu"
         visible: win.engineMenuOpen
@@ -1337,56 +1326,19 @@ Window {
         x: Theme.s4
         y: Math.max(Theme.s2, card.height - height - 26 - Theme.s4 - 4)
         width: 168
-        height: engineColumn.implicitHeight + Theme.s2 * 2
-        radius: Theme.rSm
-        color: Theme.surfaceHigh
-        border.width: 1
-        border.color: line
 
-        Column {
-            id: engineColumn
-            anchors.fill: parent
-            anchors.margins: Theme.s2
-
-            Repeater {
-                model: win.engineChoices()
-                delegate: Item {
-                    id: engineRow
-                    required property var modelData
-                    width: engineColumn.width
-                    height: 26
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: Theme.rXs
-                        color: engineRowHover.hovered ? Theme.surfaceHighest : "transparent"
-                    }
-                    HoverHandler { id: engineRowHover }
-
-                    Rectangle {
-                        width: 6
-                        height: 6
-                        radius: 3
-                        x: 4
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: win.engineDotColor(engineRow.modelData.state)
-                    }
-                    Text {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: engineRow.modelData.label
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: backend.engineId === engineRow.modelData.id
-                                     ? Font.DemiBold : Font.Normal
-                        color: backend.engineId === engineRow.modelData.id
-                               ? Theme.primary : Theme.ink
-                    }
-                    TapHandler {
-                        onTapped: win.selectEngine(engineRow.modelData.id)
-                    }
-                }
+        Repeater {
+            model: win.engineChoices()
+            delegate: MenuRow {
+                required property var modelData
+                text: modelData.label
+                selected: backend.engineId === modelData.id
+                // 每行都亮状态灯（绿/黄/红），选中只是加粗变色。
+                showDot: true
+                dotColor: Theme.engineStateColor(modelData.state)
+                // 缺资产 / 缺配置的行压暗且不响应：选了也翻不了。
+                enabled: modelData.usable
+                onActivated: win.selectEngine(modelData.id)
             }
         }
     }
@@ -1398,6 +1350,14 @@ Window {
             win.openMenu = 0
             win.engineMenuOpen = false
         }
+    }
+
+    // 复制成功 / 失败的小提示（与主界面同一个 Toast 组件，样式一致）
+    Toast {
+        id: miniToast
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.s6
     }
 
     // 设置小窗：复用截图翻译那块面板（mode = "mini"）

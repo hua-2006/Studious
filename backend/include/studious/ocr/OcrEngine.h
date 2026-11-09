@@ -55,6 +55,8 @@ public:
     bool isAvailable() const;
 
     // 缺哪些文件（只给文件名，例如 "det.onnx"；目录在 lastError() 里）。
+    // 这里只报"不在 / 不是普通文件"的；文件在但 0 字节属于"坏的"而不是"缺的"，
+    // 由 lastError() 报「OCR 模型文件是空的：%1」（见 missingFilesNow 的分工）。
     // 齐全时返回空 list —— 此时是否可用看 isAvailable()（会话可能仍然建不起来）。
     QStringList missingFiles() const;
 

@@ -2120,3 +2120,326 @@ OCR 直接读；资产卡的「从文件导入」按钮在弹出层里没有悬�
 **验证**：构建 `[9/9]`；`--ui-shot` 拍 1/2/3/6 四个分区，逐行扫右栏像素求内容范围 ——
 内容分别止于 y=682 / 1313 / 649 / 979（物理像素），短分区不再带一大片空滚动区；
 运行时无 `ReferenceError`/`Unable`。
+
+## 资产路径收口：一个 dataRoot + 三种模型目录（2026-11-09）
+
+**起因**：语言包搬到 data/assets/models/mt 之后，配置页把本地 MT 报成「缺资产」——
+AppBackend 有三处用 LocalEngine::modelsDir() 去扫语言对，而那个函数被我刚指到
+models/llm。同一份「数据根在哪」的推导在前后端各有一份，改一处漏一处。
+
+**改法**
+- 后端成为唯一实现：新增 ackend/include/studious/asset/DataRoots.h +
+  ackend/src/asset/DataRoots.cpp——dataRoot()（从 exe 往上最多四层找 ersion.json →
+  <应用目录>/data，找不到用 <exe 目录>/data）、ssetsRoot()、modelsRoot("llm"|"mt"|"ocr")。
+  放在后端是因为本地 MT、CLI、自测程序都不知道 UI 存在，也该算出同一份路径。
+- rontend/src/AssetPaths.cpp 的 dataRoot() 改成一行转发（ssetsRoot() 仍保留
+  「设置里可以改安装根」这一层 UI 覆盖）。
+- ackend/src/translators/LocalMtTranslator.cpp 删掉自己的 dataRootCandidate() /
+  modelsRootFor()，defaultModelsRoot() 用 studious::asset::modelsRoot("mt")，
+  %APPDATA%/studious/assets/models/mt 存在而新位置不存在时才回落旧路径。
+- LocalEngine::modelsDir() 全量改名 llmModelsDir()：它只代表"GGUF 在哪"，
+  名字含糊时被拿去扫语言包是必然的。四处 MT 扫描 + --mt 诊断改用 paths::modelsMtDir()。
+
+**验证**：构建 `[24/24] Linking`；`--asset-verify mt.opus.en-zh` → `ok`；
+`--smoke ... --engine local-mt` → 命中 1/1、「你好,世界观!」；配置页四行状态全绿
+（本地 MT「就绪 · 英语 → 中文(简体) · 本地语言包」）。
+
+**坑**：用 PowerShell 的字符串替换插 include，单引号里的 ` 
+ ` 会当字面量写进源码
+（这次两次都是），编译报 `'dataRoot' is not a member of 'studious::asset'`。改源码一律用
+`edit`。
+## 「关闭软件」改成真退出（2026-11-09）
+
+**现象**：右上角 ✕ 的弹窗里点「关闭软件」，窗口没了但进程还在——托盘图标、llama-server
+都留着。原因是那条分支只 oot.close() 关了窗口，onClosing 之外的清场谁也没跑。
+
+**改法**
+- Main.qml 的 quitApplication() 改成调 ackend.quitApplication()（原来是 `root.close()`）。
+- `AppBackend::quitApplication()`（原本只摘托盘）补成完整收尾：
+  1. `m_quitting = true`：之后排队的本地引擎启动一律不执行；
+  2. `shutdownLocalEngine()`：正常停 llama-server；
+  3. 新增 `platform::killChildProcesses()`（`ProcessGuard.cpp`，Toolhelp32 快照按父进程号
+     `TerminateProcess`）：引擎还在启动、runner 还没交给 `LocalEngine` 的情况下，
+     正常 stop 是空操作，必须按父进程兜底清一遍；
+  4. `logsink::flushToDisk()` 再退事件循环；
+  5. 2 秒兜底 `QTimer`：还没退就再补一刀子进程后 `std::_Exit(0)`。
+- `runLocalServerStart()` / `startLocalServer()` 开头加 `m_quitting` 短路。
+
+**验证**（`STUDIOUS_UI_SET="engineId=llm-local"` + `STUDIOUS_UI_CALL="quitApplication@9000"`）：
+- 改前：`app_alive=0 llama_left=1`（主进程没了，llama-server 孤儿，Vulkan 常驻显存）；
+- 改后：`app_alive=0 llama_left=0`。
+- `--ui-shot` 模式下会看到 `graceful shutdown timed out, forcing exit`：那条分支用的是
+  自己的 `QEventLoop`，`QCoreApplication::quit()` 不会退它，只能等兜底 `_Exit`；
+  真实 GUI 走 `exec()`，`quit()` 立即返回，不会走兜底。
+
+**坑**：`tlhelp32.h` 必须在 `windows.h` 之后 include，否则整片 `HANDLE/DWORD` 报未声明。
+## 托盘不出现：hide() 之前没人把图标挂上（2026-11-09）
+
+**现象**：✕ 弹窗里点「最小化到托盘」，窗口直接消失，通知区没有图标 —— 等于把程序藏没了。
+
+**根因**：托盘图标在 Desktop::createTray() 里是**先建成隐藏态**（NIS_HIDDEN），
+只有 setTrayEnabled(true) 才 NIM_MODIFY 取消隐藏。而 syncTrayState() 只在
+「设置里的最小化到托盘 / 关闭到托盘」为真时才显示；弹窗那条路是临时决定，两个开关都关着，
+于是 oot.hide() 之后什么都没有。
+
+**改法**
+- AppBackend::ensureTrayIcon()（新，`Q_INVOKABLE bool`）：先 setTrayEnabled(true)，
+  再 	rayAvailable() 复核；失败给一句「这个会话里装不上托盘图标，窗口先不藏。」
+- Main.qml 的 minimizeToTray()、标题栏「−」、标题栏「✕」（设置里开了托盘时）三条路
+  全部改成「ensureTrayIcon() 成功才 hide()」，失败退回 showMinimized() / 现状。
+- m_trayForced：临时挂过一次之后，syncTrayState() 里也算「需要」，
+  否则下次改任何设置都会 setTrayEnabled(false) 把图标摘掉，窗口又没了。
+- Connections { target: backend; function onRestoreWindowRequested() { show/raise/requestActivate } }：
+  之前 Desktop::restoreRequested → AppBackend::restoreWindowRequested 有信号但 QML 没人接，
+  点托盘也唤不回窗口。
+- Desktop::setTrayEnabled() 加一行 `[tray] show|hide -> N` 日志，便于判断是 Explorer 拒绝还是逻辑没走到。
+
+**验证**：`STUDIOUS_UI_CALL="ensureTrayIcon@1200"` → 日志 `[tray] show -> 1`（Explorer 接受）；
+常态启动只有 `[tray] hide -> 1`（设置没开，保持隐藏），QML 零报错。
+
+## 本地 MT 路由：目标语言是英语时一条路都不试（2026-11-09）
+
+**报的现象**：`pt→en` 直接报
+
+    缺少本地翻译模型：需要 mt.opus.pt-en，或「pt→en + en→en」，或多语言模型 mt.opus.mul-en / mt.opus.en-mul
+
+明明装了 `mt.opus.mul-en`，而且「en→en」这种语言对根本不存在。
+
+**两个根因**
+
+1. `planFor()` 里所有「经英语中转」的分支都带 `d != "en"` 前置条件 —— 目标是英语时
+   提前把整条链排除了，连 mul-en 都不试。落到 resolve() 的兜底文案后，模板写死
+   `"%2→en + en→%3"`，d 就是 en，于是印出 `pt→en + en→en`。
+2. 兜底文案不区分方向：`s == "en"` 时会印出 `en→en + en→pt`，同样不存在。
+
+**改法**
+
+- `planFor()`：直连之后加「目标是英语」这一支 —— `d == "en" && s != "en" && mulEnReady`：
+  - `mulCoversLanguage(s)` 为真 → `RouteKind::MulEn`（mul-en 本来就是"任意源→英"，一步到位）；
+  - 否则记 `mulUnsupportedReason(s, false)`，报"多语言模型不支持 XX 作为源语言"。
+- `translate()` 的 MulEn：出英文后若 `dst == "en"` 直接 `outText = middle; return true;`
+  （以前会去 `loadOrFail("en","en")`，那对模型根本不存在）。
+- `routeDescription()`：MulEn + `d == "en"` 给「多语言模型 mul-en（自动识别源语言→en）」。
+- `resolve()` 兜底文案按方向分三支：`d == "en"` / `s == "en"` / 其余。
+  `missingAssets` 同步只列这条方向真正缺的东西（目标英语时不再把 en-mul 算进来）。
+- `TranslatorRouter` 的强制引擎分支：`unsupportedDsts` 非空时先 `resolve(src, bad.first())`，
+  有 reason 就用 `指定的引擎 %1 翻不了这个方向：%2`，没有才退回旧的"不支持目标语言"。
+  因为本地 MT 这里多半是**源语言**读不了（mul-en 词表里没有韩语）。
+
+**顺手补的一道闸**（`LocalMtTranslator::translate()`）：整段译文 `trimmed().isEmpty()`
+时不再当成功，报「本地 MT 这轮没有产出文字：模型可能不认识这段的语言」——
+以前会返回 ok + 空串，界面看着像"翻完了但什么都没显示"。
+
+**验证**
+
+| 方向 | 结果 |
+| --- | --- |
+| `pt→en` | 30 ms / `Hi, world!`（缓存命中）；冷跑 1088 ms / `Good morning, all right?` |
+| `fr→en` | 1068 ms / `Hello everyone. How are you going today?` |
+| `en→pt` | `Olá, mundo!`（en-mul + `>>por<<`） |
+| `zh→en` / `ja→en` / `en→zh` | 直连对，回归正常 |
+| `ko→en`、`ko→pt` | `指定的引擎 local-mt 翻不了这个方向：多语言模型不支持韩语作为源语言（…）` |
+
+**排错记录（别踩）**：中途两次以为「译文是空的」，其实是我在 PowerShell 里用
+`Select-String '耗时|译文|FAIL'` 过滤，把不带这些关键词的译文行自己滤掉了。
+查这类问题要么看全量输出，要么用下标取 `译文:` 的下一行。
+
+## 小窗「保存到记录」→「重新翻译」：保存不该有第二个开关（2026-11-09）
+
+**问题**：小窗结果出来之后主按钮写的是「保存到记录」，可记录本来就由「设置 · 缓存 →
+保存翻译历史」控制。等于同一件事两个入口：开关关着点按钮报一句"没存进去"，
+开关开着还得手动点一次才存 —— 前者是误导，后者是多余。
+
+**改法**
+
+- `frontend/src/MiniSession.cpp` 的 `onFinished()`：翻完（`phase == Done`）时
+  `if (AppSettings::load().historyEnabled) saveRecord();` —— 存不存只看那一个开关。
+- 主按钮 Done 态改成 `qsTr("重新翻译")`，调用新增的 `MiniSession::retranslate()`；
+  `retranslate()` 置 `m_forceFresh = true` 再走 `translate()`。
+- `frontend/src/QuickTranslate.cpp` 的 `translate()` 多一个 `bool bypassCache = false`：
+  为真时 `req.cache = nullptr` / `req.cacheEnabled = false`，**这一次**不读也不写缓存。
+  不绕过的话「重新翻译」会立刻拿回上一份结果，30 ms 就回来了，按下去像没反应。
+- `frontend/qml/overlay/MiniWindow.qml`：按钮文案与 `onTapped` 分支同步改掉；
+  `saveRecordRequested` 的信号链保留（现在是自动保存的回执），
+  `saveHint` 仍会显示「已保存到记录。」。
+
+**验证**（`STUDIOUS_UI_CALL` 驱动小窗，读 `data/records/mini.db` 行数）
+
+| 场景 | 结果 |
+| --- | --- |
+| `history/enabled = 1` 翻完 | 提示「已保存到记录。」，`mini.db` 行数 4 → 4（本次命中原行，未重复插） |
+| `history/enabled = 0` 翻完 | 无提示，行数保持 4 —— 开关确实独占保存 |
+| Done 态按钮 | 文案「重新翻译」 |
+| 点「重新翻译」 | 面板耗时 **1051 ms**（同一段此前是 30 ms 缓存命中）→ 真重发了请求 |
+
+**顺带发现的限制**（未改）：`srcLang = auto` + 很短的英文（如 `Hello, world!`）时，
+语言检测置信度不到 0.5，本地 MT 会直接拒：「无法确定源语言：本地 MT 需要明确的语言对」。
+不是新问题，但小窗默认 auto 时用户第一次按「翻译」很容易撞上。
+
+## 清单未验签告警降噪（2026-11-09）
+
+- 现象：每次解析内置清单都打一句「清单未验签：调用方关闭了 requireSignature…请勿在生产环境使用」，正式包里属于噪声（内置清单本来就是未签名的已知状态）。
+- 改法：ackend/include/studious/asset/Manifest.h 的 ManifestVerifyOptions 新增 ool warnWhenUnsigned = true;（只影响提示，不影响 equireSignature 的强制验签）；ManifestParser.cpp 的告警块包进 if (opts.warnWhenUnsigned)。
+- 调用方：rontend/src/AssetPaths.cpp 设 opts.warnWhenUnsigned = qEnvironmentVariableIsSet("STUDIOUS_DEV_MANIFEST") —— 开发期读仓库那份清单时喊，正式包内置清单不喊。main.cpp 的 --assets-cli / --asset-download 保持默认 true。
+- 验证：--asset-verify mt.opus.en-zh 正常模式只输出 [verify] … -> ok；STUDIOUS_DEV_MANIFEST=1 时多一行告警；--ui-shot 启动零告警、零 QML 报错；构建 [1/1] Linking。
+- 踩坑：链接被占用 —— studious.exe（PID 15272）与 llama-server（PID 10692）还在跑，ld 报 collect2.exe: error: ld returned 1 exit status；问过用户后结束这两个进程才链上。
+## 缺资产的引擎不可选 + 一句轻提示（2026-11-09）
+
+- 诉求：资产没装齐时，主页会警告、截图与实时翻译根本选不了本地 LLM，但小窗还能选、点了到"开始"才报错。要求小窗跟另外两个一致；主页那项也不给选，点了要弹一句"没有对应资产"，带弹出与淡出动画。
+- **Segmented**（rontend/qml/components/Segmented.qml）新增 property var blockedCodes 与 signal blocked(string code)：命中 blocked 的按钮标签 opacity 0.42，点它不发 selected、只发 locked（仍然可点 —— 用来解释为什么不行）。
+- **翻译页**（rontend/qml/pages/TranslatePage.qml）：lockedEngines 从 ackend.engineStatuses 里筛 state === "missing-assets"（空串「自动」永远可选）；engineSeg 接上 lockedCodes 与红/黄/绿状态点，onBlocked → page.noticeRequested(page.blockedEngineHint(code))；文案两种 —— 「「%1」还差 %2 个组件，先去「设置 · 资产」里下载。」与「「%1」还差运行所需的组件，…」。
+- **提示条**：新建 rontend/qml/components/Toast.qml（180ms 淡入 + 上浮 10px → 停 2.6s → 260ms 淡出，hidden() 信号）。主窗口只放一份（Main.qml 的 windowToast，锚在状态条上方 64px），页面用 signal noticeRequested(string) → onNoticeRequested: root.notify(text) 借这份；Main.qml 另加零参 openMini()，因为 --ui-shot 的 CALL 钩子调不了带参 JS 函数。
+- **小窗**（rontend/qml/overlay/MiniWindow.qml）：engineChoices() 每项多带 usable（空串或非 missing-assets），菜单行 opacity: usable ? 1 : 0.42，TapHandler 对不可用项直接 return（不关菜单、不改选择）。
+- 验证：把 settings/asset/root 指到空目录 → 主页「本地 LLM」「本地 MT」压暗 + 红点，Toast 显示「本地 MT还差 1 个组件…」（截图 doc/docs/ui-shots-qml/engine_blocked_toast.png）；小窗引擎菜单同样压暗（mini_engine_blocked.png，STUDIOUS_UI_SHOT=miniWindow）。恢复设置后四行状态正常、本地 MT 冒烟 你好,世界观!（命中 1/1）、--ui-shot exit 0（engines_ok_again.png）。
+- 译文：update_translations 576 条（2 new）→ 补齐 → lrelease Generated 576 translation(s) (576 finished and 0 unfinished)；构建 [11/11]。
+- 坑：取证用的 --toast-probe 探针写在 Component.onCompleted 里与页面原有那份撞车 → Property value set multiple times（qmlcachegen 直接失败），改成塞进原有的 handler 才过；取完已删。
+## 引擎状态点四处同色（2026-11-09）
+
+- 现象：本地 MT 在主页状态条是黄灯（装好了、但当前语言对走不通），可三个浮层的引擎菜单里是绿灯。
+- 根因：后端 engineStatuses 每项同时给 state 与 eady；主页按「state=="ready" 且 eady 才绿」画，三个浮层只看 state，于是同一引擎两种颜色。
+- 改法（三处 + 翻译页自己那份 badges）：统一成同一句判定 —— aw = state || (ready ? "ready" : "not-ready")，再 aw === "ready" && !ready → "not-ready"。
+  - rontend/qml/overlay/CaptureOverlay.qml 的 engineStatusMap
+  - rontend/qml/overlay/LiveControlBar.qml 的 engineOptions()
+  - rontend/qml/overlay/MiniWindow.qml 的 engineChoices()（usable 仍只看 missing-assets）
+  - rontend/qml/pages/TranslatePage.qml 的 adges
+- 验证：doc/docs/ui-shots-qml/mini_engine_colors.png 小窗菜单里「本地 MT」变成黄点（原绿），「本地 LLM」仍压暗 + 红点；status_colors.png 主页状态条不变。构建 [15/15] Linking，无新增文案。
+## 缺件提示按原因分类 + 云端 LLM 10 秒无响应判失败（2026-11-09）
+
+- 现象：点到不能用的引擎只弹一句「还差 N 个组件」，缺运行时、缺模型、缺语言包、没填地址被说成同一件事。
+- 后端：efreshEngineStatuses() 每条多给 locked（missing-assets / missing-config 都算）；云端 LLM 缺「服务地址」或「模型名」时 state 记 missing-config，界面按红点、不可选。
+- 前端：TranslatePage.blockedEngineHint() 直接用后端 detail 拼「「引擎名」：……」，四类原因各自成句；CaptureOverlay / LiveControlBar / MiniWindow 的可用性判定同样认 missing-config。
+- 取证钩子：--ui-shot 的 STUDIOUS_UI_CALL 原来只能可靠调窗口根上的方法（页内 Item 方法在元对象里找不到），在 Main.qml 加了一层 showBlockedEngineHint() 转发。
+- 云端 LLM 超时：HttpRequest 加 irstByteTimeoutMs（LlmTranslator 固定 10 000 ms），HttpResponse 加 irstByteTimedOut / connectionFailed；QtHttpClient 用单独的计时器判「首字节」，收到响应头或数据就停表。
+- 文案与重试：首字节超时 → 「云端 LLM 连接失败：10 秒内没有收到任何响应（地址 …）」；连不上（拒绝连接/域名解析失败）→ 「云端 LLM 连接失败：连不上 …」。这两类不再走 5 次重试，也不再在末尾劝人「换更大的模型」。
+- 实测：静默 TCP 服务（只 listen 不回数据）→ 10.1 s 报首字节超时；无监听端口 → 4.2 s 报连不上（改前各要 20~40 s）；正常网关 --smoke → 你好，世界！
+- 截图：doc/docs/ui-shots-qml/blocked_hint7.png（「云端 LLM」：缺 服务地址、模型名 · 去下面的「引擎配置」填）。
+## 本地 LLM 卡里几行说明把卡片撑出列外（2026-11-09）
+
+- 现象：窗口窄到 1000 逻辑宽（配置卡两列布局）时，「切换引擎时关闭 / 启动时预热 / 空闲自动停 / 空闲阈值」四行的说明文字不换行，整张卡被撑得比列宽还宽，右边的「高级设置」被顶到窗口外。
+- 原因：FieldRow 内部是 RowLayout，说明 Text 只写了 Layout.fillWidth: true。Qt 里 Layout.minimumWidth 默认取 implicitWidth，长句子的隐式宽度就是整行文字宽，于是布局的最小宽度被它锁死，卡片只能长胖。
+- 改法：rontend/qml/pages/ConfigPage.qml 这四处说明 Text 补 Layout.minimumWidth: 0（配 wrapMode: Text.WordWrap 就会按剩余宽度折行）。
+- 验证：--ui-shot config_local_overflow.png --ui-page 3 --ui-size 1000x900 + STUDIOUS_UI_SET="engineId=llm-local"，四行说明都在卡片内折行，右侧不再溢出；随后把临时改过的 configTab 默认值改回 "llm-cloud" 并重建。
+- 顺带发现：data/assets/models/mt 与 data/assets/runtime 现在是**空的**（语言包与 llama 运行时都不在了，3B/1.5B/0.5B 的 GGUF 还在 models/llm），所以界面显示本地 MT 缺语言包、本地 LLM 缺运行时。
+### 更正：真正原因是少了一个右花括号（同日）
+
+- 上面那条「说明文字 minimumWidth」只是次要问题。真正的病灶在 rontend/qml/pages/ConfigPage.qml 的「空闲阈值」那一行：FieldRow 少了收尾的 }，于是后面的整个「高级设置」SubSection 被解析成这一行 FieldRow 内部的子项 —— FieldRow 内部是 RowLayout，所以「高级设置」被排到了「分钟。只在…」的右边，整张卡于是横向边长，看起来像"内容被顶到卡外"。
+- 定位手段：qmlformat.exe（Qt 自带）格式化一份副本，看真实缩进 —— SubSection 缩进只有 20，而它被写在了 24 缩进的 FieldRow 里面，说明括号层级本来就是错的；再逐个试删尾部多余的 }，用 qmlformat 的解析结果确认哪一种组合能过。
+- 改法：在「分钟。只在…」那段 Text 之后补上 FieldRow 的 }，并删掉尾部那个原本用来收 FieldRow 的错位 }（原 2419 行，缩进 16）。文件其余部分没动。
+- 验证：qmlformat 解析通过；构建 [9/9]；--ui-shot config_local_fix3.png --ui-page 3 --ui-size 1000x900（STUDIOUS_UI_SET="engineId=llm-local"）—— 「高级设置」回到卡内、位于「空闲阈值」下方，上下文/线程数两行完整可见，右侧不再溢出。
+## 去重第一批：模型短名 / 步进器 / 关闭按钮 / 引擎顺序（2026-11-09）
+
+三路子代理只读审计（前端 C++、QML、后端）各出一份重复清单。本轮先落"零行为变化"的那几条：
+
+- **模型路径与短名收口到 LocalEngine**：新增 static QString pathForName(const QString &)（空串原样返回空，不落到"第一个模型"），esolveModelPath() 改成先走它再兜底；AppBackend.cpp 与 QuickTranslate.cpp 里各一份 localModelPathFrom / shortModelName 全删，只留一行转发。以前三份后缀表不一致（一份认 .q4_km、一份不认，一份会顺手去掉 -instruct），界面短名以 LocalEngine::shortModelName 为准。
+- **component NumStepper 从 OverlayPage.qml 搬到 components/NumStepper.qml**：9 个调用点写法不变（同名类型 + 同样的 rom/to/step/value/unit/modified），新增 alueWidth 属性留出宽度调节口。页内副本删掉，注释改成"只有一份"。
+- **component CloseButton 同理搬到 components/CloseButton.qml**：CaptureOverlay / MiniWindow / CaptureSettingsPanel 三处各写一份的 ✕ 合并，差异（uttonRadius、nimated）做成属性；实时控制条那份本来圆角与动画就不同，暂不替换，等下一批连菜单外壳一起动。
+- **命令行自动顺序不再自留一份**：main.cpp 的 esolveEngineId() 用 engine::defaultPriority()，再把 llm-local 摘掉并注明原因（--engine auto 是脚本/冒烟用的，不该顺手拉起 1~3 GB 的本地模型）。
+- 顺手清了两处过期注释：AppSettings.h/.cpp 与 LogSink.h 里还写着默认路径是 %APPDATA%\studious\assets。
+
+验证：构建 [87/87] Linking（exe 60.8 MB）；--smoke "Hello, world!" --from en --to zh --engine llm-cloud → 你好，世界！[DONE] exit 0；--ui-shot 拍第 0/2/4 页零 ReferenceError / Unable / Syntax / is not a type，浮层页三组步进与译文不透明度都正常。
+
+下一批（审计已列出，按风险排）：FieldRow 加 hint 槽 + 干掉 18 处手写提示与 6 处 132 + Theme.s3；Theme 加 engineStateColor/engineUsable/canonicalEngineId 收口 6 份状态映射；MenuPanel/MenuRow 合 5 处窗内下拉；缓存单例与 splitParagraphs 合并；后端 LocalMt 的 planFor/supports/pivotsThroughEnglish/resolve 四份路由判定收成一份。
+## 重复接口收口（2026-11-09）
+
+- 三路只读审计（前端 C++ 16 组 / QML 12 组 / 后端 14 组）后，本轮落地三批：
+- 前端基础层：`Theme` 新增 `formLabelWidth` / `engineIds` / `canonicalEngineId` / `engineStateOf` / `engineUsable` / `engineStateColor` / `engineShortName`；新组件 `MenuPanel`、`MenuRow`、`NumStepper`（默认 34 高 + `compact: true` 22 高）、`CloseButton`。
+- 浮层三处引擎下拉（截图浮层 / 实时控制条 / 小窗）改吃 `MenuPanel + MenuRow`，状态点颜色与置灰判断全部走 `Theme`；`ConfigPage` / `TranslatePage` 的状态色同样改成 `Theme.engineStateColor`。
+- 前端 C++：`Paragraphs::split`（唯一段落切分）、`CacheHandle::sharedCache`（唯一缓存单例）、`langs::normalizeTargets / normalizeSource` 全面接管；`LocalEngine::pathForName / shortModelName` 成为模型路径唯一实现。
+- 后端：`LocalMtTranslator` 的 `supports / pivotsThroughEnglish / resolve` 全部由 `planFor` 派生；`LlmRequest.{h,cpp}` 合并 `LlmTranslator` 与 `LlmCatalog` 的 endpoint / Authorization / 错误文案表。
+- 验证：构建 `[105/105]`；`--ui-shot` 六页零 QML 报错；`--smoke --engine llm-cloud` → 你好，世界！
+- 已知环境问题：`data/assets/models/mt` 与 `data/assets/runtime` 为空（早前把 assetRoot 指到空目录的模拟测试后没恢复），所以 `--engine local-mt` 报缺语言包；需要跑 `--asset-download` 重下。
+
+## 去重收尾：Hint 组件 + 资产已装判定收口（2026-11-09）
+
+- QML 说明行：ConfigPage 与 OverlayPage 各加一个页内 `component Hint: Text`（左缩进 `Theme.formLabelWidth + Theme.s3`、tiny、`inkVariant`、自动换行），把两页 13 处手写六行块收成 `Hint { text: ... }`。现在两页里 `formLabelWidth + Theme.s3` 只剩组件定义那一处。
+- 教训：想用一条正则跨 100 KB QML 抓多行块（`(?s)` + lazy）会灾难性回溯，120 s 不返回；改成逐块 `edit`。多行 QML 一律手动改。
+- 后端「已安装/可用」判定收口（子代理 `59c3e0d5` 交付）：`AssetRegistry` 新增 `isPresent(id)` 与私有 `fileLooksInstalled(QFileInfo)`（`isFile && size>0`）；**目录型资产补上这条判据**——以前只看 `exists()`，0 字节文件也算已装，与 `verifyInstalled()` 打脸；缺文件与空文件现在分开报（「缺少关键文件」/「关键文件为空或不是普通文件」）。`OcrEngine` 三件套统一 `isFile && size>0`，0 字节单独报「OCR 模型文件是空的」。`LocalEngine::availableModels()` 改吃 `AssetRegistry::listStatus()`（清单 `type==model` + `isPresent` + 位于 `models/llm`），删掉后缀白名单与 `ocr.` 前缀特判。
+- 两处故意收紧：目录型资产的 0 字节占位文件由「已安装」变「损坏」；`LocalEngine::ensureStarted()` 对显式模型路径也拦 0 字节（`LocalEngine.cpp` 里那个 `if` 可单独回退）。
+- 验证：构建 `[30/30] Linking`（backend 改动一并编入）；`qmlformat` 解析 Theme / FieldRow / ConfigPage / OverlayPage 全通过；`--smoke --engine llm-cloud` → 你好，世界！`[DONE] exit 0`；`--ui-shot` 第 2/3 页零 QML 报错，产物 `doc/docs/ui-shots-qml/dedupe3_p2.png` / `dedupe3_p3.png`。
+- 仍待办：窗内语言下拉（小窗那份带多选勾选框，不能直接换 `MenuRow`）、浮层页与齿轮面板双套 UI 的文案漂移、`AppBackend::configuredModelExists` 仍只判 `isFile()`。
+## 小窗目标语言改单选 + 浮层设置 UI 合一（2026-11-09）
+
+- 小窗（`MiniWindow.qml`）：目标语言菜单去掉多选勾选框，点一项就是换到它并收起；`toggleDst()` 只写 `[code]`，`dstSummary()` 只显示第一个。`MiniSession::setDstLangs()` 再夹一次（多于一个只留第一个），避免别处写多值后冒出点不掉的"语言 +1"标签。
+- 浮层设置合一：新建 `frontend/qml/overlay/OverlaySettingsGroups.qml`（`mode: mini|capture|live`），把主界面「浮层」页三组控件整段搬进去；`OverlayPage.qml` 与 `CaptureSettingsPanel.qml`（齿轮面板）都改用这一个实例，标签与后端绑定只剩一份 —— 之前两边各写一遍、文案已经漂移。
+- 拆分时的坑：子代理只做了一半就被我打断接手，`OverlayPage.qml` 残留半截旧控件（`label:` 悬空、`H3` 断行）导致 `qmlcachegen` 报 `Incomplete binding`；按大括号配平逐段删干净、补上 `SectionCard` 的收尾 `}` 才通过。以后这种大段搬迁必须"先整体删、再插入"，不能边挪边删。
+- 因为控件换了文件上下文，`lupdate` 把 25 条文案算作新增；用「旧 ts 里同 source 的译文」批量回填（脚本按 `<message>` 块处理，不跨块正则），`unfinished = 0`，`lrelease` 557 条全译。
+- 验证：构建 `[9/9] Linking`；`--smoke --engine llm-cloud` → 你好，世界！；`--ui-shot` 浮层页（`unified_overlay.png`）与小窗齿轮面板（`unified_mini_panel.png`，用 `STUDIOUS_UI_TARGET=miniWindow STUDIOUS_UI_CALL="miniWindow:show@600|miniWindow:openSettingsPanel@1100"`）均零 QML 报错。
+## 小窗语言下拉换 MenuRow + 记录详情加复制（2026-11-09）
+
+- 小窗语言菜单不再自己搭外壳：`Rectangle + Flickable + Column + Repeater` 换成 `MenuPanel + MenuRow`（与引擎菜单同一套），目标语言那列勾选框随之消失；`selected` 由 `srcLang` / `dstLangs[0]` 决定，选中项由 `MenuRow` 统一加粗变色。
+- 记录详情头部加「复制原文」「复制翻译」两个小按钮（`backend.copyText()`）；没有译文时「复制翻译」退回原文，两边都空时按钮变灰不响应。
+- `AppBackend::configuredModelExists` 补上 `size() > 0`：资产层已经把 0 字节判成损坏，这里若只判 `isFile()` 会出现「配置页说就绪、一点翻译就报缺模型」。
+- 取证钩子：`MiniWindow` 加零参 `openDstMenu()` / `selectFirstRecord()`（`--ui-shot` 的 CALL 只认零参方法，`STUDIOUS_UI_SET` 只打 backend）。
+- 验证：构建 `[9/9] Linking`；`--smoke` → 你好，世界！；`--ui-shot` 出 `mini_lang_menu.png`（目标语言菜单，单选高亮）与 `mini_records_copy.png`（记录详情 + 两个复制按钮），零 QML 报错；文案 2 条新增补齐，`lrelease` 559 条 / 0 unfinished。
+## 小窗三处修正（2026-11-09）
+
+- 目标语言输入框右侧的「多选 / 单选」徽章：改成 `visible: backend.dstMultiSupported` —— 支持多选时才出现，本地 MT 这种单选场景不再露半个"单选"字样（截图里那个「多选」也一并消失）。
+- 语言菜单位置：`srcField.x/y` 是**父容器坐标**，菜单挂在窗口根上，直接当锚点会飘到左上角压住标签栏。改成打开时 `mapToItem(win.contentItem, 0, 0)` 换算一次存进 `langMenuX/Y`（写在绑定里不会有依赖，这是第二次踩），宽度取字段实际宽度。实测 `kind=2 x=286 y=62`、右半区差 75,466 px / 左半区仅 7,645 px，菜单确实移到了目标字段下方。
+- 记录详情两个复制按钮：加按下反馈（`scale 0.94` + `opacity 0.65` + 120 ms 回弹、手型光标），复制结果走 `Toast`（与主界面同一组件、底部居中）。`AppBackend::copyText` 返回值从 `void` 改成 `bool`，空文本/无剪贴板返回 false，界面据此提示「已复制」或「复制失败：剪贴板不可用」。
+- 验证：构建 `[9/9] Linking`；`--smoke` → 你好，世界！；`--ui-shot` 出 `mini_lang_menu3.png`（菜单在目标字段下方）、`mini_records_copy2.png`（两个复制按钮）、`mini_copy_toast.png`（底部提示条，底部 840×197 区域变化 4,338 px）；零 QML 报错；文案 2 条补齐，`lrelease` 560 条 / 0 unfinished。
+## 目标语言规则收口：没有多选、没有自动、不许和源语言重复（2026-11-09）
+
+- 规则进 langs：
+ormalizeTargets() 直接丢掉「自动」（目标语言不能是自动检测）；新增 
+ormalizeTargetsAgainstSource(targets, source)——源不是 auto 时把同一个语言剔掉，剔空后按 {zh, en} 取第一个不等于源语言的兜底（源是 zh 就给 en）。
+- 后端：AppBackend 删掉 dstMultiSupported，新增只读 	argetLanguages（languages 去掉 auto）；setSrcLang 改完源语言立刻修目标语言并落盘；setDstLangs / setEngineId / 构造 / eloadLanguagesFromSettings 全部走「空兜底 + local-mt 单选 + 不许与源重复」。
+- 小窗：MiniWindow 删掉目标语言旁的「多选」小胶囊；语言菜单的 model 按 openMenu 切 languages / 	argetLanguages，与另一端相同的语言压暗且点不动（clash）。
+- 翻译页：	argetLanguages 也剔掉当前源语言。
+- CLI：--to 归一再发单，被改时打 [WARN] 目标语言已从 X 调整为 Y（目标语言不能是自动检测 / 不能和源语言相同）；header 与 yLang 取值改用归一后的目标语言（改前 --from zh --to zh 会拿着 zh 去取 en 的结果，译文看着是空的）。
+- 验证：--to auto → 调整为 zh，译文「你好，世界！」；--from zh --to zh → 调整为 en，译文「Hello, world!」；小窗截图 doc/docs/ui-shots-qml/mini_dst_clash.png（中文(简体) 压暗、无「多选」、列表里没有自动检测）。
+
+## 引擎配置卡片结构修复（2026-11-09）
+
+用户报「配置里引擎配置的显示数据都乱了 + 深色显示也有问题」。看截图以为是数据错位，实际是 **ColumnLayout 的父子关系坏了**：本地 MT 面板被解析进本地 LLM 面板里面，本地 LLM 的「已停止 / 日志」那块又漏在卡片层，所以 MT tab 顶上出现 LLM 的状态行、且整块没有卡片内边距。
+
+- 定位手段：`{`/`}` 计数脚本（末尾 depth=1，少一个右花括号）→ `qmlformat` 报 `Expected token '}'` → 把文件复制到临时目录、补一个 `}` 再 `qmlformat`，看它规范化后的**缩进**，一眼能看出谁是谁的兄弟（`mtPanel` 与 `localPanel` 同缩进才是对的）。
+- 修法：`ConfigPage.qml` 里 `localPanel` 的收尾 `}` 补在「本地 MT」注释之前，同时删掉此前试探时在文件末尾多补的那个 `}`；两处平衡后 `qmlformat` 通过、构建 `[9/9]`。
+- 中途踩的坑（记下来别再犯）：用 `Get-Content` 读、`WriteAllLines` 写，在 PowerShell 里按 ANSI 解码 UTF-8，**整份中文变乱码**（`本地 MT` → `鏈湴 MT`），且无法完整反转（有 `?` 替换）。恢复办法：用之前 `qmlformat` 生成的临时副本（内容完好）覆盖回来——那次是运气好，以后改源码只用 `edit` 或 `[System.IO.File]::ReadAllText/WriteAllText`。
+- 顺手清理：`qmlformat` 为了规范化插了大量空行（2230 → 4549 行），去掉空行回到 2080 行；`ConfigPage` 实例加 `objectName: "configPage"`（`--ui-shot` 的 CALL 钩子能直接调页面函数）。
+- 验证（都用 `ocrTest` 读截图里的文字坐标，不靠肉眼）：浅色 LLM tab 顺序为 模型文件 → 可用的加速组件 → 优先 GPU → 切换引擎时关闭 → 启动时预热 → 空闲自动停 → 空闲阈值 → 高级设置 → 回复风格 → 状态行 → 日志；MT tab 只有 MT 自己的内容；深色两边同样正确。截图 `cfg_llm_fix2.png` / `cfg_mt_fix2.png` / `cfg_llm_final.png` / `cfg_dark_llm.png` / `cfg_dark_mt.png`。
+### 补充：本地 MT 面板仍在卡片外（2026-11-09）
+
+上一轮只把「MT 面板在 LLM 面板里面」拆开了，但拆的时候多留下了一个右花括号：localPanel 收尾后紧跟着又一个 }，把 CollapsibleCard 的内容区提前关掉，于是 mtPanel 变成了页面级兄弟 —— 表现就是「引擎配置」卡片在分段控件下面直接结束，MT 的整块内容画在页面背景上、右端还会溢出到窗口边缘。
+
+- 定位：绝对深度脚本在关键行打分 —— CollapsibleCard 打开后 depth=4，webPanel/cloudPanel/localPanel 都在 5，唯独 mtPanel 是 4，一眼看出它在卡外。
+- 修法：删掉 localPanel 之后多出来的那个 }（原 1828 行），并在文件末尾补一个 } 补齐 CollapsibleCard 的收尾；qmlformat 通过、构建 [9/9]。
+- 验证（浅色 + 深色都拍）：cfg_llm_v2.png（模型文件 → 可用加速组件 → 优先 GPU → 切换引擎时关闭 → 启动时预热 → 空闲自动停 → 空闲阈值 → 高级设置 → 回复风格 → 状态行 → 日志）、cfg_mt_v2.png / cfg_mt_v3.png（按顺序使用… → 语言对表 → 保存位置 → 开机自启 → 空闲释放，全部在卡片内边距里）、cfg_mt_dark_v2.png。第 0 页复拍零 QML 警告。
+### 深色主题说明文字看不清（2026-11-09）
+
+深色主题下配置页 MT 面板的说明行、表格空态行、右侧「未加载 / 到点释放内存」几乎是黑的。采样用户截图：文字像素 (50,46,65)、背景 (23,22,30) —— 不是对比度不够，是这些字根本没跟主题走。
+
+- 根因：ConfigPage.qml 里有一批 Text {} **没写 color:**，走 Qt 默认色（QPalette / 控件默认），在本机拿到的是浅色那套的深字；Hint 组件虽然写了 color: Theme.inkVariant，外层又套了 opacity: 0.45（MT 未装语言包 / 未开预热时的"不可用"淡化），叠加后彻底不可读。
+- 修法：① component Hint 改 color: Theme.dark ? "#FFFFFF" : Theme.inkVariant；② 删掉两处 Hint 上的 opacity: … ? 1.0 : 0.45（说明文字不该跟"能不能用"一起淡出，控件级的 enabled 淡化保留）；③ MT 面板三段无色说明补显式色；④ 脚本按花括号配对找出 ConfigPage.qml 里 **34 处**无色 Text，逐块插入 color: Theme.ink（SettingsPage / OverlayPage / AppearancePage 同类扫描为 0）。
+- 验证：深色 cfg_mt_dark_v6.png、浅色 cfg_mt_light_v6.png（都 1120×1200）—— 说明行变白、浅色仍是深字；构建 [9/9] Linking；qmlformat 通过。
+- 教训：QML 里凡是正文 Text 都显式给色，别依赖 QPalette；透明度只用来表达"禁用"，别拿来压说明文字。
+## DSH 环境修：图片卸载在 rewind 标记上崩（2026-11-10）
+
+本轮「Cannot read properties of null (reading 'content')」不是本项目代码，是 DSH 自身的图片卸载插件。
+链路（会话 `session-9cbd45d0` 第 244 轮 step 18）：请求图片 base64 超 20 MB → pi-ai 抛
+`IMAGE_OFFLOAD_REQUIRED`（要求卸载最旧 7 处）→ `dsh-compaction-image-offload` 的
+`offloadOldestImages()` 遍历 surface → 撞上 seq 40521 的 `rewind-mw86495d-5` 回滚标记 →
+`deriveEventMessage()` 对 `rewind-*` 返回 `null`（`dsh-session` 里 `[dsh-purge]` 打的那行）→
+`visit(message.content)` 抛 TypeError，把真正的错误盖掉，整轮失败；重试同因再挂一次。
+
+- 定位手法：解压 `~/.dsh/sessions/.../session.v4.jsonl.zstd`（Node 24 的 `zlib.zstdDecompressSync`），
+  按 `seq` 找 `turn/end` 的 error，再看它前一条 `assistant/attempt` 的 `finish` 失败原因；扫描全量
+  `tool/result` 的 `message` 无 null、`user/message` 里只有一条 `rewind-*`，正好是崩溃点。
+- 修法（`@deepseek-ai/dsh-compaction-image-offload/lib/{index.js,types/image-offload.js}`）：
+  `deriveEventMessage()` 结果为空或 `content` 不是数组就 `continue`（回滚标记本来没有图片）；
+  `types/projection.js` 同步改成具名报错，别再读 `.content` of null。三处都留 `[image-offload-null-fix]` 注释，
+  原件备份为同名 `.bak-imagefix`。
+- 验证：把备份拷成 `.mjs` 跑同一组假数据 → 旧码复现 `TypeError: Cannot read properties of null (reading 'content')`；
+  新码返回 `true` 并 `append("image/offload", {targets:[{seq:2,imageIndexes:[0,1]}]})`；`lib/index.js` 动态 import 正常。
+- 同类排查：`dsh-compaction-basic` 已 `.filter(null!==)`，`tool-result-pruner` 只取 `tool/result`，
+  `token-meter` 有 `message === null ? 0`，只有图片卸载这一处没防。
+- 教训：surface 节点里混着 `rewind-*` 这种「合法但推导结果为 null」的标记；凡是对
+  `deriveEventMessage()` 结果直接读字段的插件，都要先判空。
+- 生效：DSH 桌面端要重启（模块已常驻内存）；重启后在那条会话继续发一条，卸载逻辑会自动放掉最旧图片再重发。
+
+## 发版 1.1.1（2026-11-10）
+
+- ersion.json 1.1.0 → 1.1.1；README 状态行与「版本信息」同步，新增 1.1.1 变更条目。
+- 内容：内存/资源修复批（截图临时 PNG 与常驻整屏位图、MT 单例跨线程竞态、语言检测表懒初始化竞态、
+  HTTP 客户端 parent 误用、未初始化捕获矩形、MtModel 张量形状校验）、只装 Vulkan 时锁定「优先 GPU」
+  并把已安装加速组件标绿、启动开场动画（logo → 进度条 → 主界面弹出）。
+- 提交 elease: 1.1.1 修复bug，打标签 1.1.1。

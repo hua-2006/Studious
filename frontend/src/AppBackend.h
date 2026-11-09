@@ -50,7 +50,6 @@ class AppBackend : public QObject {
     Q_PROPERTY(QString engineId READ engineId WRITE setEngineId NOTIFY engineIdChanged)
     // 当前引擎能不能一次翻多个目标语言。本地 MT 是按语言对装的模型，
     // 多目标要么缺模型、要么得多绕几跳，界面据此把「多选」收成单选。
-    Q_PROPERTY(bool dstMultiSupported READ dstMultiSupported NOTIFY engineIdChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(bool statusIsError READ statusIsError NOTIFY statusTextChanged)
@@ -58,6 +57,8 @@ class AppBackend : public QObject {
 
     // ---- 只读清单（QML 用于生成下拉 / chip / 分段）----
     Q_PROPERTY(QVariantList languages READ languages CONSTANT)
+    // 目标语言候选：就是 languages 去掉「自动检测」——目标语言不能是自动。
+    Q_PROPERTY(QVariantList targetLanguages READ targetLanguages CONSTANT)
     Q_PROPERTY(QVariantList engines READ engines CONSTANT)
     Q_PROPERTY(QVariantList engineStatuses READ engineStatuses NOTIFY engineStatusesChanged)
 
@@ -105,6 +106,9 @@ class AppBackend : public QObject {
     Q_PROPERTY(QStringList localModels READ localModels CONSTANT)
     Q_PROPERTY(bool localGpuAvailable READ localGpuAvailable CONSTANT)
     Q_PROPERTY(bool localCpuAvailable READ localCpuAvailable CONSTANT)
+    // 只装了 Vulkan 运行时（没装 CPU 版）时为 true：此时「优先 GPU」必须开着，
+    // 关掉只会让 ensureStarted() 找不到 CPU 版 exe 直接失败，所以界面把这个开关锁成常开。
+    Q_PROPERTY(bool localGpuLocked READ localGpuLocked CONSTANT)
     Q_PROPERTY(int localPort READ localPort NOTIFY localStateChanged)
     Q_PROPERTY(qint64 localPid READ localPid NOTIFY localStateChanged)
     Q_PROPERTY(QString localBackend READ localBackend NOTIFY localStateChanged)
@@ -269,7 +273,6 @@ public:
     void setSrcLang(const QString &code);
 
     QStringList dstLangs() const { return m_dstLangs; }
-    bool dstMultiSupported() const { return m_engineId != QLatin1String("local-mt"); }
     void setDstLangs(const QStringList &codes);
 
     // 别处（小窗的 MiniSession）直接写了 settings/lang/*，改完调这个把共用值拉回来。
@@ -286,6 +289,7 @@ public:
     QString statusWarning() const { return m_suspiciousLangWarn ? m_statusWarning : QString(); }
 
     QVariantList languages() const;
+    QVariantList targetLanguages() const;
     QVariantList engines() const;
     QVariantList engineStatuses() const { return m_engineStatuses; }
 
@@ -353,6 +357,7 @@ public:
     QStringList localModels() const;
     bool localGpuAvailable() const;
     bool localCpuAvailable() const;
+    bool localGpuLocked() const;
     int localPort() const;
     qint64 localPid() const;
     QString localBackend() const;
@@ -479,6 +484,9 @@ public:
     bool singleInstance() const { return m_singleInstance; }
     void setSingleInstance(bool on);
     bool trayAvailable();
+    // 点「最小化到托盘」时用：不管设置里怎么配，先把图标挂上再藏窗口。
+    // 装不上返回 false —— 调用方就不该藏窗口，否则用户彻底找不回来。
+    Q_INVOKABLE bool ensureTrayIcon();
 
     // 第二个实例被拒（已有进程在跑）时为 true，main() 据此直接退出。
     bool duplicateInstance() const { return m_duplicateInstance; }
@@ -507,7 +515,8 @@ public slots:
     Q_INVOKABLE void uninstallAsset(const QString &id);
 
     // 复制任意文本到剪贴板（许可证正文、资产路径等）。
-    Q_INVOKABLE void copyText(const QString &text);
+    // 返回是否真的写进了剪贴板：QML 侧要靠这个给「已复制 / 复制失败」的提示。
+    Q_INVOKABLE bool copyText(const QString &text);
 
     // 重启本程序（界面语言这类要重启才生效的设置，改完直接调它）。
     Q_INVOKABLE void restartApplication();
@@ -755,6 +764,12 @@ private:
     // 自动拉起（截图 / 实时 / 小窗）会在很密的节奏里反复请求启动，
     // 没有这个标记就会排出一串 singleShot，每个都去 ensureStarted()。
     bool m_localStartQueued = false;
+    // 已经点了「关闭软件」：之后排队的启动一律不执行，否则收尾期间还会再拉一个
+    // llama-server 起来，主进程退出后它就变孤儿，一直占着显存。
+    bool m_quitting = false;
+    // 用户临时点过「最小化到托盘」：之后即使设置里两个开关都是关的，托盘图标也留着。
+    // 否则下次改任何设置都会走 syncTrayState(false) 把图标摘掉，窗口就再也叫不回来。
+    bool m_trayForced = false;
     bool m_localIdleStop = false;
     int m_localIdleMinutes = 10;
     QVariantList m_mtPairs;

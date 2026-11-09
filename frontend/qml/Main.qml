@@ -11,6 +11,8 @@ import Studious
 //   代价是拖拽、缩放、窗口按钮全要自己接 —— 都放在下面了。
 Window {
     id: root
+    // 给 --ui-shot 的 STUDIOUS_UI_CALL 用：`mainWindow:notify` 之类。
+    objectName: "mainWindow"
     // 尺寸单位是「逻辑像素」，不是截图里的物理像素。
     // 本机屏幕 2560×1600 @150% → 逻辑 1707×1067。
     // 用户量的 1680×1080 是微信截图的物理像素，÷1.5 才是这里的数：1120×720。
@@ -30,6 +32,15 @@ Window {
 
     // --ui-shot 用：外部直接设这个属性切页。
     property int currentPage: 0
+
+    // ---------------- 开场动画 ----------------
+    // splashEnabled 由 C++ 注入（--ui-shot / STUDIOUS_NO_SPLASH=1 时为 false，
+    // 截图和走查要的是界面本身，不能被开场盖住）。
+    property bool splashEnabled: typeof startupSplash === "boolean" ? startupSplash : true
+    // 开场结束后主界面才"弹"进来；两者互斥，别在同一条绑定里拧。
+    property bool splashDone: !splashEnabled
+    // 0→1 的假进度：QML 这边没有可观测的加载总量，走满即"就绪"。
+    property real splashProgress: 0
 
     readonly property bool maximized: visibility === Window.Maximized
     readonly property int cornerRadius: 12
@@ -209,6 +220,22 @@ Window {
         anchors.fill: parent
         radius: root.maximized ? 0 : root.cornerRadius
         color: Theme.surface
+
+        // 开场没走完之前整块藏起来，走完再弹一下。
+        // 缩放的是外框而不是内部某个容器：圆角、导航条、顶栏一起放大，看着像
+        // 整张卡片从开场logo的位置"长"出来；窗口本身是透明的，缩小期间露出的
+        // 是还在淡出的开场遮罩，而不是黑边。
+        opacity: root.splashDone ? 1 : 0
+        scale: root.splashDone ? 1 : 0.965
+        transformOrigin: Item.Center
+        Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on scale {
+            NumberAnimation {
+                duration: 360
+                easing.type: Easing.OutBack
+                easing.overshoot: 1.12
+            }
+        }
         // 窗口本身不加描边：圆角外侧直接是桌面，加边反而像贴了一圈蓝线。
         border.width: 0
         // 不要在这里开 clip：Qt Quick 的 clip 只按外接矩形裁，不会跟着 radius 走，
@@ -516,14 +543,18 @@ Window {
                                         if (winBtn.index === 0) {
                                             // 「最小化到托盘」开着就只隐藏窗口，进程留着。
                                             // 托盘装不上时退回普通最小化，别把窗口变成够不着的幽灵。
-                                            if (backend.minimizeToTray && backend.trayAvailable) {
-                                                root.hide()
+                                            if (backend.minimizeToTray) {
+                                                if (backend.ensureTrayIcon()) {
+                                                    root.hide()
+                                                } else {
+                                                    root.showMinimized()
+                                                }
                                             } else {
                                                 root.showMinimized()
                                             }
                                         } else if (winBtn.index === 1) {
                                             root.maximized ? root.showNormal() : root.showMaximized()
-                                        } else if (backend.minimizeToTray && backend.trayAvailable) {
+                                        } else if (backend.minimizeToTray && backend.ensureTrayIcon()) {
                                             // 设置里勾了「最小化到托盘」就照它走，不再多问一句。
                                             root.hide()
                                         } else {
@@ -576,6 +607,7 @@ Window {
                     }
 
                     TranslatePage {
+                        id: translatePagePage
                         objectName: "translatePage"
                         // TranslatePage 里的「查看引擎状态」还是按插入「浮层」之前的旧顺序
                         // 发的 2（当时 2 = 配置）。浮层占了 2，配置后移到 3，
@@ -583,10 +615,14 @@ Window {
                         onNavigateRequested: function (index) { root.currentPage = index >= 2 ? index + 1 : index }
                         // 三张入口卡：小窗与实时的界面还没接（先明确说一句），截图直接进流程。
                         onLaunchRequested: function (kind) { root.launch(kind) }
+                        // 页面里的轻提示统一由主窗口这一份 Toast 显示：
+                        // 页面被 StackLayout 裁切，自己的 toast 贴边会被切掉。
+                        onNoticeRequested: function (text) { root.notify(text) }
                     }
                     HotkeysPage { }
                     OverlayPage { }
                     ConfigPage {
+                    objectName: "configPage"
                         // 本地 MT 卡的「下载 / 导入」：切到设置页的资产分区并预选 mt 分类。
                         onOpenAssetsRequested: function (kind) {
                             root.currentPage = 4
@@ -601,6 +637,18 @@ Window {
                     AppearancePage { }
                 }
             }
+        }
+
+        // ---------------- 全局轻提示（覆盖层）----------------
+        // 解释"为什么这一步不行"这类一句话；自己淡出，不需要用户点。
+        // 页面里的提示统一转到这里：页面被 StackLayout 裁切，自己贴边的会被切掉。
+        Toast {
+            id: windowToast
+            z: 110
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            // 让开底部状态条（56 + 8），否则提示会压在引擎状态上。
+            anchors.bottomMargin: Theme.s9 + Theme.s2
         }
 
         // ---------------- 全局错误通知条（覆盖层）----------------
@@ -760,6 +808,12 @@ Window {
         target: backend
         function onSrcLangChanged() { miniSession.reloadLanguagesFromSettings() }
         function onDstLangsChanged() { miniSession.reloadLanguagesFromSettings() }
+        // 托盘图标双击 / 菜单里的「打开」：窗口可能正藏在后台，得自己抬出来。
+        function onRestoreWindowRequested() {
+            root.show()
+            root.raise()
+            root.requestActivate()
+        }
     }
 
     Connections {
@@ -779,6 +833,24 @@ Window {
         root.raise()
         root.requestActivate()
         root.currentPage = 2
+    }
+
+    // 页面里的一句轻提示：浮上来 → 停 2.6 秒 → 淡出。
+    // 也给 --ui-shot 的 `mainWindow:notify` 用（带一个文本参数）。
+    function notify(text) {
+        windowToast.showMessage(text)
+    }
+
+    // 零参入口：全局热键走 launch("mini")，这条只给 --ui-shot 的 CALL 钩子用
+    //（那个钩子调不了带参数的 JS 函数）。
+    function openMini() {
+        launch("mini")
+    }
+
+    // 取证钩子：--ui-shot 的 STUDIOUS_UI_CALL 只能可靠地调窗口根上的方法，
+    // 页内方法（Item 级）在 QML 的元对象里找不到。这一层只是为了截图/排查。
+    function showBlockedEngineHint() {
+        translatePagePage.showEngineBlockedHint("")
     }
 
     // 入口分发：三张卡片与全局热键都从这里进来。
@@ -831,11 +903,18 @@ Window {
         closePromptOpen = false
         // 绕过 onClosing 里「收进托盘」那条拦截：这一步是用户明确要退出。
         root.forceQuit = true
-        root.close()
+        // 交给后端收尾：停 llama-server → 日志落盘 → 退事件循环，2 秒兜底硬退出。
+        // 直接 close() 只关窗口，托盘图标和残影子进程还会留着。
+        backend.quitApplication()
     }
 
     function minimizeToTray() {
         closePromptOpen = false
+        // 先把托盘图标挂上再藏：设置里两个托盘开关都关着时，这里也必须挂，
+        // 否则窗口一 hide 就彻底没有入口。装不上就不藏。
+        if (!backend.ensureTrayIcon()) {
+            return
+        }
         root.hide()
     }
 
@@ -919,6 +998,213 @@ Window {
                     }
                 }
             }
+        }
+    }
+
+    // ---------------- 开场动画 ----------------
+    // 编排：logo 弹入 → 进度条走满（这段时间主界面已经建好了，只是被遮着）
+    //       → logo 先淡出 → 遮罩淡出，同时主界面从 0.965 弹到 1。
+    // 只在启动时播一次：托盘里重新叫回窗口不会再来一遍（那时 splashDone 已经是 true）。
+    Rectangle {
+        id: splash
+        anchors.fill: parent
+        z: 1000
+        radius: root.maximized ? 0 : root.cornerRadius
+        color: Theme.surface
+        opacity: 1
+        // splashEnabled=false（截图 / 走查）时动画根本不会启动，光靠 opacity 会
+        // 永远停在 1 把界面全遮住 —— 所以这里必须一起判。
+        visible: root.splashEnabled && opacity > 0
+
+        // 遮罩期间吞掉鼠标：底下的导航已经建好且能点，别让用户误触。
+        MouseArea { anchors.fill: parent }
+
+        // 定宽一列：Column 只管竖排，横向由每个孩子自己 width + 居中，
+        // 不用 anchors.horizontalCenter —— 在 Column 里锚横向会和定位器的
+        // 宽度计算互相推，Qt 会报 "possible anchor loop"。
+        Item {
+            id: splashCenter
+            anchors.centerIn: parent
+            anchors.verticalCenterOffset: -Theme.s5
+            width: 260
+            height: splashColumn.implicitHeight
+
+            Column {
+                id: splashColumn
+                anchors.fill: parent
+                spacing: Theme.s4
+
+                Item {
+                    id: splashMark
+                    width: parent.width
+                    height: 132
+                    opacity: 0
+                    scale: 0.86
+
+                    // 一层会呼吸的主色底：图标是白底黑字的方形，直接贴在深色背景上
+                    // 边缘会显得很硬，垫一层同尺寸的圆角色块就自然了。
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 132
+                        height: 132
+                        radius: Theme.rXl
+                        color: Theme.primary
+                        opacity: 0.16
+
+                        SequentialAnimation on scale {
+                            running: root.splashEnabled && !root.splashDone
+                            loops: Animation.Infinite
+                            NumberAnimation {
+                                from: 0.94
+                                to: 1.05
+                                duration: 1100
+                                easing.type: Easing.InOutSine
+                            }
+                            NumberAnimation {
+                                from: 1.05
+                                to: 0.94
+                                duration: 1100
+                                easing.type: Easing.InOutSine
+                            }
+                        }
+                    }
+
+                    Image {
+                        anchors.centerIn: parent
+                        // brand.png 是 512×512 的图标本体（圆角已经在图里），
+                        // 这里多给一倍像素，缩到 104 时才不糊。
+                        source: "qrc:/qt/qml/Studious/resources/brand.png"
+                        sourceSize.width: 208
+                        sourceSize.height: 208
+                        width: 104
+                        height: 104
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: appName
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeDisplay - 6
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.5
+                    color: Theme.ink
+                    // 跟着 logo 一起入、一起出，别让字在图标消失之后还杵在那儿。
+                    opacity: splashMark.opacity
+                }
+
+                Text {
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: qsTr("截图 · 划词 · 实时翻译")
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.inkVariant
+                    opacity: splashMark.opacity * 0.9
+                }
+            }
+        }
+
+        // 进度条：假进度，走满就是"该加载的加载完了"。
+        Rectangle {
+            id: splashTrack
+            anchors.top: splashCenter.bottom
+            anchors.topMargin: Theme.s6
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: 176
+            height: 3
+            radius: 2
+            color: Theme.surfaceHighest
+            opacity: splashMark.opacity * 0.9
+
+            Rectangle {
+                width: parent.width * root.splashProgress
+                height: parent.height
+                radius: parent.radius
+                color: Theme.primary
+            }
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Theme.s6
+            text: "v" + appVersion + "  ·  " + appCodename
+            font.family: Theme.fontUi
+            font.pixelSize: Theme.fontSizeTiny
+            color: Theme.inkVariant
+            opacity: 0.65 * splashMark.opacity
+        }
+
+        SequentialAnimation {
+            id: splashRun
+
+            // logo 弹入
+            ParallelAnimation {
+                NumberAnimation {
+                    target: splashMark
+                    property: "opacity"
+                    from: 0
+                    to: 1
+                    duration: 240
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    target: splashMark
+                    property: "scale"
+                    from: 0.86
+                    to: 1
+                    duration: 420
+                    easing.type: Easing.OutBack
+                    easing.overshoot: 1.45
+                }
+            }
+            PauseAnimation { duration: 40 }
+            // 进度条走满
+            NumberAnimation {
+                target: root
+                property: "splashProgress"
+                from: 0
+                to: 1
+                duration: 780
+                easing.type: Easing.InOutQuad
+            }
+            PauseAnimation { duration: 90 }
+            // logo 先消失
+            ParallelAnimation {
+                NumberAnimation {
+                    target: splashMark
+                    property: "opacity"
+                    to: 0
+                    duration: 180
+                    easing.type: Easing.InCubic
+                }
+                NumberAnimation {
+                    target: splashMark
+                    property: "scale"
+                    to: 0.9
+                    duration: 180
+                    easing.type: Easing.InCubic
+                }
+            }
+            // 这时才放主界面出来：遮罩淡出的同时它自己在放大，
+            // 两段重叠 260ms，看着像整张卡片从 logo 的位置弹开。
+            ScriptAction { script: root.splashDone = true }
+            NumberAnimation {
+                target: splash
+                property: "opacity"
+                to: 0
+                duration: 260
+                easing.type: Easing.OutCubic
+            }
+        }
+
+        Component.onCompleted: {
+            if (root.splashEnabled)
+                splashRun.start()
         }
     }
 }

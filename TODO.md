@@ -218,3 +218,18 @@
 | MT 默认根 | 已完成 | `LocalMtTranslator::defaultModelsRoot()` 从 exe 往上找 `version.json` → `data/assets/models/mt`，找不到才回落 `%APPDATA%` | 自测程序（非 exe 目录）仍走旧路径 |
 | OCR staging | 已完成 | 收拢到 `models/ocr/run/`，候选路径兼容新布局、旧平铺布局与已收拢文件 | 老用户不用重下 |
 | 设置分区空白 | 已完成 | 右栏 `StackLayout` 高度改成只跟当前项走，切分区把 `contentY` 归零；滚到底再切换不再白屏 | 无 |
+| 路径接口统一 | 已完成 | 数据根推导收口到 `backend/include/studious/asset/DataRoots.h`（`dataRoot/assetsRoot/modelsRoot(kind)`）；前端 `AssetPaths::dataRoot()` 一行转发，`LocalMtTranslator` 删掉自己的副本；`LocalEngine::modelsDir()` 改名 `llmModelsDir()`，MT 四处扫描改用 `paths::modelsMtDir()` | 以后新增资产类别只加 `modelsRoot("xxx")`，别再各写一遍向上查找 |
+| MT 目标为英语 | 已完成 | `planFor()` 补「`d == "en"` → mul-en 一步到位」分支；MulEn 出英语后直接返回，不再 `loadOrFail("en","en")`；`resolve()` 兜底文案按方向分三支，`missingAssets` 只列该方向真缺的 | 报错不再出现「pt→en + en→en」这种不存在的语言对 |
+| MT 报错指向真实原因 | 已完成 | `TranslatorRouter` 强制引擎失败时先 `resolve()` 取 reason，输出「指定的引擎 X 翻不了这个方向：…」，没有 reason 才退回「不支持目标语言」 | 本地 MT 多半是源语言读不了（mul-en 无韩语 token），旧文案会误导成目标语言不支持 |
+| MT 空产出 | 已完成 | `translate()` 里整段 `trimmed().isEmpty()` 不再算成功，报「本地 MT 这轮没有产出文字：模型可能不认识这段的语言」 | 以前返回 ok + 空串，界面像"翻完了但没显示" |
+| 真退出 | 已完成 | 弹窗「关闭软件」走 `backend.quitApplication()`：停 llama-server → 按父进程号补杀子进程 → 日志落盘 → 退事件循环，2 秒兜底 `_Exit` | 引擎正在启动时也能保证不留孤儿进程 |
+| 托盘图标 | 已完成 | `ensureTrayIcon()` 在任何 `hide()` 之前调用：先 `setTrayEnabled(true)` 再复核，失败就不藏；`m_trayForced` 让临时挂上的图标不被后续设置同步摘掉；补上 `restoreWindowRequested` 的 QML 连接 | 依赖 Explorer 的 `NIM_ADD`，会话被策略禁用时退回普通最小化 |
+| 小窗保存/重翻 | 已完成 | 小窗结果出来后主按钮是「重新翻译」（`MiniSession::retranslate()`，`QuickTranslate::translate(..., bypassCache=true)` 这次不读不写缓存）；保存记录只由「设置 · 缓存 → 保存翻译历史」控制，`onFinished()` 里按开关自动存 | 以前那颗「保存到记录」按钮和设置开关重复，关着时还会报一句「没存进去」 |
+| 清单未验签告警 | 已完成 | `ManifestVerifyOptions::warnWhenUnsigned`（默认 true）只控制提示；`AssetPaths::loadManifest()` 设成「仅在 `STUDIOUS_DEV_MANIFEST=1` 时为 true」→ 正式包内置的未签名清单不再每次启动刷一行 | 想恢复常驻提示：把 `AssetPaths.cpp` 那一行改成 `true`；`--assets-cli` / `--asset-download` 仍照旧喊 |
+| 缺资产引擎不可选 | 已完成 | `Segmented` 新增 `blockedCodes` + `blocked(code)`：缺资产的项压暗但仍可点；主页点它弹一句「「%1」还差 %2 个组件，先去「设置 · 资产」里下载。」，不改变选择 | 小窗的引擎菜单同样把缺资产项压暗并吞掉点击（与截图 / 实时一致） |
+| 轻提示 Toast | 已完成 | `qml/components/Toast.qml`：180ms 淡入同时上浮 10px，停 2.6s，260ms 淡出；主窗口只放一份，页面通过 `noticeRequested(text)` → `root.notify()` 借用 | 页面被 StackLayout 裁切，页面自带的 toast 贴边会被切掉 |
+- [已完成] 缺件提示按原因分类（缺驱动 / 缺模型 / 缺语言包 / 没配地址和模型）
+- [已完成] 云端 LLM 10 秒无响应判连接失败，且不再无意义重试
+
+| 目标语言规则（无多选 / 无自动 / 不与源语言重复） | 已完成 | langs 归一 + 后端 targetLanguages + 小窗压暗 + CLI WARN | 
+| 深色说明字看不清 | 已完成 | ConfigPage 的 component Hint 深色改 #FFFFFF、去掉说明行的 opacity 0.45；脚本找出 34 处无色 Text 补 color: Theme.ink | 这些字原来走 QPalette，深色下拿到浅色深字；透明度再压一层就不可读 |

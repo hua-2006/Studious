@@ -2,17 +2,23 @@
 #include "AppSettings.h"
 #include "AssetFormat.h"
 #include "AssetPaths.h"
+#include "CacheHandle.h"
+#include "EngineIds.h"
 #include "Languages.h"
 #include "LocalEngine.h"
 #include "LiveSession.h"
 #include "LogSink.h"
 #include "MiniSession.h"
+#include "Paragraphs.h"
 #include "ScreenFlow.h"
 #include "platform/ScreenCaptureWin.h"
 #include "TranslateJob.h"
 #include "i18n/Strings.h"
 #include "platform/IPlatform.h"
 #include "platform/PlatformFactory.h"
+
+// 引擎 id 的权威实现（归一 / 优先级 / 显示名）在 EngineIds，命令行不再自留一份顺序表。
+namespace engine = studious::ui::engine;
 
 #include <QCoreApplication>
 #include <QDir>
@@ -40,7 +46,6 @@
 #include <studious/asset/AssetRegistry.h>
 #include <studious/asset/Downloader.h>
 #include <studious/asset/Manifest.h>
-#include <studious/cache/TranslationCache.h>
 #include <studious/contract/LanguageRegistry.h>
 #include <studious/contract/Types.h>
 #include <studious/i18n/L10n.h>
@@ -111,26 +116,11 @@ FontSet loadBundledFonts()
     return fonts;
 }
 
-// 注意：不要在这里关闭匿名 namespace —— 下面的缓存/工具函数还在同一个匿名 namespace 里，
+// 注意：不要在这里关闭匿名 namespace —— 下面的工具函数还在同一个匿名 namespace 里，
 // 它一直到文件末尾（main 之前）才闭合。
 
-// 进程级唯一的翻译缓存（GUI / --smoke 共用同一个 db 文件）。
-//
-// 两个刻意的设计决定：
-//   1. 用函数内静态而不是命名空间级静态：QStandardPaths::writableLocation(AppDataLocation)
-//      依赖 QCoreApplication 的 applicationName，命名空间级静态会在 QApplication 构造
-//      之前就执行，拿到的路径是错的（甚至为空）。
-//   2. new 出来故意不 delete：TranslationCache 的析构函数要碰 QSqlDatabase 的驱动管理器，
-//      而进程退出时谁先析构是未定义的——让它在进程结束时随操作系统回收，最省心。
-studious::cache::TranslationCache *sharedCache()
-{
-    static studious::cache::TranslationCache *instance = nullptr;
-    if (instance == nullptr) {
-        // 路径口径统一在 AssetPaths 里（默认 <dataRoot>/cache.db）。
-        instance = new studious::cache::TranslationCache(studious::ui::paths::cacheDbPath());
-    }
-    return instance;
-}
+// 进程级唯一的翻译缓存改由 CacheHandle.h 提供（studious::ui::sharedCache()）：
+// 以前这里有一份、QuickTranslate.cpp 里又有一份 processCache()，两处各养一个实例。
 
 // 控制台一律写 UTF-8 字节（与 backend_selftest 一致）。
 // Windows Terminal / PowerShell 7 默认 65001；老控制台请先 chcp 65001。
@@ -260,7 +250,7 @@ bool engineAvailable(const QString &uiId, const AppSettings &settings,
                && (LocalEngine::isGpuAvailable() || LocalEngine::isCpuAvailable());
     }
     if (uiId == QLatin1String("local-mt")) {
-        const studious::translate::LocalMtTranslator mt(LocalEngine::modelsDir());
+        const studious::translate::LocalMtTranslator mt(studious::ui::paths::modelsMtDir());
         if (mt.installedPairs().isEmpty()) {
             return false;
         }
@@ -268,7 +258,8 @@ bool engineAvailable(const QString &uiId, const AppSettings &settings,
         const QString dst = studious::core::LanguageRegistry::normalize(dstLang);
         // 源语言是"自动检测"时 Router 必然拒绝（本地 MT 没法先探测再选模型），
         // 但引擎本身是装好的 —— 和界面一样按"装好没有"算可用。
-        if (src.isEmpty() || src == QLatin1String("auto")) {
+        // 「自动」的判定只有一份：langs::isAuto（空串 / auto，不分大小写）。
+        if (studious::ui::langs::isAuto(src)) {
             return true;
         }
         return mt.resolve(src, dst).ready;
@@ -283,12 +274,13 @@ EngineChoice resolveEngineId(const QString &raw, const AppSettings &settings,
     const QString value = raw.trimmed().toLower();
 
     if (value.isEmpty() || value == QLatin1String("auto")) {
-        // 设置里没存优先级时，用与 TranslateJob 兜底一致的本地优先顺序（注意没有 mock）。
-        const QStringList order = settings.enginePriority.isEmpty()
-                                      ? QStringList{QStringLiteral("local-mt"),
-                                                    QStringLiteral("llm-cloud"),
-                                                    QStringLiteral("web")}
-                                      : settings.enginePriority;
+        // 顺序只有 EngineIds 一份；命令行把手动链里的 llm-local 摘掉 ——
+        // --engine auto 是脚本/冒烟用的，不该顺手拉起一个 1~3 GB 的本地模型。
+        QStringList order = settings.enginePriority.isEmpty() ? engine::defaultPriority()
+                                                              : settings.enginePriority;
+        if (settings.enginePriority.isEmpty()) {
+            order.removeAll(QStringLiteral("llm-local"));
+        }
 
         QStringList unusable;
         for (const QString &rawId : order) {
@@ -541,7 +533,7 @@ int runSmoke(const QStringList &args)
     }
 
     TranslateJobRequest req;
-    req.paragraphs = splitParagraphs(text);
+    req.paragraphs = studious::ui::paragraphs::split(text);
     if (req.paragraphs.isEmpty()) {
         say(QStringLiteral("[FAIL] 切分后没有任何段落"));
         return 1;
@@ -569,7 +561,18 @@ int runSmoke(const QStringList &args)
     // 会被强制改成 llm 真跑本地 llama-server，那时不该再打 mock 的警告。
 
     req.srcLang = srcLang;
-    req.dstLangs = QStringList{to};
+    // 目标语言：丢掉「自动」（目标语言不能是自动），也别和源语言撞上 ——
+    // 源=目标时后端只会原样回填，CLI 看起来像"翻了个寂寞"。
+    req.dstLangs = studious::ui::langs::normalizeTargetsAgainstSource(
+        studious::ui::langs::normalizeTargets(QStringList{to}, engineChoice.uiId), srcLang);
+    if (req.dstLangs.first() != to) {
+        say(QStringLiteral("[WARN] 目标语言已从 %1 调整为 %2（%3）")
+                .arg(to,
+                     req.dstLangs.first(),
+                     studious::ui::langs::isAuto(to)
+                         ? QStringLiteral("目标语言不能是自动检测")
+                         : QStringLiteral("不能和源语言相同")));
+    }
     // auto 模式**不**写死 preferredEngine：让 Router 顺着优先级链自己挑、并且运行时
     // 失败还能换下一个（写死等于关掉降级）。显式 --engine 才钉死单个引擎。
     // 注意 --local / llm-local 仍然要钉 llm：那是用户对"用本机 llama-server"的明确要求。
@@ -674,7 +677,7 @@ int runSmoke(const QStringList &args)
     }
 
     // 缓存实例照给（关掉只是不用它，不影响任何行为），开关单独传。
-    req.cache = sharedCache();
+    req.cache = &studious::ui::sharedCache();
     req.cacheEnabled = cacheEnabled;
 
     // mock 只在显式要的时候才会留到这里（候选链与 auto 都已剔除它），但必须让人一眼看出
@@ -693,7 +696,7 @@ int runSmoke(const QStringList &args)
             : (engine.isEmpty() ? QStringLiteral("auto") : engine);
     say(QStringLiteral("engine=%1  to=%2  src=%3  provider=%4  paragraphs=%5")
             .arg(engineShown,
-                 to,
+                 req.dstLangs.value(0),
                  req.srcLang,
                  req.webProviders.isEmpty() ? QStringLiteral("auto(google→mymemory)")
                                             : req.webProviders.join(QLatin1Char(',')))
@@ -739,14 +742,16 @@ int runSmoke(const QStringList &args)
 
         // 源语言与目标语言相同：Router 直接回填原文，用不到引擎。
         // 这时还去拉起 llama-server（1 秒启动 + 3 秒停止）纯属浪费，直接跳过。
-        const QString srcNorm = studious::core::LanguageRegistry::normalize(req.srcLang);
-        const QString dstNorm = studious::core::LanguageRegistry::normalize(to);
+        const QString srcNorm = studious::ui::langs::normalizeSource(req.srcLang);
+        // 目标语言以请求里的为准（上面已经做过"去自动 + 去重源语言"的归一），
+        // 这里再用原始 `to` 判定会把 zh→zh 当成同语言、直接回填原文。
+        const QString dstNorm = studious::core::LanguageRegistry::normalize(req.dstLangs.value(0));
         const bool sameLanguage = !studious::ui::langs::isAuto(srcNorm) && srcNorm == dstNorm;
 
         if (useLocalEngine && !sameLanguage) {
             LocalEngineConfig cfg;
             if (!roundModel.isEmpty()) {
-                cfg.modelPath = QDir(LocalEngine::modelsDir()).filePath(roundModel);
+                cfg.modelPath = QDir(LocalEngine::llmModelsDir()).filePath(roundModel);
             }
             cfg.preferGpu = localGpu;
 
@@ -812,7 +817,10 @@ int runSmoke(const QStringList &args)
                                  say(QStringLiteral("[FAIL] ") + result.outcome.error);
                                  roundCode = 1;
                              } else {
-                                 const QStringList lines = result.outcome.byLang.value(to);
+                                 // byLang 的键是"实际要翻到的语言"，也就是归一后的目标语言；
+        // 用原始的 `to` 取会在 zh→zh 被改成 en 时拿到空表（译文看着像没翻）。
+        const QString wantDst = req.dstLangs.value(0);
+        const QStringList lines = result.outcome.byLang.value(wantDst);
                                  if (result.outcome.passthrough) {
     say(QStringLiteral("passthrough=true（同语言，未翻译）"));
 }
@@ -1470,7 +1478,7 @@ int main(int argc, char *argv[])
     // 字体必须在 AppBackend 之前注册：构造时会按族名核对「选中的字体是否真的装了」，
     // 顺序反了就会把自带的两个族名报成 (MISSING)。
     const FontSet fonts = loadBundledFonts();
-    auto *backend = new studious::ui::AppBackend(sharedCache(), &app);
+    auto *backend = new studious::ui::AppBackend(&studious::ui::sharedCache(), &app);
 
     // --ui-shot 是自动化工具：允许和已开着的界面并存，也不应该去 ping 已有实例抢焦点。
     // 所以它必须绕过下面的单实例判定 —— 以前它写判定之后，只要已经有一个 studious 在跑，
@@ -1613,6 +1621,13 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(
         QStringLiteral("systemPrefersDark"),
         QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
+    // 开场动画（Main.qml 里的 splash）：正常启动要播，但两条路必须跳过 ——
+    //   --ui-shot：截图工具要拍的是界面本身，开场盖上去就什么也拍不到；
+    //   STUDIOUS_NO_SPLASH=1：走查 / 录屏时不想每次都等那一下。
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("startupSplash"),
+        !uiShotMode && !qEnvironmentVariableIsSet("STUDIOUS_NO_SPLASH"));
+
     engine.loadFromModule(QStringLiteral("Studious"), QStringLiteral("Main"));
 
     if (engine.rootObjects().isEmpty()) {
@@ -1854,12 +1869,21 @@ int main(int argc, char *argv[])
                     oneName = one.mid(colon + 1);
                 }
                 const QMetaObject *mo = oneTarget->metaObject();
-                const QMetaMethod method = mo->method(mo->indexOfMethod(
-                    QByteArray(oneName + "()").constData()));
-                const bool zeroArg = method.isValid() && method.parameterCount() == 0;
-                if (zeroArg) {
+                // QML 里声明成 function f(x) 的方法签名是 f(QVariant)，
+                // 只按 f() / f(QString) 找会两边都落空（invokeMethod 静默返回 false）。
+                const int sigNone = mo->indexOfMethod(QByteArray(oneName + "()").constData());
+                const int sigVariant =
+                    mo->indexOfMethod(QByteArray(oneName + "(QVariant)").constData());
+                if (sigNone >= 0) {
                     QMetaObject::invokeMethod(oneTarget, oneName.constData(), Qt::DirectConnection);
                     qInfo("[ui-shot] called %s()", oneName.constData());
+                } else if (sigVariant >= 0) {
+                    const bool ok = QMetaObject::invokeMethod(oneTarget,
+                                                              oneName.constData(),
+                                                              Qt::DirectConnection,
+                                                              Q_ARG(QVariant, QVariant(uiArg)));
+                    qInfo("[ui-shot] called %s(\"%s\") -> %d", oneName.constData(),
+                          qUtf8Printable(uiArg), ok ? 1 : 0);
                 } else {
                     const bool ok = QMetaObject::invokeMethod(oneTarget,
                                                               oneName.constData(),

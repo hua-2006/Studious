@@ -24,48 +24,8 @@ Item {
     function showFuncCapture() { funcTab = "capture" }
     function showFuncLive() { funcTab = "live" }
 
-    // 「− 值 +」：跟设置页截图分区同一个形状。
-    // 组件在 SettingsPage.qml 里是页内 component，外面 import 不到，这里照抄一份。
-    // 与那份的唯一差别：点击只发 modified()，不自己改 value ——
-    // value 直接绑到 backend 属性上，自己去赋值会把绑定打断，切页回来就显示旧值了。
-    component NumStepper: RowLayout {
-        id: stepper
-
-        property int from: 0
-        property int to: 100
-        property int step: 1
-        property int value: 0
-        property string unit: ""
-
-        signal modified(int value)
-
-        function clampTo(v) {
-            return Math.max(stepper.from, Math.min(stepper.to, v));
-        }
-
-        spacing: Theme.s2
-
-        AppButton {
-            text: "\u2212"
-            buttonEnabled: stepper.enabled && stepper.value > stepper.from
-            onClicked: stepper.modified(stepper.clampTo(stepper.value - stepper.step))
-        }
-
-        Text {
-            Layout.preferredWidth: 66
-            horizontalAlignment: Text.AlignHCenter
-            text: stepper.value + stepper.unit
-            font.family: Theme.fontMono
-            font.pixelSize: Theme.fontSizeBody
-            color: Theme.ink
-        }
-
-        AppButton {
-            text: "+"
-            buttonEnabled: stepper.enabled && stepper.value < stepper.to
-            onClicked: stepper.modified(stepper.clampTo(stepper.value + stepper.step))
-        }
-    }
+    // 「− 值 +」现在只有一份：components/NumStepper.qml（设置页与这里共用）。
+    // 契约：只发 modified()，不自己改 value，避免打断 value: backend.x 的绑定。
 
     ScrollView {
         anchors.fill: parent
@@ -194,6 +154,7 @@ Item {
 
                 FieldRow {
                     label: qsTr("压暗程度")
+                    hint: qsTr("越大越暗；框选时只有选区露出来。")
                     NumStepper {
                         from: 20
                         to: 80
@@ -202,16 +163,6 @@ Item {
                         value: backend.overlayDim
                         onModified: function (v) { backend.overlayDim = v }
                     }
-                }
-
-                Text {
-                    Layout.leftMargin: 132 + Theme.s3
-                    Layout.fillWidth: true
-                    text: qsTr("越大越暗；框选时只有选区露出来。")
-                    wrapMode: Text.WordWrap
-                    font.family: Theme.fontUi
-                    font.pixelSize: Theme.fontSizeTiny
-                    color: Theme.inkVariant
                 }
 
                 Text {
@@ -284,301 +235,15 @@ Item {
                     onSelected: function (code) { page.funcTab = code }
                 }
 
-                // ---- 小窗口 ----
-                ColumnLayout {
+                // 三组控件只有一份实现（qml/overlay/OverlaySettingsGroups.qml）：
+                // 浮层里那颗齿轮面板实例化的是同一个组件，两边文案与后端绑定不会再漂。
+                OverlaySettingsGroups {
                     Layout.fillWidth: true
-                    Layout.topMargin: Theme.s2
-                    spacing: Theme.s3
-                    visible: page.funcTab === "mini"
-                    opacity: visible ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-
-                    FieldRow {
-                        label: qsTr("固定在最前")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.miniAlwaysOnTop
-                            onToggled: {
-                                backend.miniAlwaysOnTop = checked
-                                checked = backend.miniAlwaysOnTop
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("关掉就跟随普通窗口，被别的程序盖住。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("译文带原文")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.showSource
-                            onToggled: {
-                                backend.showSource = checked
-                                checked = backend.showSource
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("每段译文上方多一行小字原文，方便对照。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
+                    mode: page.funcTab
                 }
-
-                // ---- 截图翻译 ----
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: Theme.s2
-                    spacing: Theme.s3
-                    visible: page.funcTab === "capture"
-                    opacity: visible ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-
-                    FieldRow {
-                        label: qsTr("选完直接翻译")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.captureAutoRun
-                            onToggled: {
-                                backend.captureAutoRun = checked
-                                checked = backend.captureAutoRun
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("关掉就是二次确认：框完自己点工具栏上的「翻译」。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("保留原文标注")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.overlayKeepOriginal
-                            onToggled: {
-                                backend.overlayKeepOriginal = checked
-                                checked = backend.overlayKeepOriginal
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("译文条上方留一条薄薄的原文，便于核对。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("翻译完自动复制")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.captureAutoCopy
-                            onToggled: {
-                                backend.captureAutoCopy = checked
-                                checked = backend.captureAutoCopy
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("出结果就把整段译文放进剪贴板。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("译文不透明度")
-                        NumStepper {
-                            from: 40
-                            to: 100
-                            step: 5
-                            unit: "%"
-                            value: backend.overlayOpacity
-                            onModified: function (v) { backend.overlayOpacity = v }
-                        }
-                    }
-
-                    Text {
-                        Layout.leftMargin: 132 + Theme.s3
-                        Layout.fillWidth: true
-                        text: qsTr("越低越能看见底下的原图。")
-                        wrapMode: Text.WordWrap
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    FieldRow {
-                        label: qsTr("译文字号")
-                        NumStepper {
-                            from: 10
-                            to: 20
-                            step: 1
-                            unit: qsTr(" px")
-                            value: backend.overlayFontSize
-                            onModified: function (v) { backend.overlayFontSize = v }
-                        }
-                    }
-
-                    Text {
-                        Layout.leftMargin: 132 + Theme.s3
-                        Layout.fillWidth: true
-                        text: qsTr("按行高自动收一点，行太窄时不会再缩小到看不清。")
-                        wrapMode: Text.WordWrap
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    FieldRow {
-                        label: qsTr("复制后延迟关闭")
-                        NumStepper {
-                            from: 0
-                            to: 10
-                            step: 1
-                            unit: qsTr(" 秒")
-                            value: backend.overlayAutoHideDelay
-                            onModified: function (v) { backend.overlayAutoHideDelay = v }
-                        }
-                    }
-
-                    Text {
-                        Layout.leftMargin: 132 + Theme.s3
-                        Layout.fillWidth: true
-                        text: qsTr("0 = 复制完立刻收浮层。")
-                        wrapMode: Text.WordWrap
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-                }
-
-                // ---- 实时翻译 ----
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.topMargin: Theme.s2
-                    spacing: Theme.s3
-                    visible: page.funcTab === "live"
-                    opacity: visible ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
-
-                    FieldRow {
-                        label: qsTr("刷新间隔")
-                        NumStepper {
-                            from: 400
-                            to: 1500
-                            step: 100
-                            unit: qsTr(" 毫秒")
-                            value: backend.liveIntervalMs
-                            // 点击只发 modified，回写交给后端 —— 自己改 value 会打断上面这根绑定。
-                            onModified: function (v) { backend.liveIntervalMs = v }
-                        }
-                    }
-
-                    Text {
-                        Layout.leftMargin: 132 + Theme.s3
-                        Layout.fillWidth: true
-                        text: qsTr("每帧之间等多久。太短会让引擎一直忙，太长就不像实时了。")
-                        wrapMode: Text.WordWrap
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    FieldRow {
-                        label: qsTr("只在内容变化时翻译")
-                        AppToggle {
-                            Layout.alignment: Qt.AlignVCenter
-                            checked: backend.liveOnlyOnChange
-                            onToggled: {
-                                backend.liveOnlyOnChange = checked
-                                // 回灌：开关内部先改了自己的 checked，绑定已被打断；
-                                // 按后端实际值拉回来，界面才不会跟设置打架。
-                                checked = backend.liveOnlyOnChange
-                            }
-                        }
-                        Text {
-                            Layout.fillWidth: true
-                            text: qsTr("画面没变就不重新翻译。关掉后每帧都会重新请求，比较费。")
-                            wrapMode: Text.WordWrap
-                            verticalAlignment: Text.AlignVCenter
-                            font.family: Theme.fontUi
-                            font.pixelSize: Theme.fontSizeTiny
-                            color: Theme.inkVariant
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("区域底色")
-                        NumStepper {
-                            from: 0
-                            to: 100
-                            step: 10
-                            unit: "%"
-                            value: backend.overlayBackdrop
-                            onModified: function (v) { backend.overlayBackdrop = v }
-                        }
-                    }
-
-                    Text {
-                        Layout.leftMargin: 132 + Theme.s3
-                        Layout.fillWidth: true
-                        text: qsTr("整块选区铺一层底色的浓度；0 = 不铺底，只留译文。")
-                        wrapMode: Text.WordWrap
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: Theme.inkVariant
-                    }
-
-                    FieldRow {
-                        label: qsTr("译文不透明度")
-                        NumStepper {
-                            from: 40
-                            to: 100
-                            step: 5
-                            unit: "%"
-                            value: backend.overlayOpacity
-                            onModified: function (v) { backend.overlayOpacity = v }
-                        }
-                    }
-
-                    FieldRow {
-                        label: qsTr("译文字号")
-                        NumStepper {
-                            from: 10
-                            to: 20
-                            step: 1
-                            unit: qsTr(" px")
-                            value: backend.overlayFontSize
-                            onModified: function (v) { backend.overlayFontSize = v }
-                        }
-                    }
-                }
-            }
 
             Item { Layout.preferredHeight: Theme.s6 }
+            }
         }
     }
 }

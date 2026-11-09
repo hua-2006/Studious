@@ -16,9 +16,11 @@ namespace studious::net {
 // 因此本类不可跨线程共享；工作线程里请各自构造一个 QtHttpClient。
 class QtHttpClient final : public IHttpClient {
 public:
+    // 没有 parent 形参：m_nam 是值成员，把它交给某个 QObject 父子关系里
+    // 会变成「父对象 delete 一个栈/成员对象」= invalid free + double free
+    // （本类自身也不是 QObject，没有父子机制）。
     explicit QtHttpClient(QString userAgent = QStringLiteral(
-                              "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-                          QObject *parent = nullptr);
+                              "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"));
     ~QtHttpClient() override;
 
     // 同步发送：内部起局部事件循环，返回时请求已结束（成功、失败或超时）。

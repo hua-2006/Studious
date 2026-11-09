@@ -2,22 +2,25 @@
 
 #include "AppSettings.h"
 #include "AssetPaths.h"
+#include "CacheHandle.h"
 #include "LocalEngine.h"
 #include "EngineIds.h"
 #include "Languages.h"
+#include "Paragraphs.h"
 #include "TranslateJob.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
-#include <QRegularExpression>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QStandardPaths>
 
 #include <functional>
 #include <memory>
+#include <vector>
 
-#include <studious/cache/TranslationCache.h>
 #include <studious/i18n/L10n.h>
 #include <studious/translators/LocalMtTranslator.h>
 
@@ -35,26 +38,8 @@ using studious::ui::engine::toUi;
 
 // ─── 段落切分 ────────────────────────────────────────────────────────────────
 
-// 空行切段（连续空行算一个分隔；段内单换行保留），逐段 trimmed 后丢掉空段。
-QStringList parseParagraphs(const QString &text)
-{
-    QString normalized = text;
-    normalized.replace(QLatin1String("\r\n"), QLatin1String("\n"));
-    normalized.replace(QLatin1Char('\r'), QLatin1Char('\n'));
-
-    static const QRegularExpression blankLine(QStringLiteral("\\n\\s*\\n+"));
-    const QStringList pieces = normalized.split(blankLine);
-
-    QStringList paragraphs;
-    paragraphs.reserve(pieces.size());
-    for (const QString &piece : pieces) {
-        const QString trimmed = piece.trimmed();
-        if (!trimmed.isEmpty()) {
-            paragraphs.append(trimmed);
-        }
-    }
-    return paragraphs;
-}
+// 切段规则只有一份：Paragraphs.h 的 paragraphs::split()（段落数 = 缓存键的一部分，
+// 小窗和主页必须算出同样的段数，否则同一段文本换个窗口就重新翻）。
 
 // 后端约定「某语言段落数与请求一致」，但不一致时不能整单失败：补空串到等长。
 QStringList padToSize(const QStringList &in, qsizetype size)
@@ -69,40 +54,18 @@ QStringList padToSize(const QStringList &in, qsizetype size)
     return out;
 }
 
-// ─── 本地引擎 / 模型名（照抄 AppBackend 的 helper） ──────────────────────────
+// ─── 本地引擎 / 模型名 ──────────────────────────────────────────────────────
+// 实现都在 LocalEngine（pathForName / shortModelName），这里只做转发，
+// 免得同一个短名规则在三个文件里各写一份、改一处忘两处。
 
 QString localModelPathFrom(const QString &fileName)
 {
-    const QString trimmed = fileName.trimmed();
-    if (trimmed.isEmpty()) {
-        return QString();   // 空必须原样传空：LocalEngine 的「空 = 第一个可用模型」分支只在真·空串时走
-    }
-    const QFileInfo info(trimmed);
-    return info.isAbsolute() ? info.absoluteFilePath()
-                             : QDir(LocalEngine::modelsDir()).filePath(trimmed);
+    return LocalEngine::pathForName(fileName);
 }
 
 QString shortModelName(const QString &raw)
 {
-    QString name = raw.trimmed();
-    if (name.isEmpty()) {
-        return QString();
-    }
-    const int slash = qMax(name.lastIndexOf(QLatin1Char('/')), name.lastIndexOf(QLatin1Char('\\')));
-    if (slash >= 0) {
-        name = name.mid(slash + 1);
-    }
-    if (name.startsWith(QLatin1String("model."))) {
-        name = name.mid(6);
-    }
-    for (const QLatin1String suffix : {QLatin1String(".q4km"), QLatin1String(".q8_0"),
-                                      QLatin1String(".gguf"), QLatin1String(".bin")}) {
-        if (name.endsWith(suffix)) {
-            name.chop(static_cast<int>(suffix.size()));
-            break;
-        }
-    }
-    return name;
+    return LocalEngine::shortModelName(raw);
 }
 
 QString localModelLabel(const AppSettings &settings)
@@ -111,7 +74,7 @@ QString localModelLabel(const AppSettings &settings)
     if (name.isEmpty()) {
         name = LocalEngine::availableModels().value(0);
     }
-    return shortModelName(name);
+    return LocalEngine::shortModelName(name);
 }
 
 // ─── 「自动」时的引擎探测 ────────────────────────────────────────────────────
@@ -212,17 +175,8 @@ QString describeAutoEngine(const AppSettings &settings, const QString &srcLang, 
 
 // ─── 缓存 ────────────────────────────────────────────────────────────────────
 
-// 与 main.cpp 的 sharedCache() 指向同一个 db 文件。TranslationCache 的连接名是
-// 「路径哈希 + 线程 id」，所以同线程里两个实例共用同一条 QSqlDatabase 连接，不会各开一条。
-// 故意不 delete（同 main.cpp）：析构会 close/removeDatabase，把别人还在用的连接拔掉。
-studious::cache::TranslationCache *processCache()
-{
-    static studious::cache::TranslationCache *instance = nullptr;
-    if (instance == nullptr) {
-        instance = new studious::cache::TranslationCache(studious::ui::paths::cacheDbPath());
-    }
-    return instance;
-}
+// 缓存实例统一从 CacheHandle.h 取（进程一份；以前这里还有一份 processCache()，
+// 与 main.cpp 的 sharedCache() 同时存在，两边各养一个实例只靠"连接名撞车"才没事）。
 
 // ─── 本地引擎 ────────────────────────────────────────────────────────────────
 
@@ -230,7 +184,7 @@ studious::cache::TranslationCache *processCache()
 // 为什么不每人一份：每个 LocalEngine 实例都会拉起一个 llama-server，三页各来一个
 // 就是三份模型内存。引擎配置是全局设置，三页传下来的 LocalEngineConfig 必然相同，
 // 所以 ensureStarted() 是幂等命中，不会互相热重启。
-// 故意不 delete（与 main.cpp 的 sharedCache 同一套理由）：退出时靠 aboutToQuit 关服务，
+// 故意不 delete（与 CacheHandle.h 的 sharedCache() 同一套理由）：退出时靠 aboutToQuit 关服务，
 // 对象本身留着，避免 QProcess 在静态析构阶段踩到已经拆掉的 Qt 基础设施。
 } // namespace
 
@@ -278,16 +232,33 @@ bool starterCooldownOver()
     }
     return false;
 }
+// 退役实例池：资产根变了以后，老实例不能就地析构 —— 在飞的工作线程手里还攥着
+// 它的裸指针（TranslateJob 里的 req.sharedMt），那些线程的寿命是这个作业，
+// 不是这一次 sharedMt() 调用。所以退役只把常驻模型卸掉（内存大头），对象壳留到进程退出。
+std::vector<std::unique_ptr<studious::translate::LocalMtTranslator>> &retiredMt()
+{
+    static std::vector<std::unique_ptr<studious::translate::LocalMtTranslator>> pool;
+    return pool;
+}
 } // namespace
 
 studious::translate::LocalMtTranslator &sharedMt()
 {
-    // 资产根可能被用户改过（设置里可迁移），路径变了就换一个新实例，
-    // 旧实例随之析构，内存也一起还回去。
+    // 资产根可能被用户改过（设置里可迁移），路径变了就换一个新实例。
+    // 截屏 / 小窗 / 实时三个页面会在各自的工作线程里同时进来拿指针，所以必须加锁：
+    // 以前是裸 static（无锁懒初始化），一个线程正在 translate() 时另一个线程换掉实例，
+    // 前者的指针立刻悬垂（UAF）；warmMtAll() 与 unloadMtAll() 也会跟主线程并发读写它。
+    static QMutex mutex;
     static QString root;
     static std::unique_ptr<studious::translate::LocalMtTranslator> instance;
+
     const QString wanted = paths::modelsMtDir();
+    QMutexLocker lock(&mutex);
     if (!instance || root != wanted) {
+        if (instance) {
+            instance->unloadAll();   // 模型先还回去，别让退役实例继续占着几百 MB
+            retiredMt().push_back(std::move(instance));
+        }
         instance = std::make_unique<studious::translate::LocalMtTranslator>(wanted);
         root = wanted;
     }
@@ -372,7 +343,8 @@ bool QuickTranslate::lastFailureRetryable() const
     return m_retryable;
 }
 
-bool QuickTranslate::translate(const QString &text, const QString &srcLang, const QStringList &dstLangs)
+bool QuickTranslate::translate(const QString &text, const QString &srcLang, const QStringList &dstLangs,
+                               bool bypassCache)
 {
     m_lastError.clear();
     m_retryable = false;
@@ -385,22 +357,9 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
         return false;
     }
 
-    const QStringList paragraphs = parseParagraphs(text);
+    const QStringList paragraphs = studious::ui::paragraphs::split(text);
     if (paragraphs.isEmpty()) {
         m_lastError = l10n::s("没有可翻译的文本", "Nothing to translate");
-        emit errorOccurred(m_lastError);
-        return false;
-    }
-
-    QStringList dst;
-    for (const QString &raw : dstLangs) {
-        const QString trimmed = raw.trimmed();
-        if (!trimmed.isEmpty() && !dst.contains(trimmed)) {
-            dst.append(trimmed);
-        }
-    }
-    if (dst.isEmpty()) {
-        m_lastError = l10n::s("没有选择目标语言", "No target language selected");
         emit errorOccurred(m_lastError);
         return false;
     }
@@ -413,6 +372,11 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
     const QString uiEngine = m_hasEngineOverride ? toUi(m_engineOverride)
                                                  : toUi(settings.engineId);   // 空 = 自动
     const bool wantLocal = uiEngine == QLatin1String("llm-local");
+
+    // 目标语言归一只有一处：langs::normalizeTargets（trim / 去重 / 空则回落 zh /
+    // 本地 MT 只留第一个）。以前小窗自己抄了一遍，还额外把空目标语言报成错误 ——
+    // 那段分支与 normalizeTargets 的「空 -> zh」互相打架，已经去掉。
+    const QStringList dst = langs::normalizeTargets(dstLangs, uiEngine);
 
     TranslateJobRequest req;
     req.paragraphs = paragraphs;
@@ -429,8 +393,10 @@ bool QuickTranslate::translate(const QString &text, const QString &srcLang, cons
     req.engineId = toRouter(uiEngine);
     req.priority = toRouterPriority(sanitizePriority(settings.enginePriority));
 
-    if (settings.cacheEnabled) {
-        req.cache = processCache();
+    // 设置里关了缓存，或者调用方要求这一次必须重翻（「重新翻译」）时，
+    // 都按"没有缓存"走：Router 那边 req.cache 为空就直接发请求。
+    if (settings.cacheEnabled && !bypassCache) {
+        req.cache = &sharedCache();
         req.cacheEnabled = true;
     } else {
         req.cache = nullptr;

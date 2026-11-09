@@ -68,6 +68,12 @@ struct ManifestVerifyOptions {
     // 的空串占位。默认 false = 严格（有 urls 就必须有 64 hex sha256）。
     // 任何发布/更新路径都必须保持 false。
     bool allowMissingSha256 = false;
+
+    // 未签名清单要不要在日志里喊一声。默认 true = 一定留痕；
+    // 开发期（读仓库里那份未签名清单）之外，正式包内置的清单也是未签名的，
+    // 这条已经说明过的状态不该每次启动都刷一行，所以调用方可以显式关掉。
+    // 注意：它只影响"提示"，不影响 opts.requireSignature == true 时的强制验签。
+    bool warnWhenUnsigned = true;
 };
 
 struct ManifestLoadResult {

@@ -73,7 +73,7 @@ struct AppSettings {
 
     // ---- 资产根目录 ----
 
-    // 资产安装根目录（键 settings/asset/root）。空 = 默认 %APPDATA%/studious/assets。
+    // 资产安装根目录（键 settings/asset/root）。空 = 默认 <应用目录>/data/assets。
     // 改这个值只影响「以后从哪里读」，真正搬文件走 AppBackend::migrateAssetRoot()。
     QString assetRoot;
 

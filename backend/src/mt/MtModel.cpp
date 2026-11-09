@@ -371,6 +371,10 @@ bool MtModel::Impl::readConfig(const QString &configPath, QString *error)
     // 配置文件是手工可改的，所以这里一次性收口，不让坏值流到推理里。
     maxLength = qBound(1, maxLength, kMaxPositionEmbeddings);
     dModel = obj.value(QStringLiteral("d_model")).toInt(dModel);
+    // d_model 也得收口：它是所有 [seq, d_model] 张量的形状来源，
+    // 一个 0/负数会让 std::vector<float>(srcLen * dModel) 抛 length_error，
+    // 而 load() 只 catch(Ort::Exception) —— 那个异常会直接逃出去变成 terminate。
+    dModel = qBound(1, dModel, 16384);
     numBeams = obj.value(QStringLiteral("num_beams")).toInt(numBeams);
     lengthPenalty = obj.value(QStringLiteral("length_penalty")).toDouble(lengthPenalty);
     attentionHeads = obj.value(QStringLiteral("decoder_attention_heads")).toInt(attentionHeads);
@@ -791,6 +795,17 @@ bool MtModel::Impl::generate(const std::vector<float> &encHidden,
                                                 static_cast<int>(srcLen) * 4 + 32}));
 
     const size_t hiddenRow = encHidden.size();
+    // 解码期声明的 encoder_hidden_states 是 [batch, srcLen, dModel]，元素数 batch*srcLen*dModel；
+    // 缓冲区只有 hiddenRow 个 float（每 beam 一份）。两者相等的前提是
+    // hiddenRow == srcLen*dModel —— 不相等就是 ORT 按声明形状越界读堆。
+    // 这里把前提写死，宁可报错也不把越界的张量交给 onnxruntime。
+    if (dModel <= 0 || hiddenRow == 0 || hiddenRow % static_cast<size_t>(dModel) != 0
+        || static_cast<int64_t>(hiddenRow / static_cast<size_t>(dModel)) != srcLen) {
+        error = i18n::sf("编码器输出与输入长度对不上：hidden=%1 个 float，d_model=%2，srcLen=%3",
+                         "Encoder output size mismatch: %1 floats, d_model=%2, srcLen=%3",
+                         {QString::number(hiddenRow), QString::number(dModel), QString::number(srcLen)});
+        return false;
+    }
     std::vector<int64_t> srcMaskRow(static_cast<size_t>(srcLen), 1);
     const std::vector<int64_t> srcMaskRowShape{1, srcLen};
 
@@ -931,6 +946,14 @@ bool MtModel::Impl::generate(const std::vector<float> &encHidden,
                                  {shapeText(shape)});
                 return false;
             }
+            // 这条分支只跑单条假设（batch 恒为 1），但同样要确认形状，
+            // 免得下游按 b*seqOut*vocab 取行时越界。
+            if (shape[0] != static_cast<int64_t>(batch)) {
+                error = i18n::sf("解码器返回 %1 条（预期 %2 条）的 logits：%3",
+                                 "Decoder returned %1 rows but %2 were requested: %3",
+                                 {QString::number(shape[0]), QString::number(batch), shapeText(shape)});
+                return false;
+            }
             logits = outputs[static_cast<size_t>(decLogitsOut)].GetTensorData<float>();
             seqOut = shape[1];
             vocab = shape[2];
@@ -1059,6 +1082,14 @@ bool MtModel::Impl::generate(const std::vector<float> &encHidden,
                                  {shapeText(shape)});
                 return false;
             }
+            // 下面按 b*seqOut*vocab 取第 b 条假设的最后一行 —— b 的上界是 beams.size()。
+            // logits 的行数（shape[0]）必须至少是 batch，否则每条 4 个 beam 会读到别的分配里。
+            if (shape[0] != static_cast<int64_t>(batch)) {
+                error = i18n::sf("merged 解码器返回 %1 条（预期 %2 条）的 logits：%3",
+                                 "Merged decoder returned %1 rows but %2 were requested: %3",
+                                 {QString::number(shape[0]), QString::number(batch), shapeText(shape)});
+                return false;
+            }
             logits = outputs[static_cast<size_t>(mergedLogitsOut)].GetTensorData<float>();
             seqOut = shape[1];
             vocab = shape[2];
@@ -1121,10 +1152,13 @@ bool MtModel::Impl::generate(const std::vector<float> &encHidden,
                 for (int64_t v = 0; v < vocab; ++v) {
                     topIds[static_cast<size_t>(v)] = v;
                 }
-                std::partial_sort(topIds.begin(), topIds.begin() + 5, topIds.end(),
+                // vocab < 5 时 begin()+5 已经越过 end，partial_sort 会踩坏堆。
+                const size_t topN = std::min<size_t>(5, topIds.size());
+                std::partial_sort(topIds.begin(), topIds.begin() + static_cast<ptrdiff_t>(topN),
+                                  topIds.end(),
                                   [row](int64_t x, int64_t y) { return row[x] > row[y]; });
                 QStringList line;
-                for (int i = 0; i < 5; ++i) {
+                for (size_t i = 0; i < topN; ++i) {
                     const int64_t id = topIds[static_cast<size_t>(i)];
                     line << QStringLiteral("%1=%2(%3)")
                                 .arg(id)
@@ -1382,6 +1416,23 @@ bool MtModel::translate(const QString &text, QString &outText, QString &error,
                              {QString::number(hiddenShape[2]), QString::number(m.dModel)});
             return false;
         }
+        // 解码期按 [batch, seq, d_model] 声明 encoder_hidden_states：seq 必须是编码器
+        // **真实输出**的序列长度。以前这里是拿输入长度 srcLen 直接用的 —— 编码器一旦
+        // 输出步数与输入不同（模型/资产不配套、导出时带 padding），声明的元素数就比
+        // 缓冲区大，每一步解码都是越界读堆。以编码器输出为准，顺便把差异记一条日志。
+        if (hiddenShape[0] != 1 || hiddenShape[1] <= 0) {
+            error = i18n::sf("编码器输出 batch/序列长度非法：%1",
+                             "Encoder output batch/seq is invalid: %1",
+                             {shapeText(hiddenShape)});
+            return false;
+        }
+        const int64_t encLen = hiddenShape[1];
+        if (encLen != srcLen) {
+            qWarning().noquote()
+                << QStringLiteral("[mt] 编码器输出 %1 步，输入 %2 步 —— 按编码器输出长度解码")
+                       .arg(encLen)
+                       .arg(srcLen);
+        }
 
         // 拷一份出来：解码期要按 beam 展开成 [B, src, d_model]，原张量随 encOutputs 一起释放。
         const float *hiddenRaw = encOutputs[hiddenIndex].GetTensorData<float>();
@@ -1391,7 +1442,7 @@ bool MtModel::translate(const QString &text, QString &outText, QString &error,
         // ---- decoder：KV cache + beam search（无 cache 时退回贪心）----
         QVector<int> generated;
         const qint64 encMs = qEnvironmentVariableIsSet("STUDIOUS_MT_DEBUG") ? timer.elapsed() : 0;
-        if (!m.generate(hiddenData, srcLen, generated, error)) {
+        if (!m.generate(hiddenData, encLen, generated, error)) {
             return false;
         }
         if (qEnvironmentVariableIsSet("STUDIOUS_MT_DEBUG")) {

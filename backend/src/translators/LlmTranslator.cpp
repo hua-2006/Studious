@@ -3,6 +3,7 @@
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
 #include "i18n/LanguageDetector.h"
+#include "translators/LlmRequest.h"
 
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -40,11 +41,8 @@ QString defaultSystemPrompt()
     return prompt;
 }
 
-// 单次请求的超时兜底：配置里给的 timeoutMs 更优先，非法值退回 60s。
-int effectiveTimeout(const config::LlmConfig &cfg)
-{
-    return cfg.timeoutMs > 0 ? cfg.timeoutMs : 60000;
-}
+// 超时 / 首字节上限 / 请求体构造都在 translators/LlmRequest.h（唯一一份），
+// 这里只保留"翻译"自己的东西：prompt 与结果校验。
 
 // 复读检测。小模型（0.5B 级）偶发把同一短语重复上百次，
 // 输出可以涨到几千字、耗时飙到七八秒。
@@ -433,7 +431,6 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
         return out;
     }
 
-    const QString endpoint = chatCompletionsUrl();
     QStringList langErrors;
 
     for (const QString &rawDst : dstLangs) {
@@ -497,7 +494,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
             if (texts.size() == 1) {
                 QString one;
                 QString err;
-                if (!translateOne(texts.first(), dst, endpoint, one, err)) {
+                if (!translateOne(texts.first(), dst, one, err)) {
                     if (firstParagraphError.isEmpty()) {
                         firstParagraphError =
                             i18n::sf("目标语言 %1 第 %2 段失败：%3",
@@ -512,7 +509,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
 
             QStringList results;
             QString batchError;
-            const bool batchOk = translateBatch(texts, dst, endpoint, results, batchError)
+            const bool batchOk = translateBatch(texts, dst, results, batchError)
                                  && results.size() == texts.size();
             if (batchOk) {
                 // 批量给回来的结果里，空串表示"这一条被判定可疑"（其余照用）。
@@ -570,7 +567,7 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                 // 批量请求已经把这一批的"正常节奏"用掉了，逐段再各跑 5 次的话
                 // 8 段最坏就是 40 次请求，全部计费，而首轮就失败的段落换个 prompt
                 // 通常也翻不出来。1 次足够区分"偶发格式抖动"和"真的不行"。
-                if (translateOne(texts.at(k), dst, endpoint, one, err, 1)) {
+                if (translateOne(texts.at(k), dst, one, err, 1)) {
                     translated[chunk.at(k)] = one;
                 } else if (firstParagraphError.isEmpty()) {
                     firstParagraphError = i18n::sf("目标语言 %1 第 %2 段失败：%3",
@@ -612,19 +609,6 @@ void LlmTranslator::resetCancel()
 }
 
 // ---------------------------------------------------------------- 内部实现
-
-QString LlmTranslator::chatCompletionsUrl() const
-{
-    QString base = m_cfg.baseUrl.trimmed();
-    while (base.endsWith(QLatin1Char('/'))) {
-        base.chop(1);
-    }
-    // 用户可能填了 "..../v1/chat/completions" 的完整地址，猜错就重复拼一层，这里顺手兜住。
-    if (base.endsWith(QLatin1String("/chat/completions"))) {
-        return base;
-    }
-    return base + QStringLiteral("/chat/completions");
-}
 
 QString LlmTranslator::cacheTag() const
 {
@@ -734,13 +718,10 @@ static bool isUntranslatedOutput(const QString &output, const QString &source)
 
 bool LlmTranslator::translateOne(const QString &text,
                                  const QString &dstLang,
-                                 const QString &endpoint,
                                  QString &outText,
                                  QString &outError,
                                  int maxAttempts)
 {
-    Q_UNUSED(endpoint)   // 端点已在 postChat 内部按配置拼接
-
     if (maxAttempts < 1) {
         maxAttempts = 1;
     }
@@ -833,6 +814,10 @@ bool LlmTranslator::translateOne(const QString &text,
         QString err;
         if (!postChat(systemPrompt, userPrompt, temperature, maxTokens, content, err)) {
             lastError = err;
+            // 连不上 / 没响应：换 prompt、换温度都救不回来，重试只会多等 30 秒。
+            if (m_lastTransportFailure) {
+                break;
+            }
             continue;
         }
 
@@ -878,6 +863,11 @@ bool LlmTranslator::translateOne(const QString &text,
 
     // 文案里的次数跟着实际尝试次数走：补救路径只试了 1 次时，
     // 说"已重试 5 次"会让用户以为我们花了很多钱还失败。
+    if (m_lastTransportFailure && !lastError.isEmpty()) {
+        // 连不上还劝人"换更大的模型"属于误导，原样报连接失败即可。
+        outError = lastError;
+        return false;
+    }
     outError = i18n::sf("翻译失败（已尝试 %1 次）：%2。可以换成更大的模型，或手动指定源语言。",
                         "Translation failed after %1 attempt(s): %2. "
                         "Try a larger model, or set the source language explicitly.",
@@ -886,8 +876,9 @@ bool LlmTranslator::translateOne(const QString &text,
     return false;
 }
 
-// 唯一的"配置 -> HTTP 请求"构造点。postChat() 调它，所以单段与批量两条路径
-// 拿到的 model / temperature / max_tokens / reasoning_effort 一定同源。
+// messages -> 请求。URL 拼接、鉴权头、超时、payload 字段全部在
+// translators/LlmRequest.h 的 makeChatRequest() 里（与 llm::probeReasoning 共用
+// 同一份实现），这里只负责把"一次翻译"翻译成两条 message。
 net::HttpRequest LlmTranslator::buildChatRequest(const QString &systemPrompt,
                                                  const QString &userPrompt,
                                                  double temperature,
@@ -905,39 +896,7 @@ net::HttpRequest LlmTranslator::buildChatRequest(const QString &systemPrompt,
     messages.append(sysMessage);
     messages.append(userMessage);
 
-    QJsonObject payload;
-    payload.insert(QStringLiteral("model"), m_cfg.model.trimmed());
-    payload.insert(QStringLiteral("messages"), messages);
-    payload.insert(QStringLiteral("temperature"), temperature);
-    payload.insert(QStringLiteral("max_tokens"), maxTokens);
-    payload.insert(QStringLiteral("stream"), false);
-
-    // 思考等级：翻译是确定性任务，开思考只涨延迟不涨质量。
-    // "none" 时再补一个 Anthropic 风格的 thinking 字段，兼容只认后者的网关。
-    const QString effort = m_cfg.reasoningEffort.trimmed().toLower();
-    if (!effort.isEmpty()) {
-        payload.insert(QStringLiteral("reasoning_effort"), effort);
-        if (effort == QLatin1String("none")) {
-            QJsonObject thinking;
-            thinking.insert(QStringLiteral("type"), QStringLiteral("disabled"));
-            payload.insert(QStringLiteral("thinking"), thinking);
-        }
-    }
-
-    net::HttpRequest req;
-    req.url = QUrl(chatCompletionsUrl());
-    req.method = QByteArrayLiteral("POST");
-    req.body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
-    req.timeoutMs = effectiveTimeout(m_cfg);
-    req.headers.append(qMakePair(QByteArrayLiteral("Content-Type"),
-                                QByteArrayLiteral("application/json")));
-    const QString key = m_cfg.apiKey.trimmed();
-    if (!key.isEmpty()) {
-        req.headers.append(qMakePair(QByteArrayLiteral("Authorization"),
-                                    QByteArrayLiteral("Bearer ") + key.toUtf8()));
-    }
-
-    return req;
+    return makeChatRequest(m_cfg, messages, maxTokens, temperature);
 }
 
 bool LlmTranslator::postChat(const QString &systemPrompt,
@@ -969,9 +928,24 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
               qUtf8Printable(head));
     }
     if (!resp.ok) {
-        outError = describeHttpFailure(resp);
+        m_lastTransportFailure = resp.firstByteTimedOut || resp.connectionFailed;
+        if (resp.firstByteTimedOut) {
+            // 甩毫秒数用户看不懂，也分不清是"网络断了"还是"模型在思考"。
+            outError = i18n::sf(
+                "云端 LLM 连接失败：%1 秒内没有收到任何响应（地址 %2）",
+                "Cloud LLM connection failed: no response within %1 s (%2)",
+                {kChatFirstByteTimeoutMs / 1000, m_cfg.baseUrl});
+        } else if (resp.connectionFailed) {
+            outError = i18n::sf("云端 LLM 连接失败：连不上 %1。检查服务地址、端口和网络。",
+                                "Cloud LLM connection failed: cannot reach %1. "
+                                "Check the endpoint, port and network.",
+                                {m_cfg.baseUrl});
+        } else {
+            outError = describeHttpFailure(resp);
+        }
         return false;
     }
+    m_lastTransportFailure = false;
 
     QJsonParseError perr{};
     const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &perr);
@@ -1047,12 +1021,9 @@ bool LlmTranslator::parseJsonStringArray(const QString &content, int expected, Q
 
 bool LlmTranslator::translateBatch(const QStringList &texts,
                                    const QString &dstLang,
-                                   const QString &endpoint,
                                    QStringList &outTexts,
                                    QString &outError)
 {
-    Q_UNUSED(endpoint)   // 端点已在 buildChatRequest() 内部按配置拼接
-
     if (texts.isEmpty()) {
         outTexts.clear();
         return true;
@@ -1261,41 +1232,6 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
                         "The batch reply was unusable (%1): %2",
                         {reasons.value(0), retryContent.left(200)});
     return false;
-}
-
-QString LlmTranslator::describeHttpFailure(const net::HttpResponse &resp)
-{
-    const int status = resp.status;
-
-    if (status == 401) {
-        return i18n::s("LLM API Key 无效或已过期（401）",
-                       "The LLM API key is invalid or has expired (401).");
-    }
-    if (status == 402) {
-        return i18n::s("LLM 账户余额不足（402）",
-                       "The LLM account has insufficient credit (402).");
-    }
-    if (status == 429) {
-        return i18n::s("LLM 请求过于频繁（429），请稍后重试",
-                       "Too many LLM requests (429). Please try again later.");
-    }
-    if (status >= 500 && status < 600) {
-        return i18n::sf("LLM 服务端错误（%1）", "The LLM service failed with HTTP %1.", {status});
-    }
-    if (status == 0) {
-        // 0 = 根本没拿到 HTTP 响应：DNS / 连接被拒 / TLS / 超时都走这里。
-        return i18n::sf("LLM 连接失败或超时：%1",
-                        "Could not connect to the LLM (failure or timeout): %1",
-                        {resp.error.isEmpty()
-                             ? i18n::s("未知网络错误", "unknown network error")
-                             : resp.error});
-    }
-    // 其余 4xx（模型名写错、body 不合法等）：把状态码 + 服务端错误体带出来。
-    // 网关通常会在 body 里写清原因（如 {"error":{"code":"model_not_found"...}}），比只给状态码有用得多。
-    const QString body = QString::fromUtf8(resp.body.left(200)).trimmed();
-    return i18n::sf("LLM 请求被拒绝（HTTP %1）：%2",
-                    "The LLM rejected the request (HTTP %1): %2",
-                    {status, body.isEmpty() ? resp.error : body});
 }
 
 QString LlmTranslator::stripWrapper(QString text)

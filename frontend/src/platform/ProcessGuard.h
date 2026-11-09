@@ -36,4 +36,9 @@ private:
     void *m_handle = nullptr;   // Windows: HANDLE；其它平台恒为 nullptr
 };
 
+// 杀掉本进程的所有直接子进程。给「关闭软件」用：引擎可能正在启动（还没拿到
+// runner 句柄），这时走正常 stop 会漏掉它，留在后台一直占显存。
+// 只按父进程号匹配，不碰别人的进程；非 Windows 上是空实现。
+void killChildProcesses();
+
 } // namespace studious::platform

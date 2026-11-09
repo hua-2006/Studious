@@ -7,8 +7,7 @@
 //     UI 侧的合并（200 ms 一次 logTextChanged）由 AppBackend 负责 ——
 //     handler 跑在任意线程，控制刷新节奏的东西应该留在有事件循环的那一侧。
 //   · 安装后仍会调用原来的 handler，终端输出（--smoke 的 [OK]/[DONE]）不受影响。
-//   · 路径口径复用 paths::assetsRoot()：默认 <AppData>/studious/assets，
-//     日志落在同级的 <AppData>/studious/logs/studious.log。
+//   · 路径口径复用 paths::logsDir()：<应用目录>/data/logs/studious.log（8 MB 轮转到 .1.log）。
 
 #include <QString>
 #include <QStringList>

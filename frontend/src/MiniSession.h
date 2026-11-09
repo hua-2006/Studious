@@ -69,12 +69,16 @@ public:
     QString sourceTag() const { return m_sourceTag; }
 
     Q_INVOKABLE void translate();
+    // 「重新翻译」：同一段原文再翻一次，**不走缓存** ——
+    // 走缓存会立刻拿回上一份结果，按下去像没反应。
+    Q_INVOKABLE void retranslate();
     Q_INVOKABLE void cancel();
     // 清空输入与结果，回到 Empty。
     Q_INVOKABLE void clearAll();
     Q_INVOKABLE void copyAll();
     Q_INVOKABLE void copyBlock(int index);
     // 把当前结果写进 mini.db（走 AppBackend::saveMiniRecord 的那条路）。
+    // 只在 onFinished 里按「保存翻译历史」开关自动调用，界面上没有手动的第二个入口。
     Q_INVOKABLE void saveRecord();
     // 「划词获取」：目前读系统剪贴板（真正的划词要模拟 Ctrl+C，见 TODO.md）。
     Q_INVOKABLE bool grabClipboard();
@@ -120,6 +124,8 @@ private:
     void setNotice(const QString &text);
     // 本地 LLM 冷启动时的自动重试次数。
     int m_retryLeft = 0;
+    // 这一次请求要不要跳过翻译缓存（「重新翻译」按下去就必须真发一遍）。
+    bool m_forceFresh = false;
 
     QuickTranslate *m_qt = nullptr;
     QString m_phase = QStringLiteral("Empty");

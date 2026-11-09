@@ -37,8 +37,8 @@ struct TranslateCancelState {
     void raise();
 };
 
-// 把"输入文本 -> 段落列表"的切分规则集中在一处，GUI 与 --smoke 共用同一份实现。
-QStringList splitParagraphs(const QString &text);
+// 段落切分见 Paragraphs.h 的 paragraphs::split()：GUI、--smoke、小窗、实时翻译
+// 共用同一份实现（段落数是缓存键的一部分，多一份实现就会多一套缓存口径）。
 
 // 一次翻译作业的完整入参：GUI 侧从 AppSettings + 控件取值后整包丢进工作线程。
 //

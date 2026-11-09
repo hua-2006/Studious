@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 
+#include "Languages.h"
 #include "platform/SecretStore.h"
 
 #include <QColor>
@@ -73,7 +74,7 @@ AppSettings AppSettings::defaults()
     s.autoDetectSource = true;
     s.proxyUrl.clear();             // 空 = 不覆盖环境变量
     s.httpTimeoutMs = 30000;        // 后端各调用点自己的超时多数是 5~15 s，这里只做上限抬升
-    s.assetRoot.clear();            // 空 = %APPDATA%/studious/assets
+    s.assetRoot.clear();            // 空 = <应用目录>/data/assets
     // ---- 截屏 / 小窗 / 实时（三个入口共用这一套） ----
     s.captureAutoRun = false;       // 默认还要点一次「翻译」，防止误触就烧 token
     s.captureAutoCopy = false;      // 别偷偷改剪贴板
@@ -162,7 +163,9 @@ AppSettings AppSettings::load()
         }
     }
 
-    s.srcLang = textOr(key("lang/src"), def.srcLang);
+    // 源语言：「自动」只有一种写法（"auto"），空串一律在入口处折成 "auto" ——
+    // 内存里若留一个空串，判断「是否自动」的地方就得各自记着两种写法。
+    s.srcLang = studious::ui::langs::normalizeSource(textOr(key("lang/src"), def.srcLang));
     s.dstLang = textOr(key("lang/dst"), def.dstLang);
 
     // 布尔值不需要空值回落：缺失时 QSettings 直接给默认值 true（= 与 defaults() 一致）。
@@ -331,7 +334,7 @@ void AppSettings::save() const
     store.setValue(key("web/providerId"), webProviderId);
     store.setValue(key("engine/id"), engineId);
     store.setValue(key("engine/priority"), enginePriority.join(QLatin1Char(',')));
-    store.setValue(key("lang/src"), srcLang);
+    store.setValue(key("lang/src"), studious::ui::langs::normalizeSource(srcLang));
     store.setValue(key("lang/dst"), dstLang);
 
     store.setValue(key("cache/enabled"), cacheEnabled);

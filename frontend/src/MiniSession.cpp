@@ -4,13 +4,13 @@
 
 #include "AppSettings.h"
 #include "Languages.h"
+#include "Paragraphs.h"
 #include "QuickTranslate.h"
 
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QHash>
 #include <QMimeData>
-#include <QRegularExpression>
 #include <QTextDocument>
 #include <QVariantMap>
 
@@ -21,19 +21,8 @@ namespace {
 // 划词热键的自动翻译上限：超过这个字数只把内容填进输入框，由用户确认后手动点「翻译」。
 constexpr int kAutoTranslateChars = 1500;
 
-// 和 QuickTranslate 的切段规则保持一致：空行分段，段内单换行保留。
-QStringList splitParagraphs(const QString &text)
-{
-    QStringList out;
-    const QStringList raw = text.split(QRegularExpression(QStringLiteral("\\n\\s*\\n")),
-                                       Qt::SkipEmptyParts);
-    for (const QString &one : raw) {
-        const QString t = one.trimmed();
-        if (!t.isEmpty())
-            out.append(t);
-    }
-    return out;
-}
+// 切段规则与主页 / 截图页共用 Paragraphs.h 的 paragraphs::split()（段落数是缓存键
+// 的一部分，这里以前自己按 "\n\s*\n" 切，\r\n 和连续空行的处理跟权威实现并不一致）。
 
 // 小窗也要跟主页共用同一份语言规则（拆分 / 兜底 / 本地 MT 收成单选），
 // 实现只在 Languages.cpp 里写一遍。
@@ -81,7 +70,7 @@ void MiniSession::setSourceText(const QString &text)
         emit blocksChanged();
         emit errorTextChanged();
     }
-    setPhase(splitParagraphs(m_sourceText).isEmpty() ? QStringLiteral("Empty")
+    setPhase(studious::ui::paragraphs::split(m_sourceText).isEmpty() ? QStringLiteral("Empty")
                                                      : QStringLiteral("Editing"));
     if (m_sourceTag != QStringLiteral("manual")) {
         m_sourceTag = QStringLiteral("manual");
@@ -95,6 +84,20 @@ void MiniSession::setSrcLang(const QString &code)
     if (m_srcLang == next)
         return;
     m_srcLang = next;
+    // 源语言不能和目标语言相同：撞上了就把目标语言换掉（规则在 langs 里）。
+    {
+        const QStringList fixed = langs::normalizeTargetsAgainstSource(m_dstLangs, m_srcLang);
+        if (fixed != m_dstLangs) {
+            m_dstLangs = fixed;
+            if (!m_dstLangs.contains(m_activeDst))
+                m_activeDst = m_dstLangs.first();
+            AppSettings fixedSettings = AppSettings::load();
+            fixedSettings.dstLang = langs::join(m_dstLangs);
+            fixedSettings.save();
+            emit dstLangsChanged();
+            emit activeDstChanged();
+        }
+    }
     // 语言对是全局一份（主页、截图、实时、小窗共用 settings/srcLang），
     // 这里改完就落盘，别的窗口下一单会读到同一个值。
     // 注意存的就是 "auto"，不再有「空串」这种第二种写法。
@@ -108,8 +111,13 @@ void MiniSession::setSrcLang(const QString &code)
 void MiniSession::setDstLangs(const QStringList &codes)
 {
     // 去空、去重、空列表兜底 {zh}、本地 MT 收成单选，全部交给 langs 的唯一实现。
-    const QStringList next = langs::normalizeTargets(langs::split(langs::join(codes)),
-                                                     AppSettings::load().engineId);
+    // 小窗只翻一个目标语言（界面也只剩单选），这里再夹一次，避免别处写入多值时
+    // 窗口里冒出"语言1 +1"这种没法点掉的标签。
+    QStringList next = langs::normalizeTargetsAgainstSource(
+        langs::normalizeTargets(langs::split(langs::join(codes)), AppSettings::load().engineId),
+        m_srcLang);
+    if (next.size() > 1)
+        next = QStringList{next.first()};
     if (m_dstLangs == next)
         return;
     m_dstLangs = next;
@@ -163,14 +171,14 @@ int MiniSession::charCount() const
 
 int MiniSession::paragraphCount() const
 {
-    return splitParagraphs(m_sourceText).size();
+    return studious::ui::paragraphs::split(m_sourceText).size();
 }
 
 void MiniSession::translate()
 {
     if (busy())
         return;
-    const QStringList paragraphs = splitParagraphs(m_sourceText);
+    const QStringList paragraphs = studious::ui::paragraphs::split(m_sourceText);
     if (paragraphs.isEmpty()) {
         setError(tr("先输入或粘贴要翻译的文本。"));
         setPhase(QStringLiteral("Empty"));
@@ -198,7 +206,9 @@ void MiniSession::translate()
 
     // m_srcLang 已经是 "auto" 或具体语言码（setSrcLang / 构造函数都过过
     // langs::normalizeSource），不需要再在这里补一次「空串 → auto」。
-    if (!m_qt->translate(m_sourceText, m_srcLang, m_dstLangs)) {
+    const bool forceFresh = m_forceFresh;
+    m_forceFresh = false;
+    if (!m_qt->translate(m_sourceText, m_srcLang, m_dstLangs, forceFresh)) {
         // 本地 LLM 刚被拉起来时不要立刻报错：它要一两秒，等它起来自己再发一次。
         if (m_qt->lastFailureRetryable() && m_retryLeft < 20) {
             ++m_retryLeft;
@@ -218,6 +228,13 @@ void MiniSession::translate()
     }
     m_retryLeft = 0;
     setPhase(QStringLiteral("Translating"));
+}
+
+void MiniSession::retranslate()
+{
+    // 同一段原文再翻一遍：跳过缓存，否则会把上一份原样拿回来。
+    m_forceFresh = true;
+    translate();
 }
 
 void MiniSession::cancel()
@@ -408,7 +425,7 @@ void MiniSession::prepare()
     m_errorText.clear();
     emit errorTextChanged();
     if (m_phase == QStringLiteral("Failed"))
-        setPhase(splitParagraphs(m_sourceText).isEmpty() ? QStringLiteral("Empty")
+        setPhase(studious::ui::paragraphs::split(m_sourceText).isEmpty() ? QStringLiteral("Empty")
                                                          : QStringLiteral("Editing"));
 }
 
@@ -448,6 +465,11 @@ void MiniSession::onFinished(const QuickTranslateResult &result)
     rebuildBlocks();
     emit resultChanged();
     setPhase(QStringLiteral("Done"));
+
+    // 是否入库由设置里的「保存翻译历史」一处决定：开着就自动存，关着就不存。
+    // 以前界面上还有一颗「保存到记录」按钮，等于给同一件事开了第二个开关。
+    if (AppSettings::load().historyEnabled)
+        saveRecord();
 }
 
 void MiniSession::rebuildBlocks()

@@ -1,5 +1,6 @@
 #include "translators/LocalMtTranslator.h"
 
+#include "asset/DataRoots.h"
 #include "contract/LanguageRegistry.h"
 #include "i18n/L10n.h"
 #include "i18n/LanguageDetector.h"
@@ -16,33 +17,21 @@ namespace {
 // 一个语言对目录里必须具备的文件清单见 LocalMtTranslator::requiredFiles()（唯一来源），
 // 缺任何一个都视为该对不可用。
 
-// 数据根与前端一致：从 exe 往上最多四层找 version.json，命中就用 <根>/data/assets/models/<kind>。
-// 找不到（老的 AppData 部署、backend_selftest 这种自测程序）才退回 AppData 旧路径。
-QString dataRootCandidate()
-{
-    QDir dir(QCoreApplication::applicationDirPath());
-    for (int i = 0; i < 5; ++i) {
-        if (QFileInfo::exists(dir.filePath(QStringLiteral("version.json"))))
-            return dir.filePath(QStringLiteral("data"));
-        if (!dir.cdUp())
-            break;
-    }
-    return QString();
-}
-
-QString modelsRootFor(const QString &kind)
-{
-    const QString base = dataRootCandidate();
-    if (!base.isEmpty())
-        return QDir(base).filePath(QStringLiteral("assets/models/") + kind);
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-        .filePath(QStringLiteral("assets/models/") + kind);
-}
-
+// 数据根只有一份实现（`studious::asset::DataRoots`），前端 AssetPaths 也走它。
+// 唯一的例外是老部署：assets 还在 `%APPDATA%/studious/assets`，且新位置不存在时
+// 退回旧路径，免得升级后语言包"凭空消失"。
 QString defaultModelsRoot()
 {
-    // 语言包在 models/mt；llm 与 ocr 各有自己的目录，互不干扰。
-    return modelsRootFor(QStringLiteral("mt"));
+    const QString current = studious::asset::modelsRoot(QStringLiteral("mt"));
+    if (QFileInfo::exists(current)) {
+        return current;
+    }
+    const QString legacy = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                               .filePath(QStringLiteral("assets/models/mt"));
+    if (QFileInfo::exists(legacy)) {
+        return legacy;
+    }
+    return current;
 }
 
 // 多语言资产目录里的伪语言标签：mt.opus.mul-en / mt.opus.en-mul。
@@ -52,6 +41,14 @@ QString defaultModelsRoot()
 bool isMulTag(const QString &code)
 {
     return code == QLatin1String("mul");
+}
+
+// 语言对的**目录 id**（"mt.opus.en-zh"），用于报错与"缺哪些资产"。
+// 与 pairDir() 的区别：pairDir() 拼的是绝对路径，这里给用户看的是目录名。
+// resolve() 与 planFor() 共用这一份，避免两处各写一遍 "mt.opus.%1-%2"。
+QString pairId(const QString &src, const QString &dst)
+{
+    return QStringLiteral("mt.opus.%1-%2").arg(src, dst);
 }
 
 // 韩语等"多语言模型没有 token"的语言，专门给一条能看懂的原因。
@@ -310,10 +307,13 @@ QStringList LocalMtTranslator::supportedTargetLangs() const
 
 const QSet<QString> &LocalMtTranslator::mulTokens() const
 {
+    // 这里的加载是「整进程只做一次」的惰性初始化，而 supports()/planFor() 在三个页面
+    // 的工作线程里并发跑 —— 先置位再填充的话，第二个线程会拿着一个正在 rehash 的 QSet 去
+    // contains()（堆 UAF）。所以置位挪到填充完成之后，并且整个过程用独立的锁串起来。
+    std::lock_guard<std::mutex> guard(m_mulTokensMutex);
     if (m_mulTokensLoaded) {
         return m_mulTokens;
     }
-    m_mulTokensLoaded = true;
 
     // mt.opus.en-mul/vocab.json 是"多语言模型会哪些语言"的唯一权威名单：
     // 里面每个 >>xx<< 就是一个可指定的语言，去掉尖括号正好等于 toMarianToken() 的返回值。
@@ -321,10 +321,12 @@ const QSet<QString> &LocalMtTranslator::mulTokens() const
         QDir(pairDir(QStringLiteral("en"), QStringLiteral("mul"))).filePath(QStringLiteral("vocab.json"));
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
+        m_mulTokensLoaded = true;   // 读不到也认这一次：别每个请求都去碰磁盘
         return m_mulTokens;
     }
     const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
     if (!doc.isObject()) {
+        m_mulTokensLoaded = true;
         return m_mulTokens;
     }
     const QJsonObject obj = doc.object();
@@ -335,6 +337,7 @@ const QSet<QString> &LocalMtTranslator::mulTokens() const
             m_mulTokens.insert(key.mid(2, key.size() - 4));
         }
     }
+    m_mulTokensLoaded = true;   // 填充完之后才对外可见
     return m_mulTokens;
 }
 
@@ -383,11 +386,27 @@ LocalMtTranslator::Plan LocalMtTranslator::planFor(const QString &src, const QSt
         return plan;
     }
 
-    // 源侧能不能到英文：en 本身不需要模型，其余看有没有 <src>-en。
-    const bool reachesEnglish = (s == QLatin1String("en")) || pairAvailable(s, QStringLiteral("en"));
+    // 四能力探测只做一次，后面的分支与"缺哪些资产"共用这组结果：
+    //   reachesEnglish       源侧能不能到英文（en 本身不需要模型）
+    //   englishReachesTarget en 能不能直接到目标
+    //   enMulReady / mulEnReady  多语言模型的两条兜底链
+    const bool reachesEnglish =
+        (s == QLatin1String("en")) || pairAvailable(s, QStringLiteral("en"));
     const bool englishReachesTarget = pairAvailable(QStringLiteral("en"), d);
     const bool enMulReady = pairAvailable(QStringLiteral("en"), QStringLiteral("mul"));
     const bool mulEnReady = pairAvailable(QStringLiteral("mul"), QStringLiteral("en"));
+
+    // 目标是英语，而且没有 <src>-en：mul-en 本来就是"任意源语言 → 英语"，
+    // 一步到位，不需要再拼第二程（以前这里因为 d == en 被整段跳过，
+    // pt→en、ko→en 这类会直接报"缺模型"，明明装了 mul-en）。
+    if (d == QLatin1String("en") && s != QLatin1String("en") && mulEnReady) {
+        if (mulCoversLanguage(s)) {
+            plan.kind = RouteKind::MulEn;
+            plan.error.clear();
+            return plan;
+        }
+        plan.error = mulUnsupportedReason(s, /*asTarget=*/false);
+    }
 
     // 2) 英文中转：A→en→B，两次推理，单对各模型够用就不用 mul。
     if (s != QLatin1String("en") && d != QLatin1String("en") && reachesEnglish
@@ -438,6 +457,38 @@ LocalMtTranslator::Plan LocalMtTranslator::planFor(const QString &src, const QSt
         }
     }
 
+    // 6) 五条路全不通，而且没有更具体的原因：把"缺什么"在这里一次算清。
+    //    resolve() 只负责把这段清单搬进 ResolveResult，不再自己反推一遍。
+    //    只在没有 plan.error 时填：原因非空时（韩语这类）那句人话本身就是答案，
+    //    再列一长串缺文件只会把用户该看的东西冲淡。
+    if (plan.error.isEmpty()) {
+        plan.missingAssets << pairId(s, d);
+        if (d == QLatin1String("en")) {
+            // 只差"源语言→英语"这一程，没有第二程可缺（以前会报出不存在的 en→en）。
+            if (!mulEnReady) {
+                plan.missingAssets << pairId(QStringLiteral("mul"), QStringLiteral("en"));
+            }
+        } else if (s == QLatin1String("en")) {
+            // 源就是英语：一条 en-* 或 en-mul 就够，同样没有第一程。
+            if (!enMulReady) {
+                plan.missingAssets << pairId(QStringLiteral("en"), QStringLiteral("mul"));
+            }
+        } else {
+            if (!reachesEnglish) {
+                plan.missingAssets << pairId(s, QStringLiteral("en"));
+            }
+            if (!englishReachesTarget) {
+                plan.missingAssets << pairId(QStringLiteral("en"), d);
+            }
+            if (!mulEnReady) {
+                plan.missingAssets << pairId(QStringLiteral("mul"), QStringLiteral("en"));
+            }
+            if (!enMulReady) {
+                plan.missingAssets << pairId(QStringLiteral("en"), QStringLiteral("mul"));
+            }
+        }
+    }
+
     return plan;
 }
 
@@ -476,6 +527,12 @@ QString LocalMtTranslator::routeDescription(const QString &src, const QString &d
                         "Multilingual en-mul (%1→en→>>%2<<)",
                         {s, plan.targetToken});
     case RouteKind::MulEn:
+        if (d == QLatin1String("en")) {
+            // 目标就是英语：mul-en 的产物直接交出去，没有第二程可跑。
+            return i18n::sf("多语言模型 mul-en（自动识别源语言→en）",
+                            "Multilingual mul-en (source auto-detected→English)",
+                            {});
+        }
         return i18n::sf("多语言模型 mul-en（自动识别源语言→en→%1）",
                         "Multilingual mul-en (source auto-detected→en→%1)",
                         {d});
@@ -492,41 +549,43 @@ QString LocalMtTranslator::routeDescription(const QString &src, const QString &d
 bool LocalMtTranslator::supports(const QString &src, const QString &dst) const
 {
     const QString s = core::LanguageRegistry::normalize(src);
-    const QString d = core::LanguageRegistry::normalize(dst);
-    if (d.isEmpty() || s == d || isMulTag(d) || isMulTag(s)) {
-        return false;
-    }
 
-    // src=auto：translate() 内部会先做语言检测再选模型，
-    // 所以这里只判断"有没有任何能产出 d 的路径"，不能因为 s 是 auto 就否掉。
+    // src=auto（或空）：translate() 内部会先做语言检测，再把检测结果交给 planFor()
+    // 选模型，所以这里只回答"检测出某种语言之后有没有路"——不能因为源语言没定就否掉。
+    //
+    // 候选源语言取已装语言对的源端，再加一个 en（en 不需要模型，装了 en-mul 时还能
+    // 兜住任意目标）。逐条问 planFor() 而不是自己探测直连 / mul：判定口径只有一处，
+    // 这条分支的结果也就自动跟着 planFor() 走（以前这里是一份独立的布尔探测）。
     if (s.isEmpty() || s == QLatin1String("auto")) {
+        QStringList candidates;
         for (const QString &pair : installedPairs()) {
-            if (pair.endsWith(QLatin1Char('-') + d)) {
+            const int dash = pair.indexOf(QLatin1Char('-'));
+            if (dash > 0) {
+                candidates << pair.left(dash);
+            }
+        }
+        candidates << QStringLiteral("en");
+        candidates.removeDuplicates();
+        candidates.removeAll(QStringLiteral("mul"));   // 伪语言标签，planFor() 也会挡掉
+
+        for (const QString &candidate : candidates) {
+            if (planFor(candidate, dst).kind != RouteKind::None) {
                 return true;
             }
         }
-        // 没有直连 / en-d 时，多语言模型也能兜住（目标必须在多语言词表里有 token）。
-        return pairAvailable(QStringLiteral("en"), QStringLiteral("mul")) && mulCoversLanguage(d);
+        return false;
     }
 
-    return planFor(s, d).kind != RouteKind::None;
+    // 空语言码 / 源=目标 / mul 伪标签这些"一定不支持"的情形由 planFor() 统一挡掉。
+    return planFor(s, dst).kind != RouteKind::None;
 }
 
 bool LocalMtTranslator::pivotsThroughEnglish(const QString &src, const QString &dst) const
 {
-    const QString s = core::LanguageRegistry::normalize(src);
-    const QString d = core::LanguageRegistry::normalize(dst);
-    if (s.isEmpty() || d.isEmpty() || s == QLatin1String("auto") || s == d) {
-        return false;
-    }
-    if (pairAvailable(s, d)) {
-        return false;
-    }
-    if (isMulTag(s) || isMulTag(d)) {
-        return false;
-    }
-    return s != QLatin1String("en") && d != QLatin1String("en")
-           && pairAvailable(s, QStringLiteral("en")) && pairAvailable(QStringLiteral("en"), d);
+    // 单一口径：planFor() 里英文中转是第 2 优先级，直连可用时它根本不会被选中，
+    // 所以"实际走的是中转"等价于 kind == EnglishPivot。
+    // 以前这里重写了一遍 pairAvailable(s,en) && pairAvailable(en,d)，两处会漂移。
+    return planFor(src, dst).kind == RouteKind::EnglishPivot;
 }
 
 core::ResolveResult LocalMtTranslator::resolve(const QString &src, const QString &dst) const
@@ -536,44 +595,61 @@ core::ResolveResult LocalMtTranslator::resolve(const QString &src, const QString
     const QString d = core::LanguageRegistry::normalize(dst);
 
     if (s.isEmpty() || d.isEmpty() || s == QLatin1String("auto")) {
+        // 这一条不是路由判定（planFor() 只处理确定方向），所以留在这里先挡掉。
         r.ready = false;
         r.reason = i18n::s("本地 MT 需要明确的源语言（不支持自动检测后再选模型）",
                            "Local MT needs an explicit source language (it cannot detect then pick a model)");
         return r;
     }
 
-    // 文案必须反映**实际会走的路径**：直连 / 英文中转 / 多语言模型。
+    // ready / missingAssets / 不可用原因一律取 planFor() 的结果：它已经是唯一的路由判定，
+    // 这里只把结论翻成人话，不再自己反推直连 / 中转 / mul 与缺哪个目录。
     const Plan plan = planFor(s, d);
-    if (plan.kind != RouteKind::None) {
-        r.ready = true;
+    r.ready = plan.kind != RouteKind::None;
+    r.missingAssets = plan.missingAssets;
+
+    if (r.ready) {
+        // 文案必须反映**实际会走的路径**：直连 / 英文中转 / 多语言模型。
         r.reason = routeDescription(s, d);
         return r;
     }
 
     if (!plan.error.isEmpty()) {
-        r.ready = false;
+        // 有更具体的原因（例：多语言词表里没有韩语）：它本身就是答案。
         r.reason = plan.error;
         return r;
     }
 
-    r.ready = false;
-    r.reason = i18n::sf("缺少本地翻译模型：需要 %1，或「%2→en + en→%3」，或多语言模型 mt.opus.mul-en / mt.opus.en-mul",
-                        "Missing local MT models: need %1, or %2→en plus en→%3, "
+    // 报错必须按方向说人话。以前不管哪个方向都套一句「%1，或 %2→en + en→%3」：
+    // 目标本来就是英语时会出现「pt→en + en→en」这种不存在的语法，用户只会更迷糊。
+    const QString directId = pairId(s, d);
+    const QString srcToEn = pairId(s, QStringLiteral("en"));
+    const QString enToDst = pairId(QStringLiteral("en"), d);
+
+    if (d == QLatin1String("en")) {
+        // 只差把源语言送到英语这一程。
+        r.reason = i18n::sf(
+            "缺少本地翻译模型：需要 %1，或多语言模型 mt.opus.mul-en（自动识别源语言→英语）",
+            "Missing local MT model: need %1, or the multilingual model mt.opus.mul-en "
+            "(auto-detects the source language → English)",
+            {directId});
+        return r;
+    }
+
+    if (s == QLatin1String("en")) {
+        // 源就是英语：一条 en-* 或 en-mul 就够，没有「第一程」。
+        r.reason = i18n::sf(
+            "缺少本地翻译模型：需要 %1，或多语言模型 mt.opus.en-mul（目标语靠 >>%2<< 标记）",
+            "Missing local MT model: need %1, or the multilingual model mt.opus.en-mul "
+            "(target marked with >>%2<<)",
+            {directId, core::LanguageRegistry::toMarianToken(d)});
+        return r;
+    }
+
+    r.reason = i18n::sf("缺少本地翻译模型：需要 %1，或「%2 + %3」，或多语言模型 mt.opus.mul-en / mt.opus.en-mul",
+                        "Missing local MT models: need %1, or %2 plus %3, "
                         "or the multilingual models mt.opus.mul-en / mt.opus.en-mul",
-                        {QStringLiteral("mt.opus.%1-%2").arg(s, d), s, d});
-    r.missingAssets = {QStringLiteral("mt.opus.%1-%2").arg(s, d)};
-    if (!pairAvailable(s, QStringLiteral("en"))) {
-        r.missingAssets << QStringLiteral("mt.opus.%1-en").arg(s);
-    }
-    if (!pairAvailable(QStringLiteral("en"), d)) {
-        r.missingAssets << QStringLiteral("mt.opus.en-%1").arg(d);
-    }
-    if (!pairAvailable(QStringLiteral("mul"), QStringLiteral("en"))) {
-        r.missingAssets << QStringLiteral("mt.opus.mul-en");
-    }
-    if (!pairAvailable(QStringLiteral("en"), QStringLiteral("mul"))) {
-        r.missingAssets << QStringLiteral("mt.opus.en-mul");
-    }
+                        {directId, srcToEn, enToDst});
     return r;
 }
 
@@ -664,6 +740,11 @@ bool LocalMtTranslator::translateOne(const QString &text,
         if (!toEn->translate(text, middle, firstError)) {
             error = firstError;
             return false;
+        }
+        if (dst == QLatin1String("en")) {
+            // 目标就是英语，mul-en 一步到位（没有 en-en 这种语言对）。
+            outText = middle;
+            return true;
         }
         mt::MtModel *toTarget = loadOrFail(QStringLiteral("en"), dst);
         if (toTarget == nullptr) {
@@ -824,6 +905,18 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
                 translated << QString();
                 if (firstError.isEmpty()) {
                     firstError = err;
+                }
+                continue;
+            }
+            // 模型把整段"翻"成空串（语言不匹配 / 退化）不能当成功：界面会以为翻完了，
+            // 却什么都显示不出来，比直接报错更难查。
+            if (joined.trimmed().isEmpty()) {
+                translated << QString();
+                if (firstError.isEmpty()) {
+                    firstError = i18n::s(
+                        "本地 MT 这轮没有产出文字：模型可能不认识这段的语言，换云端 LLM 或本地 LLM 试试。",
+                        "Local MT produced no text for this passage; the model may not recognise its "
+                        "language. Try the cloud LLM or the local LLM instead.");
                 }
                 continue;
             }

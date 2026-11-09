@@ -89,12 +89,15 @@ add_library(backend STATIC
     src/translators/MockTranslator.cpp
     src/translators/LocalMtTranslator.cpp
     src/translators/LlmTranslator.cpp
+    # LLM 请求构造 / 错误文案的唯一实现，LlmTranslator 与 llm/LlmCatalog 共用。
+    src/translators/LlmRequest.cpp
     src/llm/LlmCatalog.cpp
     src/router/TranslatorRouter.cpp
     src/cache/TranslationCache.cpp
     src/runtime/LlamaServer.cpp
     src/asset/ManifestParser.cpp
     src/asset/AssetRegistry.cpp
+    src/asset/DataRoots.cpp
     src/asset/Downloader.cpp
     src/mt/MtTokenizer.cpp
     src/mt/MtModel.cpp

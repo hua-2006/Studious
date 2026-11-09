@@ -24,13 +24,40 @@ QString join(const QStringList &langs)
 
 QStringList normalizeTargets(const QStringList &targets, const QString &engineUiId)
 {
-    QStringList out = targets;
+    // 「自动检测」只对源语言有意义：目标语言填 auto 等于没指定。
+    QStringList out;
+    for (const QString &code : targets) {
+        if (!isAuto(code) && !out.contains(code))
+            out.append(code);
+    }
     if (out.isEmpty()) {
         out.append(QStringLiteral("zh"));
     }
     // 本地 MT 按语言对装模型：多目标会让路由整单判不支持，界面还留着用不上的标签。
     if (engine::toUi(engineUiId) == QLatin1String("local-mt") && out.size() > 1) {
         out = {out.first()};
+    }
+    return out;
+}
+
+QStringList normalizeTargetsAgainstSource(const QStringList &targets, const QString &source)
+{
+    const QString src = normalizeSource(source);
+    QStringList out = targets;
+    if (!isAuto(src)) {
+        out.removeAll(src);
+    }
+    if (out.isEmpty()) {
+        // 剔完一个不剩：挑一个和源语言不同的常识目标语言，别把界面留在空选择上。
+        const QStringList fallbacks = {QStringLiteral("zh"), QStringLiteral("en")};
+        for (const QString &fallback : fallbacks) {
+            if (isAuto(src) || fallback != src) {
+                out.append(fallback);
+                break;
+            }
+        }
+        if (out.isEmpty())
+            out.append(QStringLiteral("en"));
     }
     return out;
 }

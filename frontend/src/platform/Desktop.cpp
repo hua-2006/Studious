@@ -271,7 +271,8 @@ void Desktop::setTrayEnabled(bool enabled)
     data.uFlags = NIF_STATE;
     data.dwStateMask = NIS_HIDDEN;
     data.dwState = enabled ? 0 : NIS_HIDDEN;
-    ::Shell_NotifyIconW(NIM_MODIFY, &data);
+    const BOOL ok = ::Shell_NotifyIconW(NIM_MODIFY, &data);
+    qInfo("[tray] %s -> %d", enabled ? "show" : "hide", int(ok));
 #else
     Q_UNUSED(enabled);
 #endif

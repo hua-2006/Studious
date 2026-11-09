@@ -138,15 +138,17 @@ Window {
         { code: "local-mt", label: backend.engineName("local-mt") }
     ]
 
-    // 后端报的引擎状态（id → "ready" / "not-ready" / "missing-assets"）。
+    // 后端报的引擎状态（id → "ready" / "not-ready" / "missing-assets" / "missing-config"）。
     // 做成绑定而不是一次性拷贝：菜单开着的时候下次刷新、或者切了引擎，圆点自己会变。
     readonly property var engineStatusMap: {
         const map = ({})
         const rows = backend.engineStatuses || []
         for (let i = 0; i < rows.length; ++i) {
             const row = rows[i]
-            if (row && row.id)
-                map[row.id] = row.state || (row.ready ? "ready" : "not-ready")
+            if (!row || !row.id)
+                continue
+            // 状态口径统一在 Theme.engineStateOf（装好了但当前语言对走不通 → 黄灯）。
+            map[Theme.canonicalEngineId(row.id)] = Theme.engineStateOf(row)
         }
         return map
     }
@@ -169,15 +171,15 @@ Window {
         return map[code] || "not-ready"
     }
 
-    // 缺资产的（红）不能选；「未就绪」（黄）可以选 —— 本地服务会按需拉起。
+    // 缺资产（要下载）、缺配置（要填地址/模型）的都不能选；
+    // 「未就绪」（黄）可以选 —— 本地服务会按需拉起。
     function engineUsable(code) {
-        return overlay.engineStateOf(code) !== "missing-assets"
+        const state = overlay.engineStateOf(code)
+        return state !== "missing-assets" && state !== "missing-config"
     }
 
     function engineDotColor(code) {
-        const state = overlay.engineStateOf(code)
-        return state === "ready" ? Theme.good
-             : (state === "not-ready" ? Theme.caution : Theme.danger)
+        return Theme.engineStateColor(overlay.engineStateOf(code))
     }
 
     x: desktopRect.x
@@ -1252,13 +1254,12 @@ Window {
     // 布局完成前求值、或者 parent 与可视父级不一致）就会贴到屏幕左上角 ——
     // 而浮层本身是 WS_EX_NOACTIVATE 的全屏窗口，弹到左上角以后还压不到它上面。
     // 改成窗内 Rectangle 之后，它天然跟着工具栏走，也不用手工管 z 序和关窗。
-    Rectangle {
+    MenuPanel {
         id: engineMenu
         objectName: "engineMenu"
         z: 20
         visible: overlay.menuOpen
         width: 196
-        height: engineMenuColumn.implicitHeight + Theme.s1 * 2
         // 引擎槽在窗口里的位置：跟着工具栏（工具栏跟着选区）。
         // 注意不能用 mapToItem —— 它在绑定里是 C++ 调用，内部读的 x/y 不会产生依赖，
         // 只会在布局还没跑完时求值一次，然后永远停在 (0,0)（就是"弹到左上角"的根因）。
@@ -1271,71 +1272,20 @@ Window {
             return below ? anchorPoint.y + engineSlot.height + Theme.s2
                          : Math.max(Theme.s2, anchorPoint.y - height - Theme.s2)
         }
-        color: Theme.surfaceHigh
-        radius: Theme.rSm
-        border.width: 1
-        border.color: Theme.outline
 
-        Column {
-            id: engineMenuColumn
-            x: Theme.s1
-            y: Theme.s1
-            width: parent.width - Theme.s1 * 2
-            spacing: 2
-            Repeater {
-                model: overlay.engineChoices
-                delegate: Rectangle {
-                    id: engineRow
-                    required property var modelData
-                    readonly property bool usable: overlay.engineUsable(modelData.code)
-                    readonly property bool picked: (backend.engineId || "") === modelData.code
-                    width: engineMenuColumn.width
-                    height: 32
-                    radius: Theme.rXs
-                    color: picked && usable
-                               ? Theme.primaryContainer
-                               : (usable && itemHover.hovered ? Theme.surfaceHighest : "transparent")
-                    opacity: usable ? 1.0 : 0.45
-
-                    Text {
-                        id: engineLabel
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.s2
-                        anchors.right: statusDot.left
-                        anchors.rightMargin: Theme.s2
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: modelData.label
-                        elide: Text.ElideRight
-                        color: engineRow.picked
-                                   ? Theme.primaryContainerText
-                                   : Theme.ink
-                        font.family: Theme.fontUi
-                        font.pixelSize: Theme.fontSizeSmall
-                    }
-
-                    // 右边的状态点：绿 = 就绪可直用，黄 = 未就绪（会按需拉起），红 = 缺资产（点不动）。
-                    Rectangle {
-                        id: statusDot
-                        width: 8
-                        height: 8
-                        radius: 4
-                        anchors.right: parent.right
-                        anchors.rightMargin: Theme.s2
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: overlay.engineDotColor(engineRow.modelData.code)
-                    }
-
-                    HoverHandler {
-                        id: itemHover
-                        cursorShape: engineRow.usable ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    }
-                    TapHandler {
-                        enabled: engineRow.usable
-                        onTapped: {
-                            backend.engineId = engineRow.modelData.code
-                            overlay.menuOpen = false
-                        }
-                    }
+        Repeater {
+            model: overlay.engineChoices
+            delegate: MenuRow {
+                required property var modelData
+                text: modelData.label
+                selected: (backend.engineId || "") === modelData.code
+                showDot: true
+                dotColor: overlay.engineDotColor(modelData.code)
+                // 缺资产 / 缺配置不给选（选了也翻不了）；黄灯可以选，本地服务会按需拉起。
+                enabled: overlay.engineUsable(modelData.code)
+                onActivated: {
+                    backend.engineId = modelData.code
+                    overlay.menuOpen = false
                 }
             }
         }
@@ -1360,26 +1310,7 @@ Window {
         }
     }
 
-    // 统一的 ✕：和实时控制条右上角那颗一模一样（22 宽、无边框、悬浮才出台面色、
-    // 字形 ✕ 用 inkVariant）。两处工具栏共用这一个组件，以后只改一处。
-    component CloseButton: Rectangle {
-        id: cb
-        signal clicked()
-        width: 22
-        height: 26
-        radius: Theme.rSm
-        color: cbHover.hovered ? Theme.surfaceHighest : "transparent"
-        Behavior on color { ColorAnimation { duration: Theme.durFast } }
-        Text {
-            anchors.centerIn: parent
-            text: "✕"
-            color: Theme.inkVariant
-            font.family: Theme.fontUi
-            font.pixelSize: Theme.fontSizeSmall
-        }
-        HoverHandler { id: cbHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: cb.clicked() }
-    }
+    // ✕ 已抽成 components/CloseButton.qml（截图 / 小窗 / 设置面板 / 实时控制条共用）。
 
     component OverlayButton: Rectangle {
         id: ob

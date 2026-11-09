@@ -2,72 +2,32 @@
 
 #include "i18n/L10n.h"
 #include "net/IHttpClient.h"
+#include "translators/LlmRequest.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QUrl>
 
 namespace studious::llm {
 namespace {
 
-// baseUrl 末尾允许带斜杠，".../v1/" 与 ".../v1" 都要能拼出正确的路径。
-QString endpointFor(const QString &baseUrl, const QString &path)
-{
-    QString base = baseUrl.trimmed();
-    while (base.endsWith(QLatin1Char('/'))) {
-        base.chop(1);
-    }
-    return base + path;
-}
+// endpoint 拼接、Bearer 头、错误文案全部来自 translators/LlmRequest.h：
+// 这个文件只管"模型目录 / 能力"这一层，不再自己拼一遍 HTTP 细节。
+// 以前这里有一份 endpointFor() + describeFailure() + 手写 Authorization，
+// 与 LlmTranslator 各说各话（同一个 401 两处措辞不同）。
 
-// 把 HTTP 层失败翻译成中文。4xx 优先贴服务端 body——网关通常在那里写明原因，
-// 比只给状态码有用（Qt 遇到非 2xx 只会报 "网络错误(203)"，没有细节）。
-QString describeFailure(const net::HttpResponse &resp)
-{
-    switch (resp.status) {
-    case 401:
-        return i18n::s("API Key 无效或已过期（401）",
-                       "The API key is invalid or has expired (401).");
-    case 402:
-        return i18n::s("账户余额不足（402）", "The account has insufficient credit (402).");
-    case 403:
-        return i18n::s("无访问权限（403）", "Access denied (403).");
-    case 404:
-        return i18n::s("接口不存在（404）：请检查 Base URL 是否以 /v1 结尾",
-                       "Endpoint not found (404). Check that the base URL ends with /v1.");
-    case 429:
-        return i18n::s("请求过于频繁（429），请稍后重试",
-                       "Too many requests (429). Please try again later.");
-    default:
-        break;
-    }
-    if (resp.status >= 500) {
-        return i18n::sf("服务端错误（%1）", "Server error (%1).", {resp.status});
-    }
-    const QString body = QString::fromUtf8(resp.body.left(200)).trimmed();
-    if (!body.isEmpty()) {
-        return resp.error.isEmpty() ? body
-                                    : (resp.error + i18n::s("：", ": ") + body);
-    }
-    return resp.error.isEmpty() ? i18n::s("请求失败", "The request failed") : resp.error;
-}
-
+// GET 类请求（/models）：只带 Accept，不带 body。
 net::HttpRequest makeRequest(const config::LlmConfig &cfg,
                              const QString &path,
                              int timeoutMs)
 {
     net::HttpRequest req;
-    req.url = QUrl(endpointFor(cfg.baseUrl, path));
+    req.url = translate::apiUrl(cfg.baseUrl, path);
     req.method = QByteArrayLiteral("GET");
     req.timeoutMs = timeoutMs;
     req.headers.append(qMakePair(QByteArrayLiteral("Accept"),
                                  QByteArrayLiteral("application/json")));
-    const QString key = cfg.apiKey.trimmed();
-    if (!key.isEmpty()) {
-        req.headers.append(qMakePair(QByteArrayLiteral("Authorization"),
-                                     QByteArrayLiteral("Bearer ") + key.toUtf8()));
-    }
+    translate::appendAuthorization(req, cfg.apiKey);
     return req;
 }
 
@@ -137,7 +97,7 @@ ModelListResult listModels(const config::LlmConfig &cfg, net::IHttpClient &http)
 
     const net::HttpResponse resp = http.send(makeRequest(cfg, QStringLiteral("/models"), 15000));
     if (!resp.ok) {
-        out.error = describeFailure(resp);
+        out.error = translate::describeHttpFailure(resp);
         return out;
     }
 
@@ -217,28 +177,21 @@ ReasoningProbeResult probeReasoning(const config::LlmConfig &cfg, net::IHttpClie
     messages.append(sys);
     messages.append(user);
 
-    QJsonObject payload;
-    payload.insert(QStringLiteral("model"), cfg.model.trimmed());
-    payload.insert(QStringLiteral("messages"), messages);
-    payload.insert(QStringLiteral("temperature"), 0.0);
-    payload.insert(QStringLiteral("max_tokens"), 256);
-    payload.insert(QStringLiteral("stream"), false);
-    // 探测的正是"关闭思考"这条路：两个字段都带上（实测网关两种都认）。
-    payload.insert(QStringLiteral("reasoning_effort"), QStringLiteral("none"));
-    QJsonObject thinking;
-    thinking.insert(QStringLiteral("type"), QStringLiteral("disabled"));
-    payload.insert(QStringLiteral("thinking"), thinking);
+    // 探测的正是"关闭思考"这条路：reasoning_effort=none + Anthropic 的 thinking=disabled。
+    // 请求体 / 鉴权 / 超时都走翻译用的同一个构造器，否则"翻译能通、探测 401"这类
+    // 问题会一直存在（以前这里是各拼一套，只有探测多带了 Accept）。
+    translate::ChatRequestOverrides overrides;
+    overrides.timeoutMs = 60000;             // 探测固定等 60s，不跟随用户的翻译超时
+    overrides.firstByteTimeoutMs = 0;        // 也不设首字节门槛（探测只看最终返回）
+    overrides.reasoningEffort = QStringLiteral("none");
 
-    net::HttpRequest req = makeRequest(cfg, QStringLiteral("/chat/completions"), 60000);
-    req.method = QByteArrayLiteral("POST");
-    req.body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
-    req.headers.append(qMakePair(QByteArrayLiteral("Content-Type"),
+    net::HttpRequest req = translate::makeChatRequest(cfg, messages, 256, 0.0, overrides);
+    req.headers.append(qMakePair(QByteArrayLiteral("Accept"),
                                  QByteArrayLiteral("application/json")));
-    // makeRequest 加的是 Accept，GET/POST 都要 Content-Type，这里补上即可。
 
     const net::HttpResponse resp = http.send(req);
     if (!resp.ok) {
-        out.error = describeFailure(resp);
+        out.error = translate::describeHttpFailure(resp);
         return out;
     }
 

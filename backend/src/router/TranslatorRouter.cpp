@@ -335,9 +335,16 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
 
         const QStringList bad = unsupportedDsts(t);
         if (!bad.isEmpty()) {
-            out.error = i18n::sf("指定的引擎 %1 不支持目标语言: %2",
-                                 "The requested engine %1 does not support these target languages: %2",
-                                 {wanted, bad.join(QStringLiteral(", "))});
+            // "不支持目标语言"只说对了一半：本地 MT 这里多半是**源语言**读不了
+            // （mul-en 词表里没有 ko），说成目标语言会让人以为 en 不可用。
+            const core::ResolveResult rr = t->resolve(src, bad.first());
+            out.error = rr.reason.isEmpty()
+                            ? i18n::sf("指定的引擎 %1 不支持目标语言: %2",
+                                       "The requested engine %1 does not support these target languages: %2",
+                                       {wanted, bad.join(QStringLiteral(", "))})
+                            : i18n::sf("指定的引擎 %1 翻不了这个方向：%2%3",
+                                       "The requested engine %1 cannot handle this direction: %2%3",
+                                       {wanted, rr.reason, assetsSuffix(rr)});
             return out;
         }
 

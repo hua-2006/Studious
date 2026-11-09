@@ -348,13 +348,16 @@ ManifestLoadResult parseManifest(const QByteArray &rawJson, const ManifestVerify
                                       "manifest"));
         }
         // 走到这里说明调用方主动关了验签（开发期 qrc 清单 / 手工构造的清单）。
-        // 不能静默：日志里必须能看出"这份清单没被密码学校验过"。
-        const QString warning =
-            i18n::s("清单未验签：调用方关闭了 requireSignature，清单内容未经密码学校验，"
-                    "请勿在生产环境使用",
-                    "Manifest is NOT signature-verified: the caller disabled requireSignature, so "
-                    "the manifest content is unauthenticated; do not use this in production");
-        qWarning("%s", qUtf8Printable(warning));
+        // 开发期一定要留痕；正式包内置的清单同样没签名，但那是已知状态，
+        // 由调用方通过 warnWhenUnsigned 决定要不要每次启动都刷一行。
+        if (opts.warnWhenUnsigned) {
+            const QString warning =
+                i18n::s("清单未验签：调用方关闭了 requireSignature，清单内容未经密码学校验，"
+                        "请勿在生产环境使用",
+                        "Manifest is NOT signature-verified: the caller disabled requireSignature, so "
+                        "the manifest content is unauthenticated; do not use this in production");
+            qWarning("%s", qUtf8Printable(warning));
+        }
     } else if (trustKey.size() == 32) {
         // 签名覆盖字节：payload 的 Compact 序列化（QJsonObject 按 key 排序，确定性可保证）。
         const QByteArray signedBytes = QJsonDocument(payload).toJson(QJsonDocument::Compact);

@@ -11,7 +11,11 @@ Rectangle {
     // code -> 颜色（Theme.good / Theme.caution / Theme.danger 之类）。
     // 给了就在标签左边画一个 6px 圆点；不给就完全不画，其它页面用法不变。
     property var badges: ({})
+    // 这些 code 不给选：标签压暗、点了不发 selected，而是发 blocked(code)。
+    // 让调用方决定"为什么不能选"怎么说（通常是缺资产，需要指路去资产页）。
+    property var blockedCodes: []
     signal selected(string code)
+    signal blocked(string code)
 
     implicitWidth: row.implicitWidth + Theme.s1 * 2
     implicitHeight: 32 + Theme.s1 * 2
@@ -81,6 +85,8 @@ Rectangle {
                 readonly property bool badgeShown: segBtn.badgeEntry !== undefined
                                                    && segBtn.badgeEntry !== null
                                                    && segBtn.badgeEntry !== ""
+                // 缺资产这类"点了也没用"的项：压暗，但仍然可点（用来解释为什么不行）。
+                readonly property bool isBlocked: seg.blockedCodes.indexOf(segBtn.modelData.code) >= 0
 
                 // 圆点 + 间距也算进宽度，否则圆点会把标签挤偏。
                 Layout.fillHeight: true
@@ -114,6 +120,7 @@ Rectangle {
                         font.weight: seg.current === segBtn.modelData.code ? Font.DemiBold : Font.Normal
                         color: seg.current === segBtn.modelData.code
                                ? Theme.primaryContainerText : Theme.inkVariant
+                        opacity: segBtn.isBlocked ? 0.42 : 1.0
                     }
                 }
 
@@ -121,6 +128,11 @@ Rectangle {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
+                        // 不能选的项也接点击：调用方要用它弹一句"还差什么"。
+                        if (segBtn.isBlocked) {
+                            seg.blocked(segBtn.modelData.code)
+                            return
+                        }
                         if (seg.current !== segBtn.modelData.code) {
                             seg.current = segBtn.modelData.code
                             seg.selected(segBtn.modelData.code)

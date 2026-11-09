@@ -17,7 +17,14 @@
 namespace studious::platform {
 
 // 抓取矩形，物理像素坐标，允许负值（副屏在主屏左侧时 x 为负）
-struct CaptureRect { int x, y, width, height; };
+// 带默认初值：抓屏失败路径会把「没填过」的 CaptureRect 直接返回给调用方，
+// 不留初值就是一路带着栈垃圾走（见 memsafety #10）。
+struct CaptureRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
 
 enum class PlatformStatus { Ok, Unsupported, Denied, Failed };
 
@@ -49,7 +56,7 @@ struct MonitorInfo {
 struct CaptureResult {
     PlatformStatus status = PlatformStatus::Unsupported;
     QImage image;
-    CaptureRect rect;
+    CaptureRect rect {};
     qreal devicePixelRatio = 1.0;
     QString error;
 };
