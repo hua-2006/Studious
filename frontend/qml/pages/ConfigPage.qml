@@ -1831,6 +1831,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 120
                             radius: Theme.rMd
+                            // 深色主题下不带底色的 Rectangle 是纯白方块（Rectangle 的默认 color）
+                            color: Theme.surfaceLow
                             border.width: 1
                             border.color: Theme.outlineVariant
                             clip: true
@@ -1851,6 +1853,9 @@ Item {
                                     width: Math.max(logFlick.width, implicitWidth)
                                     readOnly: true
                                     selectByMouse: true
+                                    color: Theme.inkVariant
+                                    font.family: Theme.fontMono
+                                    font.pixelSize: Theme.fontSizeSmall
                                     text: backend.localLogTail.length > 0 ? backend.localLogTail : qsTr("启动本地 llama-server 后，这里显示它最近的输出。")
                                     selectionColor: Theme.primaryContainer
                                     selectedTextColor: Theme.primaryContainerText
