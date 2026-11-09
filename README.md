@@ -66,7 +66,7 @@ Studious 是一个桌面翻译工具，围绕「**你正在看的东西**」而�
 
 **用打包好的绿色版**（免安装，解压即用）：
 
-从 [Releases](https://github.com/hua-2006/translator/releases) 下载 `Studious-<版本>-win64.zip`，解压到任意目录，双击 `studious.exe`。
+从 [Releases](https://github.com/hua-2006/Studious/releases) 下载 `Studious-<版本>-win64.zip`，解压到任意目录，双击 `studious.exe`。
 
 > 模型和 llama runtime 不随包分发（体积太大）。首次运行「本地 MT / 本地 LLM」会显示未装，去「设置 → 资产」按需下载；云端引擎需要自己填 API 地址与 Key。
 
@@ -190,7 +190,7 @@ studious.exe --asset-download backend\asset\manifest.json <assetId>
 
 版本号与渠道名读仓库根的 `version.json`，提交号构建期从 git 取。发版只需要改 `version.json` 再打一个 `vX.Y.Z` 标签。当前 `1.1.1`，版名 **Erstling**。
 
-变更历史见 [Releases](https://github.com/hua-2006/translator/releases)；待做项与已知缺口见 [`TODO.md`](TODO.md)。
+变更历史见 [Releases](https://github.com/hua-2006/Studious/releases)；待做项与已知缺口见 [`TODO.md`](TODO.md)。
 
 ## 已知限制
 
