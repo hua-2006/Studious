@@ -36,7 +36,9 @@ Window {
     title: qsTr("小窗翻译")
 
     // 译文正文字号：只作用于译文/原文正文，控件字号另有 Theme.fontScale 统一缩放。
-    readonly property int readingPx: Math.max(11, Math.round(backend.readingFontSize * Theme.fontScale))
+    // 用 miniFontSize 而不是「外观」页的 readingFontSize —— 小窗是扫一眼就走的场景，
+    // 字号要单独调，默认也比正文大一档。
+    readonly property int readingPx: Math.max(11, Math.round(backend.miniFontSize * Theme.fontScale))
 
     readonly property color ink: Theme.ink
     readonly property color inkVariant: Theme.inkVariant

@@ -117,118 +117,146 @@
 <context>
     <name>CaptureOverlay</name>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="121"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="133"/>
         <source>云端</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="123"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="135"/>
         <source>本地 LLM</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="125"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="137"/>
         <source>本地 MT</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="127"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="139"/>
         <source>自动</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="194"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="206"/>
         <source>截屏翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="403"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="415"/>
         <source>光标不在画面内</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="570"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="582"/>
         <source>识别中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="570"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="582"/>
         <source>翻译中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="586"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="598"/>
         <source>取消 Esc</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="609"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="621"/>
         <source>没有翻译成功</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="749"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="831"/>
         <source>已选 %1 × %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="752"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="834"/>
         <source>失败</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="753"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="835"/>
         <source>处理中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="753"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="835"/>
         <source>译文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="826"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="908"/>
         <source>设置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="884"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="932"/>
+        <source>复制 %1 块</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="969"/>
         <source>开始实时翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="877"/>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="885"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1214"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1229"/>
+        <source>已复制 %1 块</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1214"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1229"/>
+        <source>已复制</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1219"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1241"/>
+        <source>已复制整屏</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1236"/>
+        <source>已复制选中文字</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="962"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="970"/>
         <source>重新翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="885"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="970"/>
         <source>翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="863"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="948"/>
         <source>重新框选</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="843"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="925"/>
         <source>显示译文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="843"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="925"/>
         <source>显示原文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="848"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="933"/>
         <source>复制</source>
         <translation>复制</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/CaptureOverlay.qml" line="929"/>
+        <location filename="../qml/overlay/CaptureOverlay.qml" line="1014"/>
         <source>选区宽或高为 0，请重新框选</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1206,77 +1234,77 @@
 <context>
     <name>LiveControlBar</name>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="164"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="183"/>
         <source>已暂停</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="165"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="184"/>
         <source>运行中</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="165"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="184"/>
         <source>准备中</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="193"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="212"/>
         <source>已中断：识别失败</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="180"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="199"/>
         <source>已更新 %1 次</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="294"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="313"/>
         <source>译文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="300"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="319"/>
         <source>原文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="323"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="342"/>
         <source>继续</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="323"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="342"/>
         <source>暂停</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="330"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="349"/>
         <source>重新开始</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="315"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="334"/>
         <source>解锁选区</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="315"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="334"/>
         <source>锁定选区</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="269"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="288"/>
         <source>设置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="347"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="367"/>
         <source>刷新</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="487"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="521"/>
         <source>自动</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1416,189 +1444,189 @@
     <name>MiniWindow</name>
     <message>
         <location filename="../qml/overlay/MiniWindow.qml" line="36"/>
-        <location filename="../qml/overlay/MiniWindow.qml" line="154"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="156"/>
         <source>小窗翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="64"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="66"/>
         <source>自动检测</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="75"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="77"/>
         <source>选择目标语言</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="156"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="158"/>
         <source>实时翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="157"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="159"/>
         <source>截屏翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="171"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="173"/>
         <source>（空）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="284"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="286"/>
         <source>已保存到记录。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="285"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="287"/>
         <source>没存进去：历史对话是关着的，去「设置 · 缓存」里打开。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="369"/>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1009"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="371"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1011"/>
         <source>翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="370"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="372"/>
         <source>记录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="421"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="423"/>
         <source>置顶</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="445"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="447"/>
         <source>设置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="595"/>
-        <location filename="../qml/overlay/MiniWindow.qml" line="959"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="597"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="961"/>
         <source>划词获取</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="595"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="597"/>
         <source>手动输入</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="645"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="647"/>
         <source>输入或粘贴要翻译的文本</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="657"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="659"/>
         <source>%1 字 · %2 段</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="741"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="743"/>
         <source>正在翻译…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="758"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="760"/>
         <source>没有翻译成功</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="917"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="919"/>
         <source>%1 ms</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="924"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="926"/>
         <source>· %1 段</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="939"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="941"/>
         <source>全部复制</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="981"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="983"/>
         <source>清空</source>
         <translation>清空</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1008"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1010"/>
         <source>取消</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1009"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1011"/>
         <source>重新翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1042"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1044"/>
         <source>最近 %1 条</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1055"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1057"/>
         <source>刷新</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1069"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1071"/>
         <source>时间</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1076"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1078"/>
         <source>来源</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1083"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1085"/>
         <source>摘要</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1175"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1177"/>
         <source>%1 · %2</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1188"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1190"/>
         <source>复制原文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1189"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1191"/>
         <source>复制翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1217"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1219"/>
         <source>已复制</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1218"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1220"/>
         <source>复制失败：剪贴板不可用</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1224"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1226"/>
         <source>关闭</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1255"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1257"/>
         <source>还没有记录。翻译完成会自动存下来。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/MiniWindow.qml" line="1256"/>
+        <location filename="../qml/overlay/MiniWindow.qml" line="1258"/>
         <source>历史对话是关着的。去「设置 · 缓存」里打开「保存翻译历史」。</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1612,7 +1640,7 @@
     </message>
     <message>
         <location filename="../qml/pages/OverlayPage.qml" line="57"/>
-        <source>三个浮层共用的观感在上半页；每个入口各自的开关在下面「按功能设置」里切换。</source>
+        <source>三个浮层共用的观感在上半页；每个入口各自的开关在下面「功能设置」里切换。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1722,32 +1750,27 @@
     </message>
     <message>
         <location filename="../qml/pages/OverlayPage.qml" line="224"/>
-        <source>按功能设置</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="230"/>
-        <source>小窗口</source>
+        <source>功能设置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/OverlayPage.qml" line="231"/>
-        <source>截图翻译</source>
+        <source>小窗口</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/OverlayPage.qml" line="232"/>
+        <source>截图翻译</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/OverlayPage.qml" line="233"/>
         <source>实时翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/OverlayPage.qml" line="170"/>
         <source>边界颜色跟着强调色走。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/pages/OverlayPage.qml" line="225"/>
-        <source>小窗口、截图翻译、实时翻译各自的开关，和浮层里「设置」里的是同一套。</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -1774,110 +1797,121 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="124"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="142"/>
         <source>选完直接翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="126"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="144"/>
         <source>关掉就是二次确认：框完自己点工具栏上的「翻译」。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="153"/>
-        <source>保留原文标注</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="155"/>
-        <source>译文条上方留一条薄薄的原文，便于核对。</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="182"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="171"/>
         <source>翻译完自动复制</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="184"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="173"/>
         <source>出结果就把整段译文放进剪贴板。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="209"/>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="336"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="227"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="354"/>
         <source>译文不透明度</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="223"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="241"/>
         <source>越低越能看见底下的原图。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="226"/>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="351"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="244"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="369"/>
         <source>译文字号</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="234"/>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="359"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="121"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="252"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="377"/>
         <source> px</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="240"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="113"/>
+        <source>字号</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="127"/>
+        <source>只作用于小窗里的译文正文，不影响翻译页和另外两个浮层。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="200"/>
+        <source>复制后关闭</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="202"/>
+        <source>点工具栏上的「复制」之后立刻收起浮层，不再等核对。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="258"/>
         <source>按行高自动收一点，行太窄时不会再缩小到看不清。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="243"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="261"/>
         <source>复制后延迟关闭</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="251"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="269"/>
         <source> 秒</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="257"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="275"/>
         <source>0 = 复制完立刻收浮层。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="270"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="288"/>
         <source>刷新间隔</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="278"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="296"/>
         <source> 毫秒</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="285"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="303"/>
         <source>每帧之间等多久。太短会让引擎一直忙，太长就不像实时了。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="290"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="308"/>
         <source>只在内容变化时翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="292"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="310"/>
         <source>画面没变就不重新翻译。关掉后每帧都会重新请求，比较费。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="319"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="337"/>
         <source>区域底色</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="333"/>
+        <location filename="../qml/overlay/OverlaySettingsGroups.qml" line="351"/>
         <source>整块选区铺一层底色的浓度；0 = 不铺底，只留译文。</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1885,7 +1919,7 @@
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../src/LiveSession.cpp" line="348"/>
+        <location filename="../src/LiveSession.cpp" line="351"/>
         <source>抓屏失败。</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2863,8 +2897,8 @@
     </message>
     <message>
         <location filename="../src/LiveSession.cpp" line="161"/>
-        <location filename="../src/LiveSession.cpp" line="630"/>
-        <location filename="../src/LiveSession.cpp" line="659"/>
+        <location filename="../src/LiveSession.cpp" line="646"/>
+        <location filename="../src/LiveSession.cpp" line="675"/>
         <source>当前环境没有可用的抓屏后端。</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2895,92 +2929,92 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="276"/>
+        <location filename="../src/LiveSession.cpp" line="279"/>
         <source>正在刷新…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="412"/>
+        <location filename="../src/LiveSession.cpp" line="415"/>
         <source>抓屏失败。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="434"/>
+        <location filename="../src/LiveSession.cpp" line="439"/>
         <source>这一帧没有文字（已连续 %1 帧）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="452"/>
+        <location filename="../src/LiveSession.cpp" line="462"/>
         <source>画面未变 · 已更新 %1 次</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="460"/>
+        <location filename="../src/LiveSession.cpp" line="470"/>
         <source>引擎忙，等下一帧 · 已更新 %1 次</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="490"/>
+        <location filename="../src/LiveSession.cpp" line="500"/>
         <source>翻译没发出去：%1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="496"/>
+        <location filename="../src/LiveSession.cpp" line="506"/>
         <source>正在翻译 %1 行…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="524"/>
+        <location filename="../src/LiveSession.cpp" line="534"/>
         <source>本地 LLM 正在启动，稍后自动重试…</source>
         <translation>本地 LLM 正在启动，稍后自动重试…</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="527"/>
+        <location filename="../src/LiveSession.cpp" line="537"/>
         <source>翻译失败：%1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="569"/>
+        <location filename="../src/LiveSession.cpp" line="579"/>
         <source>当前引擎每次约 %1 秒，实时效果受限</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="574"/>
+        <location filename="../src/LiveSession.cpp" line="584"/>
         <source>已更新 %1 次 · %2 行 · %3 ms</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="605"/>
+        <location filename="../src/LiveSession.cpp" line="621"/>
         <source>已复制 %1 行</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="626"/>
+        <location filename="../src/LiveSession.cpp" line="642"/>
         <source>译文浮层窗口无效。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="641"/>
+        <location filename="../src/LiveSession.cpp" line="657"/>
         <source>译文浮层不能点击穿透。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="645"/>
+        <location filename="../src/LiveSession.cpp" line="661"/>
         <source>译文浮层不能排除在截图之外。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="655"/>
+        <location filename="../src/LiveSession.cpp" line="671"/>
         <source>控制条窗口无效。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="670"/>
+        <location filename="../src/LiveSession.cpp" line="686"/>
         <source>控制条不能接收点击。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="796"/>
+        <location filename="../src/LiveSession.cpp" line="835"/>
         <source>译文浮层摆不到选区上。</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3026,67 +3060,67 @@
 <context>
     <name>studious::ui::ScreenFlow</name>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="103"/>
+        <location filename="../src/ScreenFlow.cpp" line="116"/>
         <source>翻译失败。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="160"/>
+        <location filename="../src/ScreenFlow.cpp" line="179"/>
         <source>等待本地 LLM 启动（第 %1 次重试）…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="236"/>
+        <location filename="../src/ScreenFlow.cpp" line="255"/>
         <source>缺少 OCR 模型：%1，去资产页下载。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="349"/>
+        <location filename="../src/ScreenFlow.cpp" line="368"/>
         <source>这个平台不支持截屏。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="360"/>
+        <location filename="../src/ScreenFlow.cpp" line="379"/>
         <source>抓屏失败。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="376"/>
+        <location filename="../src/ScreenFlow.cpp" line="395"/>
         <source>%1 × %2 · 拖拽框选要翻译的区域</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="390"/>
+        <location filename="../src/ScreenFlow.cpp" line="409"/>
         <source>选区宽或高为 0，请重新框选。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="394"/>
+        <location filename="../src/ScreenFlow.cpp" line="413"/>
         <source>没有抓到屏幕内容，请重新开始。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="409"/>
+        <location filename="../src/ScreenFlow.cpp" line="428"/>
         <source>选区不在屏幕内。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="420"/>
+        <location filename="../src/ScreenFlow.cpp" line="439"/>
         <source>识别中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="455"/>
+        <location filename="../src/ScreenFlow.cpp" line="474"/>
         <source>识别失败：该区域没有检测到文字。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="532"/>
+        <location filename="../src/ScreenFlow.cpp" line="559"/>
         <source>翻译中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="615"/>
+        <location filename="../src/ScreenFlow.cpp" line="648"/>
         <source>已取消。</source>
         <translation type="unfinished"></translation>
     </message>

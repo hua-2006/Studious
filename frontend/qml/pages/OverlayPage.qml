@@ -7,14 +7,14 @@ import Studious
 //
 // 边界划在这里：
 //   · 上半页是三个浮层共用的：放大镜、遮罩压暗、方向键微调；
-//   · 下半页「按功能设置」用分段切换，分别放小窗口 / 截图翻译 / 实时翻译
+//   · 下半页「功能设置」用分段切换，分别放小窗口 / 截图翻译 / 实时翻译
 //     各自的开关 —— 这些值和浮层里那颗「设置」打开的面板是同一份后端属性，
 //     改哪边都一样，不存在两套；
 //   · 截图 / 实时 / 小窗的热键归「快捷键」页。
 Item {
     id: page
 
-    // 「按功能设置」当前选中的入口：mini / capture / live。
+    // 「功能设置」当前选中的入口：mini / capture / live。
     property string funcTab: "mini"
 
     objectName: "overlayPage"
@@ -54,7 +54,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("三个浮层共用的观感在上半页；每个入口各自的开关在下面「按功能设置」里切换。")
+                    text: qsTr("三个浮层共用的观感在上半页；每个入口各自的开关在下面「功能设置」里切换。")
                     wrapMode: Text.WordWrap
                     font.family: Theme.fontUi
                     font.pixelSize: Theme.fontSizeBody
@@ -214,18 +214,19 @@ Item {
                 }
             }
 
-            // ------------------------------------------------------------ 按功能
+            // ------------------------------------------------------------ 功能设置
             // 三个浮层各自的设置集中在这里：分段切换，值就是浮层里那颗「设置」
             // 打开的面板里那几项，改哪边都一样（同一个后端属性）。
             SectionCard {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.s6
                 Layout.rightMargin: Theme.s6
-                title: qsTr("按功能设置")
-                hint: qsTr("小窗口、截图翻译、实时翻译各自的开关，和浮层里「设置」里的是同一套。")
+                title: qsTr("功能设置")
 
                 Segmented {
                     Layout.fillWidth: true
+                    // 三项等分整条：标签栏式排版，选中胶囊占满三分之一。
+                    stretch: true
                     items: [
                         { code: "mini", label: qsTr("小窗口") },
                         { code: "capture", label: qsTr("截图翻译") },

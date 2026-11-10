@@ -153,11 +153,12 @@ struct AppSettings {
     // 翻译完成后自动复制译文 / 自动关闭浮层（键 settings/capture/autoCopy、autoHide）。
     bool captureAutoCopy = false;
     bool captureAutoHide = true;
-
-    // 浮层外观（键 settings/overlay/opacity 40~100、fontSize 10~20、keepOriginal）。
+    // 点工具栏那颗「复制」之后立刻收起浮层（键 settings/capture/copyAndClose，默认关）。
+    // 默认关是因为很多人复制完还要对着屏幕核对一遍；开了就是"拿到字就走"。
+    bool captureCopyClose = false;
+    // 浮层外观（键 settings/overlay/opacity 40~100、fontSize 10~20）。
     int overlayOpacity = 96;
     int overlayFontSize = 13;
-    bool overlayKeepOriginal = false;
     // 放大镜的缩放倍率（2~8）。不写死在 QML 里，设置页以后直接改这里。
     int overlayZoom = 3;
     // 放大镜开关与落点（键 settings/overlay/magnifier、magnifierCorner）。
@@ -185,6 +186,11 @@ struct AppSettings {
 
     // 小窗是否置顶（键 settings/mini/alwaysOnTop，默认 true）。
     bool miniAlwaysOnTop = true;
+
+    // 小窗正文字号（键 settings/mini/fontSize，11~28，默认 17）。
+    // 和「外观」页的正文阅读字号（readingFontSize）分开：小窗是扫一眼就走的场景，
+    // 默认给它更大的字；改这里不影响翻译页正文。
+    int miniFontSize = 17;
 
     // 实时翻译轮询间隔毫秒（键 settings/live/intervalMs，400~1500，默认 600）。
     // 太小会把引擎压死，太大会看不出"实时"，所以夹得很紧。

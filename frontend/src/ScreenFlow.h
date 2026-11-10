@@ -99,6 +99,12 @@ public:
     Q_INVOKABLE void toggleOriginal();
     Q_INVOKABLE void retranslate();
     Q_INVOKABLE bool copyResult();
+    // 复制浮层里「点选出来的那几块」或「鼠标拖选的一段文字」。
+    // 和 copyResult() 的区别：内容由 QML 拼好传进来（块是按用户勾选的顺序/位置拼，
+    // 拖选是 TextEdit 的 selectedText），这里只管落剪贴板 + 记日志。
+    // closeAfter：只有工具栏那颗「复制」才算"这一屏看完了"，仍受「复制后关闭」开关约束；
+    // 双击复制单块、拖选复制一段都不该把浮层收掉。
+    Q_INVOKABLE bool copyText(const QString &text, bool closeAfter = false);
     Q_INVOKABLE bool saveToRecords(const QString &source = QStringLiteral("capture"));
 
     // 给 QML 画布用的原图（整屏，物理像素）。QML 用 Image { source: "" } 画不了 QImage，

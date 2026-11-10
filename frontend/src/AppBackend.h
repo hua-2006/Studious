@@ -229,6 +229,8 @@ class AppBackend : public QObject {
     Q_PROPERTY(bool minimizeToTray READ minimizeToTray WRITE setMinimizeToTray NOTIFY prefsChanged)
     // 小窗翻译是否置顶（键 settings/mini/alwaysOnTop）。窗口的 flags 直接绑这个属性。
     Q_PROPERTY(bool miniAlwaysOnTop READ miniAlwaysOnTop WRITE setMiniAlwaysOnTop NOTIFY prefsChanged)
+    // 小窗正文字号（11~28）：只作用于小窗翻译，和「外观」页的正文阅读字号互不影响。
+    Q_PROPERTY(int miniFontSize READ miniFontSize WRITE setMiniFontSize NOTIFY prefsChanged)
     Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY prefsChanged)
     Q_PROPERTY(bool singleInstance READ singleInstance WRITE setSingleInstance NOTIFY prefsChanged)
     // 托盘是否真的装上了（没 shell 的会话 / 非 Windows 为 false），界面据此置灰。
@@ -239,11 +241,11 @@ class AppBackend : public QObject {
     Q_PROPERTY(bool captureAutoRun READ captureAutoRun WRITE setCaptureAutoRun NOTIFY prefsChanged)
     Q_PROPERTY(bool captureAutoCopy READ captureAutoCopy WRITE setCaptureAutoCopy NOTIFY prefsChanged)
     Q_PROPERTY(bool captureAutoHide READ captureAutoHide WRITE setCaptureAutoHide NOTIFY prefsChanged)
+    // 点工具栏「复制」后立刻收浮层（默认关）——复制完还想核对的人不该被抢走窗口。
+    Q_PROPERTY(bool captureCopyClose READ captureCopyClose WRITE setCaptureCopyClose NOTIFY prefsChanged)
     // 译文底色的不透明度（40~100，百分比）与字号（10~20 px）。
     Q_PROPERTY(int overlayOpacity READ overlayOpacity WRITE setOverlayOpacity NOTIFY prefsChanged)
     Q_PROPERTY(int overlayFontSize READ overlayFontSize WRITE setOverlayFontSize NOTIFY prefsChanged)
-    // 译文上方要不要留一行虚线原文。
-    Q_PROPERTY(bool overlayKeepOriginal READ overlayKeepOriginal WRITE setOverlayKeepOriginal NOTIFY prefsChanged)
     // 选区放大镜的倍率（2~8 倍），设置页以后直接改这个值。
     Q_PROPERTY(int overlayZoom READ overlayZoom WRITE setOverlayZoom NOTIFY prefsChanged)
     Q_PROPERTY(bool overlayMagnifier READ overlayMagnifier WRITE setOverlayMagnifier NOTIFY prefsChanged)
@@ -461,12 +463,12 @@ public:
     void setCaptureAutoCopy(bool on);
     bool captureAutoHide() const { return m_captureAutoHide; }
     void setCaptureAutoHide(bool on);
+    bool captureCopyClose() const { return m_captureCopyClose; }
+    void setCaptureCopyClose(bool on);
     int overlayOpacity() const { return m_overlayOpacity; }
     void setOverlayOpacity(int percent);
     int overlayFontSize() const { return m_overlayFontSize; }
     void setOverlayFontSize(int px);
-    bool overlayKeepOriginal() const { return m_overlayKeepOriginal; }
-    void setOverlayKeepOriginal(bool on);
     int overlayZoom() const { return m_overlayZoom; }
     void setOverlayZoom(int times);
     bool overlayMagnifier() const { return m_overlayMagnifier; }
@@ -501,6 +503,8 @@ public:
     void setMinimizeToTray(bool on);
     bool miniAlwaysOnTop() const { return m_miniAlwaysOnTop; }
     void setMiniAlwaysOnTop(bool on);
+    int miniFontSize() const { return m_miniFontSize; }
+    void setMiniFontSize(int px);
     bool closeToTray() const { return m_closeToTray; }
     void setCloseToTray(bool on);
     bool singleInstance() const { return m_singleInstance; }
@@ -825,9 +829,9 @@ private:
     bool m_captureAutoRun = false;
     bool m_captureAutoCopy = false;
     bool m_captureAutoHide = true;
+    bool m_captureCopyClose = false;
     int m_overlayOpacity = 96;
     int m_overlayFontSize = 13;
-    bool m_overlayKeepOriginal = false;
     int m_overlayZoom = 3;
     bool m_overlayMagnifier = true;
     QString m_magnifierCorner = QStringLiteral("bottomRight");
@@ -842,6 +846,7 @@ private:
     bool m_historyEnabled = false;
     bool m_minimizeToTray = false;
     bool m_miniAlwaysOnTop = true;
+    int m_miniFontSize = 17;
     bool m_closeToTray = false;
     bool m_singleInstance = true;
     bool m_duplicateInstance = false;

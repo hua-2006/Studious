@@ -80,9 +80,9 @@ AppSettings AppSettings::defaults()
     s.captureAutoRun = false;       // 默认还要点一次「翻译」，防止误触就烧 token
     s.captureAutoCopy = false;      // 别偷偷改剪贴板
     s.captureAutoHide = true;       // 翻完就收起浮层，视线不被挡住
+    s.captureCopyClose = false;     // 点「复制」默认不关，留着让人核对
     s.overlayOpacity = 96;          // 96% 还能透一点原来的行距，100% 更像贴纸
     s.overlayFontSize = 13;
-    s.overlayKeepOriginal = false;
     s.overlayZoom = 3;                 // 3 倍左右刚好：看得清字，又不至于只剩几个像素
     s.overlayMagnifier = true;      // 拖框时给个放大镜，不然 8px 的字根本对不准
     s.magnifierCorner = QStringLiteral("bottomRight");   // 光标右下角，离内容最远
@@ -91,6 +91,7 @@ AppSettings AppSettings::defaults()
     s.overlayArrowNudge = true;     // 鼠标到 1px 很难，方向键补位
     s.overlayAutoHideDelay = 0;     // 0 = 复制完立刻收
     s.miniAlwaysOnTop = true;
+    s.miniFontSize = 17;            // 小窗比正文大一档，扫一眼能看清
     s.liveIntervalMs = 600;         // 400 太快，本地 MT 跟不上
     s.liveOnlyOnChange = true;      // 内容没变就不重翻，省一次引擎调用
     // 热键默认空（用户自己录），见 AppSettings.h 的说明。
@@ -284,9 +285,9 @@ AppSettings AppSettings::load()
     s.captureAutoRun = store.value(key("capture/autoRunOnSelect"), def.captureAutoRun).toBool();
     s.captureAutoCopy = store.value(key("capture/autoCopy"), def.captureAutoCopy).toBool();
     s.captureAutoHide = store.value(key("capture/autoHide"), def.captureAutoHide).toBool();
+    s.captureCopyClose = store.value(key("capture/copyAndClose"), def.captureCopyClose).toBool();
     s.overlayOpacity = clampedInt(store.value(key("overlay/opacity"), def.overlayOpacity).toInt(), 40, 100);
     s.overlayFontSize = clampedInt(store.value(key("overlay/fontSize"), def.overlayFontSize).toInt(), 10, 20);
-    s.overlayKeepOriginal = store.value(key("overlay/keepOriginal"), def.overlayKeepOriginal).toBool();
     s.overlayZoom = clampedInt(store.value(key("overlay/zoom"), def.overlayZoom).toInt(), 2, 8);
     s.overlayMagnifier = store.value(key("overlay/magnifier"), def.overlayMagnifier).toBool();
     // 四角枚举只认四个值，写错的（手改注册表、旧版本遗留）一律回默认，免得 QML 里算坐标时全靠 if 兜底。
@@ -302,6 +303,7 @@ AppSettings AppSettings::load()
     s.historyEnabled = store.value(key("history/enabled"), def.historyEnabled).toBool();
     s.historyDir = store.value(key("history/dir"), def.historyDir).toString().trimmed();
     s.miniAlwaysOnTop = store.value(key("mini/alwaysOnTop"), def.miniAlwaysOnTop).toBool();
+    s.miniFontSize = clampedInt(store.value(key("mini/fontSize"), def.miniFontSize).toInt(), 11, 28);
     s.liveIntervalMs = clampedInt(store.value(key("live/intervalMs"), def.liveIntervalMs).toInt(), 400, 1500);
     s.liveOnlyOnChange = store.value(key("live/onlyOnChange"), def.liveOnlyOnChange).toBool();
 
@@ -384,9 +386,9 @@ void AppSettings::save() const
     store.setValue(key("capture/autoRunOnSelect"), captureAutoRun);
     store.setValue(key("capture/autoCopy"), captureAutoCopy);
     store.setValue(key("capture/autoHide"), captureAutoHide);
+    store.setValue(key("capture/copyAndClose"), captureCopyClose);
     store.setValue(key("overlay/opacity"), overlayOpacity);       // 40~100
     store.setValue(key("overlay/fontSize"), overlayFontSize);     // 10~20
-    store.setValue(key("overlay/keepOriginal"), overlayKeepOriginal);
     store.setValue(key("overlay/zoom"), overlayZoom);                // 2~8
     store.setValue(key("overlay/magnifier"), overlayMagnifier);
     store.setValue(key("overlay/magnifierCorner"), magnifierCorner);  // bottomRight / bottomLeft / topRight / topLeft
@@ -397,6 +399,7 @@ void AppSettings::save() const
     store.setValue(key("history/enabled"), historyEnabled);
     store.setValue(key("history/dir"), historyDir);                   // 空 = 默认位置
     store.setValue(key("mini/alwaysOnTop"), miniAlwaysOnTop);
+    store.setValue(key("mini/fontSize"), miniFontSize);              // 11~28
     store.setValue(key("live/intervalMs"), liveIntervalMs);       // 400~1500
     store.setValue(key("live/onlyOnChange"), liveOnlyOnChange);
     store.setValue(key("hotkey/capture"), hotkeyCapture);

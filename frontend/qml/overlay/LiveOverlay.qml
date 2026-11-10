@@ -144,37 +144,6 @@ Window {
                     opacity: 0.5
                 }
 
-                // 「保留原文标注」：译文块上方压一条薄原文条。
-                // 与 showOriginal 互斥 —— 两个都开就是「上面一条原文、块里还是原文」，
-                // 同一句出现两遍，纯噪声。
-                Rectangle {
-                    id: originalTag
-
-                    readonly property real tagHeight: Math.max(8, Math.round(plate.fontSize * 0.72))
-
-                    visible: backend.overlayKeepOriginal && !liveSession.showOriginal
-                    x: 0
-                    // 贴着窗口顶边的那几行上方没有空间，翻到块下面，
-                    // 否则负 y 会被窗口裁掉，只留半截字。
-                    y: plate.y >= tagHeight + 2 ? -(tagHeight + 2) : plate.height + 2
-                    width: plate.width
-                    height: tagHeight
-                    radius: Theme.rXs
-                    color: Qt.rgba(Theme.surfaceLow.r, Theme.surfaceLow.g, Theme.surfaceLow.b, 0.82)
-
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.s1
-                        anchors.rightMargin: Theme.s1
-                        verticalAlignment: Text.AlignVCenter
-                        text: plate.modelData.original || ""
-                        color: Theme.inkVariant
-                        font.family: Theme.fontContent
-                        font.pixelSize: Math.max(8, Math.round(plate.fontSize * 0.72))
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
-                    }
-                }
             }
         }
 

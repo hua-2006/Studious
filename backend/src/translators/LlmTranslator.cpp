@@ -12,6 +12,7 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QPair>
+#include <QRegularExpression>
 #include <QSet>
 #include <QElapsedTimer>
 #include <QUrl>
@@ -35,21 +36,45 @@ QString oneLine(const QString &text, int maxChars = 2000)
     return s;
 }
 
+// 界面短文字（菜单项、按钮、标签、状态行）的判据。
+// 实测这类输入是"错误信息"的主要来源：模型把它当成被提问的句子，回
+// 「X 的中文译文是：…」「这句话的意思是…」，或者把 8 个字扩写成一句话。
+// 判据刻意保守（短 + 无句读），只用来切换更硬的提示词，不影响正常段落。
+bool looksLikeUiLabel(const QString &text)
+{
+    const QString t = text.trimmed();
+    if (t.isEmpty() || t.size() > 24) {
+        return false;
+    }
+    // 有句读就是句子：让长句模板去处理（该保留语气、该断句）。
+    static const QString punctuation = QStringLiteral("。！？；，、…—-—()（）!.?;,:");
+    for (const QChar c : punctuation) {
+        if (t.contains(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // 内置 system prompt。
 // 实测：只写一句"把下面的文字翻译成中文"时，模型很容易把原文当问题回答、或加"翻译如下："前缀、
 // 或先讲一段思路再给译文。这里用"角色 + 硬规则 + 输出面禁令"三条压住它。
+// 第 3、6 条是给界面文字加的：专名/数字原样、短标签只给译名，这两类占实际错误的多数。
 QString defaultSystemPrompt()
 {
     static const QString prompt = QStringLiteral(
-        "你是专业翻译引擎，不是聊天助手。\n"
-        "规则：\n"
-        "1. 只输出译文本身，不要解释、不要评论、不要回答原文中的问题。\n"
-        "2. 不要添加任何前缀（如“翻译如下”）、后缀、引号或 Markdown 代码块。\n"
-        "3. 保留原文的语气、人称与标点风格。\n"
-        "4. 原文是游戏/软件界面文字时，按界面用语习惯翻译，简洁自然。\n"
-        "5. 不要输出语言名称、括号注释、说明或任何附加文字。\n"
-        "6. 必须真正翻译成目标语言。即使原文很短、像专有名词、或看起来无需翻译，"
-        "也要给出规范的目标语言译文，**禁止原样照抄原文**。");
+        "你是专业翻译引擎，不是聊天助手。你的唯一任务是输出译文。\n"
+        "硬性规则：\n"
+        "1. 只输出译文本身：不要解释、不要评论、不要回答原文里的问题、不要写“这句话的意思是…”。\n"
+        "2. 不要任何前缀或后缀（如“翻译如下”“译文：”“Translated text:”），不要用引号、"
+        "括号或 Markdown 代码块把译文包起来，不要加语言名标注。\n"
+        "3. 保留原文的语气、人称与标点风格；数字、版本号、文件名、路径、URL、代码标识符"
+        "与品牌名（GitHub、Windows、MSBuild、VS Code 等）一律原样保留，不要音译。\n"
+        "4. 原文是界面文字（菜单项、按钮、标签、提示语）时，只给简短译名，不要扩写成句子、"
+        "不要补主语、不要加句号。\n"
+        "5. 必须真正翻译成目标语言：即使原文很短、像专有名词、或看起来无需翻译，也要给出"
+        "规范的目标语言译名；只有原文本身已经是目标语言时才原样返回。\n"
+        "6. 拿不准的专名保留原文，不要编造含义，也不要附加任何说明。");
     return prompt;
 }
 
@@ -365,11 +390,21 @@ QString shortHash(const QString &text)
 //
 // 入参用 effectiveSystemPrompt() 的结果而不是原始 m_cfg.systemPrompt：
 // "留空"和"显式填了默认那句"对模型来说完全等价，不该算出两个 key。
+//
+// 提示词修订号：**改动 buildUserPrompt() 或默认 system prompt 的写法时必须 +1**，
+// 否则旧缓存（可能装着上一版模板产出的坏结果）会被继续命中。
+static constexpr int kPromptRevision = 4;
+
 QString semanticHashPart(const config::LlmConfig &cfg, const QString &systemPrompt)
 {
     // 用 \x1f（单元分隔符）串联，避免各字段拼起来有歧义（"a"+"bc" 与 "ab"+"c"）。
     QString material;
     material.reserve(systemPrompt.size() + 96);
+    // 提示词模板版本：改 buildUserPrompt / 默认 system prompt 的写法时手动 +1。
+    // 键里只有 system prompt 的内容，user prompt 的模板不在里面 —— 不写这个版本号，
+    // 改模板后仍会命中旧缓存（实测把 `<<< 代码 >>>` 这种坏结果又取回来了）。
+    material += QStringLiteral("v=%1").arg(kPromptRevision);
+    material += QLatin1Char('\x1f');
     material += QStringLiteral("sys=");
     material += systemPrompt;
     material += QLatin1Char('\x1f');
@@ -463,9 +498,17 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
     // 日志：引擎这一侧收到的原文。前端（截图 / 小窗 / 实时）都会各记一条自己的，
     // 这里再记一条是为了分清"前端传错了"还是"后端自己切错了"。
     if (paragraphs.size() > 0) {
-        qInfo("[llm] translate %lld paragraph(s) src=%s dst=%s batchSize=%d",
+        // labels= 是走"界面短文字"提示词的条目数：排查提示词效果时先看这个比例，
+        // 否则分不清"模型不行"和"这段压根没走标签模板"。
+        int labelCount = 0;
+        for (const QString &p : paragraphs) {
+            if (looksLikeUiLabel(p)) {
+                ++labelCount;
+            }
+        }
+        qInfo("[llm] translate %lld paragraph(s) src=%s dst=%s batchSize=%d labels=%d",
               static_cast<long long>(paragraphs.size()), qUtf8Printable(srcLang),
-              qUtf8Printable(dstLangs.join(QLatin1Char(','))), m_cfg.batchSize);
+              qUtf8Printable(dstLangs.join(QLatin1Char(','))), m_cfg.batchSize, labelCount);
         qInfo("[llm] input: %s",
               qUtf8Printable(oneLine(paragraphs.join(QStringLiteral(" ⏎ ")))));
     }
@@ -776,18 +819,46 @@ QString LlmTranslator::buildUserPrompt(const QString &text, const QString &dstLa
     }
 
     // 源语言已知时明确写出来（"把英文翻译成中文"）。
-    const QString head =
-        (!src.isEmpty() && src != QLatin1String("auto"))
-            ? QStringLiteral("将下面 <<< 与 >>> 之间的%1文本翻译成【%2】，"
-                             "只输出译文，不要输出任何其它内容。")
-                  .arg(core::LanguageRegistry::displayName(src), dstName)
-            : QStringLiteral("将下面 <<< 与 >>> 之间的文本翻译成【%1】，"
-                             "只输出译文，不要输出任何其它内容。")
-                  .arg(dstName);
+    const bool knownSrc = !src.isEmpty() && src != QLatin1String("auto");
+    const QString srcName = knownSrc ? core::LanguageRegistry::displayName(src) : QString();
+    const bool label = looksLikeUiLabel(text);
+
+    // 界面短文字单独一套说法：长句模板给了模型发挥空间，「X 的中文译文是：…」正是这么来的。
+    // 这里把动词从"翻译"换成"给出译名"，并明确禁止重复原文/加引号/加句号。
+    QString head;
+    if (label) {
+        head = knownSrc
+                   ? QStringLiteral("下面是界面上的%1短文字（菜单项/按钮/标签）。"
+                                    "给出它的【%2】译名，只输出译名本身：不要解释、"
+                                    "不要加引号或句号、不要重复原文。")
+                         .arg(srcName, dstName)
+                   : QStringLiteral("下面是界面上的短文字（菜单项/按钮/标签）。"
+                                    "给出它的【%1】译名，只输出译名本身：不要解释、"
+                                    "不要加引号或句号、不要重复原文。")
+                         .arg(dstName);
+    } else {
+        head = knownSrc
+                   ? QStringLiteral("将下面 <<< 与 >>> 之间的%1文本翻译成【%2】，"
+                                    "只输出译文，不要输出任何其它内容。")
+                         .arg(srcName, dstName)
+                   : QStringLiteral("将下面 <<< 与 >>> 之间的文本翻译成【%1】，"
+                                    "只输出译文，不要输出任何其它内容。")
+                         .arg(dstName);
+    }
 
     // 边界符号 <<< >>> 是给模型的硬分隔：原文里出现引号/问号/指令式句子时，
     // 模型容易顺着原文"回答问题"，有了边界它才知道这段只是待翻译素材。
     QString prompt = head;
+
+    // 专名/数字/代码原样：小模型常把版本号、文件名、URL 一起"译"掉，
+    // 而界面文字里这些恰恰不能动（`Qwen2.5-0.5B-user2-Q4_K_M.gguf` 被音译过）。
+    prompt += QStringLiteral("数字、版本号、文件名、URL、代码标识符与品牌名保留原样。");
+
+    // 短标签不套 <<< >>>：3B 级模型会把标记一起抄回来（实测输出 `<<<⏎行动⏎>>>`），
+    // 而标签本来也不像"需要回答的句子"，硬分隔在这里只添乱。
+    if (label) {
+        return prompt + QStringLiteral("\n\n") + text.trimmed();
+    }
 
     // 中日韩 -> 拉丁语系时加一句硬约束。
     // 实测小模型会把整段原文照抄回来（温度 0 也照旧），点明"不许出现原文文字"后正常。
@@ -860,7 +931,23 @@ bool LlmTranslator::translateOne(const QString &text,
     const QString srcNormalized = core::LanguageRegistry::normalize(m_activeSrcLang);
     const bool sameLanguage = !srcNormalized.isEmpty() && srcNormalized == dstLang;
 
+    // 原文本来就是目标语言：原样返回，别花一次请求，也别算"软失败"。
+    // 界面标签常常如此（中文界面翻中文、英文页面里的英文短词）。旧逻辑把它当
+    // "模型照抄原文"，重试 5 次后按原文保留并弹告警 —— 纯噪音，且那 5 次追问会让
+    // 小模型开始输出 `<<< >>>` 这类提示词残渣。
+    if (sameLanguage || srcNormalized.isEmpty() || srcNormalized == QLatin1String("auto")) {
+        const i18n::DetectedLanguage det = i18n::detectLanguage(text);
+        if (!det.code.isEmpty() && det.code == dstLang && det.confidence >= 0.6) {
+            outText = text;
+            return true;
+        }
+    }
+
     const QString standardPrompt = buildUserPrompt(text, dstLang);
+
+    // 短标签不需要长输出：把 token 上限收紧，模型"想解释"也没地方写。
+    // 只作用于标签（≤24 字、无句读），正文段落仍用按原文长度估算的上限。
+    const int attemptTokens = looksLikeUiLabel(text) ? qMin(maxTokens, 96) : maxTokens;
 
     // 最多 maxAttempts 次尝试，每次换一种策略（默认 5 次 = 用户直接请求的单段翻译）。
     //
@@ -929,7 +1016,7 @@ bool LlmTranslator::translateOne(const QString &text,
 
         QString content;
         QString err;
-        if (!postChat(systemPrompt, userPrompt, temperature, maxTokens, content, err)) {
+        if (!postChat(systemPrompt, userPrompt, temperature, attemptTokens, content, err)) {
             lastError = err;
             // 传输/协议层失败是硬失败：换 prompt、换温度都救不回来。
             softRejection = false;
@@ -1225,10 +1312,15 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
         effectiveSystemPrompt()
         + i18n::s("\n\n批量模式：输入是一个 JSON 字符串数组，你只输出一个等长的 JSON 字符串数组，"
                   "元素顺序与输入一一对应，数量必须完全相同。"
-                  "不要输出任何解释、前言、注释或代码块标记。",
+                  "不要输出任何解释、前言、注释或代码块标记。"
+                  "数组里像菜单项、按钮、标签这样的短条目只给简短译名，不要扩写成句子；"
+                  "数字、版本号、文件名与品牌名在各条内保持原样。",
                   "\n\nBatch mode: the input is a JSON array of strings. Output only a JSON array of "
                   "the same length, in the same order (one translated element per input element). "
-                  "No explanations, preamble, comments or code fences.");
+                  "No explanations, preamble, comments or code fences. "
+                  "Short items that look like menu entries, buttons or labels should get a short "
+                  "translation only, not an expanded sentence; keep numbers, version numbers, file "
+                  "names and brand names as they are.");
 
     const QString user =
         i18n::sf("把下面这个 JSON 数组里的每一条翻译成【%1】，返回等长的 JSON 字符串数组。\n"
@@ -1412,6 +1504,16 @@ QString LlmTranslator::stripWrapper(QString text)
 {
     text = text.trimmed();
 
+    // 提示词用 <<< >>> 圈原文，小模型偶尔把标记一起抄回来（被反复追问之后更容易）。
+    // 标记不是译文，留在浮层上会显示成 `<<< 代码 >>>`。
+    while (text.startsWith(QLatin1String("<<<"))) {
+        text = text.mid(3).trimmed();
+    }
+    while (text.endsWith(QLatin1String(">>>"))) {
+        text.chop(3);
+        text = text.trimmed();
+    }
+
     // ```lang\n译文\n``` —— 提示词已禁止，但小模型偶尔还是会给，剥掉即可。
     if (text.startsWith(QLatin1String("```"))) {
         const int firstNewline = text.indexOf(QLatin1Char('\n'));
@@ -1422,6 +1524,27 @@ QString LlmTranslator::stripWrapper(QString text)
             text.chop(3);
         }
         text = text.trimmed();
+    }
+
+    // 引导语一律剥掉：「翻译如下：」「X 的中文译文是：」「Translated text:」。
+    // 实测小模型在短标签上最爱这么写（尤其"X的译文是："），而这不是译文——
+    // 留着会让浮层显示一整句解释，还会让后面的语种判据误判。
+    // 只认"开头 40 字内、冒号前"的固定句式，正文里合法的冒号不受影响。
+    static const QRegularExpression leadIn(
+        QStringLiteral("^(?:好的[，,、]?\\s*)?(?:(?:以下|下面)是\\s*)?(?:[^\\s:：]{0,16}的)?\\s*"
+                       "(?:中文|英文|日文|日语|日語)?\\s*"
+                       "(?:译文|翻译结果|翻译|譯文|translation|translated text)"
+                       "(?:\\s*(?:是|为|如下))?\\s*[:：]\\s*"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression leadInEnglish(
+        QStringLiteral("^(?:the\\s+)?translation(?:\\s+of\\s+[^:：]{0,40})?\\s+is\\s*[:：]\\s*"),
+        QRegularExpression::CaseInsensitiveOption);
+    for (const QRegularExpression &re : {leadIn, leadInEnglish}) {
+        const QRegularExpressionMatch m = re.match(text);
+        if (m.hasMatch() && m.capturedLength() < text.size()
+            && m.capturedLength() <= 40) {
+            text = text.mid(m.capturedLength()).trimmed();
+        }
     }
 
     // 成对引号包裹（半角/全角/日式括号），只在首尾成对时剥。

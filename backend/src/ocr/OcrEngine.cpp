@@ -396,7 +396,14 @@ QVector<QRect> sliceAtGaps(const QImage &img, const QRect &box, int sliceW, QVec
     while (i < words.size()) {
         const int startCol = words[i].begin;
         size_t last = i;
-        while (last + 1 < words.size() && words[last + 1].end - startCol <= sliceW) {
+        // 除了"装得下"之外还要"贴得够近"：导航栏那种一条框里横着两三个互不相干的
+        // 标签，装得下就并成一片，识别结果粘成一串（"拉取请求 代理"），上层既没法
+        // 按间隙切段、浮层也只能横跨。间隙超过 0.75 倍字高就另起一片
+        // （西文词距一般 0.3~0.5 倍字高；切小了不要紧，上层 groupWordsIntoLines
+        // 会把贴得近的再并回一行，只有真正的大间隙才留下来当分段边界）。
+        const int segmentGap = std::max(16, static_cast<int>(std::lround(box.height() * 0.75)));
+        while (last + 1 < words.size() && words[last + 1].end - startCol <= sliceW
+               && words[last + 1].begin - words[last].end <= segmentGap) {
             ++last;
         }
         const int endCol = words[last].end;
@@ -673,8 +680,11 @@ struct OcrEngine::Session {
     // 大图分块：每块按原生分辨率过检测网络，再把框平移回原图坐标并去重。
     bool detectTiled(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
                      QString *error);
-    bool recognizeBox(const QImage &img, const QRect &box, QString *text, qreal *confidence,
-                      QString *error);
+    // 一个检测框可能横跨「拉取请求 代理」这种两三个互不相干的标签：按空白列切片后
+    // 每片单独成一个词条，别再拼回一整串 —— 拼回去就丢了各片自己的坐标，
+    // 上层既没法按间隙切段，浮层也只能横跨压字。
+    bool recognizeBox(const QImage &img, const QRect &box,
+                      QVector<studious::platform::OcrWord> *parts, QString *error);
     // 单片的识别（prepare → run → CTC 解码）。recognizeBox 负责按宽度切片后逐片调它。
     bool recognizeCrop(const QImage &img, const QRect &cropBox, QString *text, qreal *confidence,
                        QString *error);
@@ -1184,25 +1194,41 @@ bool OcrEngine::Session::detectOnce(const QImage &img, const OcrOptions &opts,
     }
 }
 
-bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QString *text,
-                                      qreal *confidence, QString *error)
+bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box,
+                                     QVector<studious::platform::OcrWord> *parts, QString *error)
 {
-    text->clear();
-    *confidence = 0.0;
+    parts->clear();
 
     // 一行很长的文字（截图里是常态：整段正文一行 800~1200 px、字高 30 px）塞进
     // 320×48 的 rec 输入会被横向压掉三四倍，字母直接糊成一团。PaddleOCR 的做法是
-    // 保持高 48、宽按比例裁到 320；对超宽行必须**按空白列切片**再拼回来。
+    // 保持高 48、宽按比例裁到 320；对超宽行必须**按空白列切片**再逐片识别。
     const int sliceW = std::max(64, static_cast<int>(std::lround(box.height() * tuning.sliceFactor)));
     QVector<int> gapAfter;
     const QVector<QRect> slices = sliceAtGaps(img, box, sliceW, &gapAfter);
+
+    const auto pushPart = [parts](const QString &text, const QRect &rect, qreal confidence) {
+        if (text.isEmpty()) {
+            return;
+        }
+        studious::platform::OcrWord word;
+        word.text = text.simplified();
+        word.box = rect;
+        word.confidence = confidence;
+        if (!word.text.isEmpty()) {
+            parts->push_back(word);
+        }
+    };
+
     if (slices.size() <= 1) {
-        return recognizeCrop(img, box, text, confidence, error);
+        QString text;
+        qreal confidence = 0.0;
+        if (!recognizeCrop(img, box, &text, &confidence, error)) {
+            return false;
+        }
+        pushPart(text, box, confidence);
+        return true;
     }
 
-    QString merged;
-    qreal minConfidence = 1.0;
-    int counted = 0;
     for (int i = 0; i < slices.size(); ++i) {
         const QRect &slice = slices.at(i);
         if (slice.width() < 4) {
@@ -1213,22 +1239,10 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
         if (!recognizeCrop(img, slice, &part, &conf, error)) {
             return false;
         }
-        if (part.isEmpty()) {
-            continue;
-        }
-        // 空白宽到像词间距（> 字高的 1/8）才补空格；字母缝里落下就不补。
-        const int gap = gapAfter.value(i, 0);
-        const bool wordGap = gap > 0;   // 分组边界就是词边界：有间隙就补一个空格
-        appendSlice(&merged, part, wordGap);
-        minConfidence = std::min(minConfidence, conf);
-        ++counted;
+        // 每片都带自己的矩形：上层 groupWordsIntoLines() 会把同一行里间隙小的重新
+        // 并成一行（lineText 补空格），间隙大的自然分成不同段 —— 粒度交给它决定。
+        pushPart(part, slice, conf);
     }
-
-    if (counted == 0) {
-        return true;
-    }
-    *text = merged.simplified();
-    *confidence = minConfidence;
     return true;
 }
 
@@ -1503,21 +1517,15 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
 
     words.reserve(static_cast<int>(boxes.size()));
     for (const DetBox &box : boxes) {
-        QString text;
-        qreal confidence = 0.0;
-        if (!s.recognizeBox(rgb, box.rect, &text, &confidence, &error)) {
+        QVector<studious::platform::OcrWord> parts;
+        if (!s.recognizeBox(rgb, box.rect, &parts, &error)) {
             s.setLastError(error);
             return {};   // 模型坏了：与其返回半截结果，不如整体报错
         }
-        if (text.isEmpty()) {
-            continue;   // 检出来但解不出字的框（横线、图标）直接丢
+        // 解不出字的片（横线、图标）已经被 recognizeBox 丢掉，这里只管收。
+        for (const studious::platform::OcrWord &part : std::as_const(parts)) {
+            words.push_back(part);
         }
-
-        studious::platform::OcrWord word;
-        word.text = text;
-        word.box = box.rect;
-        word.confidence = confidence;
-        words.push_back(word);
     }
 
     if (debugEnabled()) {

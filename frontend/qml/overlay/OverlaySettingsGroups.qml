@@ -107,6 +107,24 @@ ColumnLayout {
                 color: Theme.inkVariant
             }
         }
+
+        // 小窗自己的字号：和「外观」页的正文阅读字号分开，两个场景一句话的字数差很多。
+        FieldRow {
+            label: qsTr("字号")
+            labelWidth: root.labelWidth
+
+            NumStepper {
+                compact: root.compact
+                from: 11
+                to: 28
+                step: 1
+                unit: qsTr(" px")
+                value: backend.miniFontSize
+                onModified: function (v) { backend.miniFontSize = v }
+            }
+        }
+
+        Hint { text: qsTr("只作用于小窗里的译文正文，不影响翻译页和另外两个浮层。") }
     }
 
     // ---- 截图翻译 ----
@@ -148,35 +166,6 @@ ColumnLayout {
         }
 
         FieldRow {
-            id: captureKeepRow
-
-            label: qsTr("保留原文标注")
-            labelWidth: root.labelWidth
-            property string note: qsTr("译文条上方留一条薄薄的原文，便于核对。")
-            hint: root.compact ? note : ""
-
-            AppToggle {
-                Layout.alignment: Qt.AlignVCenter
-                checked: backend.overlayKeepOriginal
-                onToggled: {
-                    backend.overlayKeepOriginal = checked
-                    checked = backend.overlayKeepOriginal
-                }
-            }
-
-            Text {
-                visible: !root.compact
-                Layout.fillWidth: true
-                text: captureKeepRow.note
-                wrapMode: Text.WordWrap
-                verticalAlignment: Text.AlignVCenter
-                font.family: Theme.fontUi
-                font.pixelSize: Theme.fontSizeTiny
-                color: Theme.inkVariant
-            }
-        }
-
-        FieldRow {
             id: captureCopyRow
 
             label: qsTr("翻译完自动复制")
@@ -197,6 +186,35 @@ ColumnLayout {
                 visible: !root.compact
                 Layout.fillWidth: true
                 text: captureCopyRow.note
+                wrapMode: Text.WordWrap
+                verticalAlignment: Text.AlignVCenter
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeTiny
+                color: Theme.inkVariant
+            }
+        }
+
+        FieldRow {
+            id: captureCopyCloseRow
+
+            label: qsTr("复制后关闭")
+            labelWidth: root.labelWidth
+            property string note: qsTr("点工具栏上的「复制」之后立刻收起浮层，不再等核对。")
+            hint: root.compact ? note : ""
+
+            AppToggle {
+                Layout.alignment: Qt.AlignVCenter
+                checked: backend.captureCopyClose
+                onToggled: {
+                    backend.captureCopyClose = checked
+                    checked = backend.captureCopyClose
+                }
+            }
+
+            Text {
+                visible: !root.compact
+                Layout.fillWidth: true
+                text: captureCopyCloseRow.note
                 wrapMode: Text.WordWrap
                 verticalAlignment: Text.AlignVCenter
                 font.family: Theme.fontUi

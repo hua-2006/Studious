@@ -11,6 +11,10 @@ Rectangle {
     // code -> 颜色（Theme.good / Theme.caution / Theme.danger 之类）。
     // 给了就在标签左边画一个 6px 圆点；不给就完全不画，其它页面用法不变。
     property var badges: ({})
+    // 三档以上、又放在整行宽卡片里时设 true：每项等分整条宽度，选中胶囊
+    // 就是那一等分的整块（像标签栏），不会出现"文字挤在左、胶囊只有几个字宽"。
+    // 默认 false —— FieldRow 里那些窄用法保持"宽度由文字决定"。
+    property bool stretch: false
     // 这些 code 不给选：标签压暗、点了不发 selected，而是发 blocked(code)。
     // 让调用方决定"为什么不能选"怎么说（通常是缺资产，需要指路去资产页）。
     property var blockedCodes: []
@@ -90,6 +94,7 @@ Rectangle {
 
                 // 圆点 + 间距也算进宽度，否则圆点会把标签挤偏。
                 Layout.fillHeight: true
+                Layout.fillWidth: seg.stretch
                 Layout.preferredWidth: (segBtn.badgeShown ? 6 + Theme.s2 : 0)
                                        + segLabel.implicitWidth + Theme.s3 * 2
                 radius: Theme.rFull

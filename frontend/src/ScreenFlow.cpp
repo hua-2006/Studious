@@ -688,13 +688,37 @@ bool ScreenFlow::copyResult()
     if (QClipboard *clipboard = QGuiApplication::clipboard())
         clipboard->setText(lines.join(QLatin1Char('\n')));
 
-    // 复制完就把浮层收掉（设置里「复制后自动关闭」，默认开）：用户要的是这段文字，
-    // 不是继续盯着屏幕上的贴纸。延迟秒数允许用户调（0 = 立刻）。
+    // 复制之后收不收浮层，只认「点击复制后关闭」这一个开关（默认关）。
+    // 以前是借 captureAutoHide 隐式收起，用户明确要求改成显式开关：多数人复制完
+    // 还要对着屏幕核对一眼，浮层不该自己跑掉。开了就当场收，不再走延迟。
     const AppSettings copySettings = AppSettings::load();
-    if (copySettings.captureAutoHide && (m_phase == QLatin1String("Showing")
-                                         || m_phase == QLatin1String("ShowingOriginal"))) {
-        QTimer::singleShot(qBound(0, copySettings.overlayAutoHideDelay, 10) * 1000, this,
-                           [this]() { cancel(); });
+    const bool closing = copySettings.captureCopyClose
+                         && (m_phase == QLatin1String("Showing")
+                             || m_phase == QLatin1String("ShowingOriginal"));
+    qInfo("[copy] %lld line(s) to clipboard, close-after-copy=%d", static_cast<long long>(lines.size()),
+          closing ? 1 : 0);
+    if (closing) {
+        cancel();
+    }
+    return true;
+}
+
+bool ScreenFlow::copyText(const QString &text, bool closeAfter)
+{
+    if (text.isEmpty())
+        return false;
+    if (QClipboard *clipboard = QGuiApplication::clipboard())
+        clipboard->setText(text);
+
+    const AppSettings copySettings = AppSettings::load();
+    const bool closing = closeAfter && copySettings.captureCopyClose
+                         && (m_phase == QLatin1String("Showing")
+                             || m_phase == QLatin1String("ShowingOriginal"));
+    qInfo("[copy] %lld char(s) (%lld line(s)) from overlay selection, close-after-copy=%d",
+          static_cast<long long>(text.size()),
+          static_cast<long long>(text.count(QLatin1Char('\n')) + 1), closing ? 1 : 0);
+    if (closing) {
+        cancel();
     }
     return true;
 }

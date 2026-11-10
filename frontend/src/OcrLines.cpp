@@ -41,6 +41,48 @@ QString lineText(const Row &row)
     return text;
 }
 
+// 同一行里横向间隙过大时再切开：导航栏、工具条、面包屑这种「一行里很多个
+// 互不相干的标签」，并成一行会把整条栏当成一句话送给模型 —— 翻回来是一整句，
+// 贴回去又是一个横跨全宽的长块，必然压到相邻标签上。断点判据是「间隙 > 1.6 倍
+// 字高」（0.9 倍是实测线：西文词距一般 0.3~0.5 倍字高，导航栏那种独立标签
+// 因为框里带了图标/角标，高度被抬高，间隙也能到 1 倍以上），另加 20px 下限，
+// 免得小字号把正常的词间距也当成断点。
+constexpr int kSegmentGapFloor = 20;
+constexpr qreal kSegmentGapFactor = 0.9;
+
+QVector<Row> splitRow(const Row &row)
+{
+    QVector<studious::platform::OcrWord> ws = row.words;
+    std::sort(ws.begin(), ws.end(),
+              [](const studious::platform::OcrWord &a, const studious::platform::OcrWord &b) {
+                  return a.box.x() < b.box.x();
+              });
+
+    QVector<Row> segments;
+    Row current;
+    // 间隙要跟**单个词**的高度比，不能跟并出来的行高比：行高是整段并集，
+    // 越并越大，阈值跟着虚胖，导航栏那种间距就再也断不开了。
+    const studious::platform::OcrWord *previous = nullptr;
+    for (int i = 0; i < ws.size(); ++i) {
+        const studious::platform::OcrWord &w = ws.at(i);
+        if (previous) {
+            const int gap = w.box.left() - previous->box.right();
+            const int height = qMax(1, qMax(previous->box.height(), w.box.height()));
+            const int limit = qMax(kSegmentGapFloor, qRound(height * kSegmentGapFactor));
+            if (gap > limit) {
+                segments.append(current);
+                current = Row();
+            }
+        }
+        current.box = current.words.isEmpty() ? w.box : current.box.united(w.box);
+        current.words.append(w);
+        previous = &w;
+    }
+    if (!current.words.isEmpty())
+        segments.append(current);
+    return segments;
+}
+
 } // namespace
 
 QVector<OcrLine> groupWordsIntoLines(const QVector<studious::platform::OcrWord> &words)
@@ -83,17 +125,19 @@ QVector<OcrLine> groupWordsIntoLines(const QVector<studious::platform::OcrWord> 
     QVector<OcrLine> lines;
     lines.reserve(rows.size());
     for (const Row &row : std::as_const(rows)) {
+        for (const Row &segment : splitRow(row)) {
         OcrLine line;
-        line.box = row.box;
-        line.text = lineText(row);
+        line.box = segment.box;
+        line.text = lineText(segment);
         // 置信度取**最小**而不是均值：一行里只要有一个词认得很虚，这行就不可信，
         // 均值会把一个 0.2 的噪声词藏在一串 0.99 里。截屏翻译一直这么算，
         // 实时这边照抄 —— 两页的 confidence 才能直接对比（QML 用不用它是另一回事）。
         qreal confidence = 1.0;
-        for (const studious::platform::OcrWord &w : row.words)
+        for (const studious::platform::OcrWord &w : segment.words)
             confidence = qMin(confidence, w.confidence);
-        line.confidence = row.words.isEmpty() ? 0.0 : confidence;
+        line.confidence = segment.words.isEmpty() ? 0.0 : confidence;
         lines.append(line);
+        }
     }
     return lines;
 }

@@ -333,12 +333,13 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_httpTimeoutMs = settings.httpTimeoutMs;
     m_minimizeToTray = settings.minimizeToTray;
     m_miniAlwaysOnTop = settings.miniAlwaysOnTop;
+    m_miniFontSize = settings.miniFontSize;
     m_captureAutoRun = settings.captureAutoRun;
     m_captureAutoCopy = settings.captureAutoCopy;
     m_captureAutoHide = settings.captureAutoHide;
+    m_captureCopyClose = settings.captureCopyClose;
     m_overlayOpacity = settings.overlayOpacity;
     m_overlayFontSize = settings.overlayFontSize;
-    m_overlayKeepOriginal = settings.overlayKeepOriginal;
     m_overlayZoom = settings.overlayZoom;
     m_overlayMagnifier = settings.overlayMagnifier;
     m_magnifierCorner = settings.magnifierCorner;
@@ -1278,6 +1279,37 @@ void AppBackend::setCaptureAutoHide(bool on)
     emit prefsChanged();
 }
 
+// 点「复制」之后要不要顺手把浮层收掉。默认关：多数人复制完还要对着屏幕核对。
+void AppBackend::setCaptureCopyClose(bool on)
+{
+    if (m_captureCopyClose == on) {
+        return;
+    }
+    m_captureCopyClose = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.captureCopyClose = on;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+// 小窗正文字号，11~28 与 AppSettings 的夹取范围一致。
+void AppBackend::setMiniFontSize(int px)
+{
+    const int next = std::clamp(px, 11, 28);
+    if (m_miniFontSize == next) {
+        return;
+    }
+    m_miniFontSize = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.miniFontSize = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
 void AppBackend::setOverlayOpacity(int percent)
 {
     const int next = std::clamp(percent, 40, 100);
@@ -1303,20 +1335,6 @@ void AppBackend::setOverlayFontSize(int px)
 
     AppSettings settings = AppSettings::load();
     settings.overlayFontSize = next;
-    settings.save();
-
-    emit prefsChanged();
-}
-
-void AppBackend::setOverlayKeepOriginal(bool on)
-{
-    if (m_overlayKeepOriginal == on) {
-        return;
-    }
-    m_overlayKeepOriginal = on;
-
-    AppSettings settings = AppSettings::load();
-    settings.overlayKeepOriginal = on;
     settings.save();
 
     emit prefsChanged();

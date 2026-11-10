@@ -64,6 +64,18 @@ Window {
     // hover 事件在没激活的窗口上不一定来。
     property point cursorPos: Qt.point(-1, -1)
 
+    // ---- 翻译块的点选 / 复制 ----
+    // 单选：单击一块 = 选中/取消；双击 = 直接复制这一块。
+    // 多选：选中的块按"在原文里的先后"拼起来，工具栏「复制」或 Ctrl+C 一起复制。
+    // 只存下标不存块对象 —— 换语言重翻时 blocks 会整体重建，下标还指得准。
+    property var selectedPlates: []
+    // 鼠标拖选文字：键是块下标，值是 TextEdit 的 selectedText。
+    // Ctrl+C 在"没有块被选中"时才用它 —— 两个功能互不联动，但共用一个快捷键。
+    property var textPicks: ({})
+    // 复制成功的回执：浮层是独立窗口，拿不到主界面的 toast，只能自己画一个气泡。
+    property string copyToastText: ""
+    property point copyToastAt: Qt.point(0, 0)
+
     readonly property real scale: screenFlow.pixelScale > 0 ? screenFlow.pixelScale : 1.0
     readonly property bool showOriginal: screenFlow.showOriginal
 
@@ -645,6 +657,8 @@ Window {
                 readonly property string shown: overlay.showOriginal
                     ? modelData.original
                     : (modelData.untranslated ? modelData.original : modelData.text)
+                // 被点选中的块：描边变主色 + 底换成主色容器色，和「原文」那条虚线下划线区分开。
+                readonly property bool picked: overlay.plateSelected(index)
                 // 译文比原文长是这个浮层最常见的翻车场景：以前是「一行 + 按行高定字号 +
                 // 超宽就 elide」，长句直接变成"基于你的技术栈…"。现在的顺序是：
                 //   1) 先向右吃掉空白（最多到原文宽 1.6 倍，且不出选区）；
@@ -653,7 +667,12 @@ Window {
                 //   4) 最后才回到 elide。
                 readonly property real limitW: {
                     const rightEdge = overlay.sel.x + overlay.sel.width;
-                    return Math.max(pw, Math.min(pw * 1.6, rightEdge - px - 2));
+                    // 右边还有同一行的块时，最多长到它左边；没有才吃到选区右边界。
+                    const nextLeft = overlay.nextPlateLeft(index, modelData);
+                    const room = nextLeft === Infinity
+                        ? rightEdge
+                        : Math.min(rightEdge, overlay.sel.x + nextLeft / overlay.scale - 4);
+                    return Math.max(pw, Math.min(pw * 1.6, room - px - 2));
                 }
                 readonly property real basePx: Math.max(9, Math.min(backend.overlayFontSize, ph * 0.92));
                 readonly property real minPx: Math.max(9, basePx * 0.7);
@@ -686,10 +705,13 @@ Window {
                 radius: Theme.rXs
                 // 底色用 surfaceLow（设计稿的 --plate = --sc-low），
                 // 它比 surface 亮一档，压在原文上才看得出是一块「贴纸」。
-                color: Qt.rgba(Theme.surfaceLow.r, Theme.surfaceLow.g, Theme.surfaceLow.b,
-                               backend.overlayOpacity / 100)
-                border.width: overlay.showOriginal ? 1 : 0
-                border.color: Theme.outlineVariant
+                // 选中的块换成主色容器色（不透明）：只加描边在深色原文上不够显眼。
+                color: plate.picked
+                       ? Theme.primaryContainer
+                       : Qt.rgba(Theme.surfaceLow.r, Theme.surfaceLow.g, Theme.surfaceLow.b,
+                                 backend.overlayOpacity / 100)
+                border.width: plate.picked ? 2 : (overlay.showOriginal ? 1 : 0)
+                border.color: plate.picked ? Theme.primary : Theme.outlineVariant
 
                 // 量三个尺寸：基础字号下一行的宽度、缩字号后一行的宽度、缩字号后两行的高度。
                 // 都是 visible:false 的 Text（Qt 照样排版，只是不上屏），比每帧去 C++ 里问 QFontMetrics 省事。
@@ -722,56 +744,41 @@ Window {
                     maximumLineCount: 2
                 }
 
-                Text {
+                // 正文用 TextEdit 而不是 Text：只有 TextEdit 能"鼠标拖选 + Ctrl+C"。
+                // activeFocusOnPress 必须关掉 —— 这个窗口的 Esc / Enter / 方向键都挂在
+                // 根上的 Keys 里，文本框一抢焦点，框选阶段的键盘操作就全失灵了。
+                TextEdit {
+                    id: plateText
                     anchors.fill: parent
                     anchors.leftMargin: 2
                     anchors.rightMargin: 2
-                    verticalAlignment: Text.AlignVCenter
+                    height: parent.height - 2
+                    readOnly: true
+                    selectByMouse: true
+                    persistentSelection: true
+                    activeFocusOnPress: false
+                    textFormat: TextEdit.PlainText
+                    wrapMode: TextEdit.Wrap
+                    verticalAlignment: TextEdit.AlignVCenter
+                    clip: true
                     text: plate.shown
                     color: modelData.untranslated && !overlay.showOriginal ? Theme.inkVariant : Theme.ink
                     font.family: Theme.fontContent
                     // 字号由 plate.fitPx 算好（先试原字号，超宽再等比缩，下限 9px），
                     // 这里不再按行高硬收，否则长译文永远只能被截断。
                     font.pixelSize: plate.fitPx
-                    wrapMode: Text.Wrap
-                    elide: Text.ElideRight
-                    maximumLineCount: 2
-                    // 块高只放到「下一块之前」为止，放不下才会真的 ellipsis，
-                    // 而不是把下面的行盖住。
-                    height: parent.height - 2
-                }
+                    selectionColor: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.28)
+                    selectedTextColor: Theme.ink
+                    // 拖选的结果汇总给根上的 Ctrl+C 用（跟块选中互不联动）。
+                    onSelectedTextChanged: overlay.noteTextPick(plate.index, plateText.selectedText)
 
-                // 「保留原文标注」：译文条上方压一条薄原文条，底部一道浅线分隔。
-                Rectangle {
-                    id: originalTag
-                    visible: backend.overlayKeepOriginal && !overlay.showOriginal && !modelData.untranslated
-                    x: 0
-                    y: -height - 2
-                    width: parent.width
-                    height: Math.max(11, ph * 0.7)
-                    radius: Theme.rXs
-                    color: Qt.rgba(Theme.surface.r, Theme.surface.g, Theme.surface.b, 0.82)
-
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: 2
-                        anchors.rightMargin: 2
-                        verticalAlignment: Text.AlignVCenter
-                        text: modelData.original
-                        color: Theme.inkVariant
-                        font.family: Theme.fontContent
-                        font.pixelSize: Math.max(8, backend.overlayFontSize * 0.8)
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
-                    }
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: 1
-                        color: Theme.outline
-                        opacity: 0.55
+                    // 单击选中/取消。gesturePolicy 用 DragThreshold：有拖拽就交给
+                    // TextEdit 自己拖选文字，只有"点一下"才归这里管。
+                    // 双击不再做"复制本块" —— TextEdit 双击是选词，两者叠在一起会让
+                    // 用户以为"双击变成了全选"，所以只留单击选中这一条路。
+                    TapHandler {
+                        gesturePolicy: TapHandler.DragThreshold
+                        onSingleTapped: overlay.togglePlate(plate.index)
                     }
                 }
 
@@ -920,9 +927,12 @@ Window {
                 onClicked: screenFlow.toggleOriginal()
             }
             OverlayButton {
-                text: qsTr("复制")
+                // 有块被点选时只复制这几块（顺序按原文先后），没有就整屏复制。
+                text: overlay.selectedPlates.length > 0
+                      ? qsTr("复制 %1 块").arg(overlay.selectedPlates.length)
+                      : qsTr("复制")
                 visible: overlay.showing
-                onClicked: screenFlow.copyResult()
+                onClicked: overlay.copySelectionOrAll()
             }
 
             Rectangle {
@@ -1127,6 +1137,119 @@ Window {
         overlay.localRect = Qt.rect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
     }
 
+    // ---------------------------------------------------- 翻译块：点选 / 复制
+    // 屏幕上这一块现在显示的是什么。复制必须跟眼睛看到的一致：
+    // 「显示原文」给原文；这块没翻出来（untranslated）给原文；否则给译文。
+    function plateShownText(block) {
+        if (!block)
+            return "";
+        const original = block.original !== undefined ? block.original : "";
+        if (showOriginal || block.untranslated)
+            return original;
+        // 译文为空也退回原文，免得复制出空行。
+        return (block.text !== undefined && block.text !== "") ? block.text : original;
+    }
+
+    function plateSelected(i) {
+        return selectedPlates.indexOf(i) >= 0;
+    }
+
+    function togglePlate(i) {
+        const next = selectedPlates.slice();
+        const at = next.indexOf(i);
+        if (at >= 0)
+            next.splice(at, 1);
+        else
+            next.push(i);
+        selectedPlates = next;
+    }
+
+    function clearPlateSelection() {
+        if (selectedPlates.length > 0)
+            selectedPlates = [];
+    }
+
+    // TextEdit 的选中变化都汇到这里。空串表示这一块已经没有选中内容，得把键删掉，
+    // 否则 Ctrl+C 会一直复制一段早就取消掉的旧文字。
+    function noteTextPick(i, text) {
+        const next = {};
+        for (const k in textPicks) {
+            if (Number(k) !== i)
+                next[k] = textPicks[k];
+        }
+        if (text && text.length > 0)
+            next[i] = text;
+        textPicks = next;
+    }
+
+    function pickedText() {
+        const parts = [];
+        for (const k in textPicks)
+            parts.push(textPicks[k]);
+        return parts.join("\n");
+    }
+
+    // 选中的块按"在原文里的先后"拼，不是按点击顺序 —— 用户要的是这一屏的这几行。
+    function selectedPlateText() {
+        if (selectedPlates.length === 0)
+            return "";
+        const list = screenFlow.blocks;
+        const order = selectedPlates.slice().sort(function (a, b) { return a - b; });
+        const parts = [];
+        for (let i = 0; i < order.length; ++i) {
+            const b = list[order[i]];
+            if (b)
+                parts.push(plateShownText(b));
+        }
+        return parts.join("\n");
+    }
+
+    // 工具栏「复制」：有选中就只复制选中那几块（并遵守「复制后关闭」），
+    // 没选中就还是原来的"整屏复制"。
+    function copySelectionOrAll() {
+        const text = selectedPlateText();
+        if (text.length > 0) {
+            const n = selectedPlates.length;
+            if (screenFlow.copyText(text, true))
+                showCopied(n > 1 ? qsTr("已复制 %1 块").arg(n) : qsTr("已复制"));
+            clearPlateSelection();
+            return;
+        }
+        if (screenFlow.copyResult())
+            showCopied(qsTr("已复制整屏"));
+    }
+
+    // Ctrl+C：块选中优先；否则复制鼠标拖选的那段（纯文本，不联动）；
+    // 都没有就当作整屏复制，跟工具栏那颗一样。
+    function copyShortcut() {
+        const text = selectedPlateText();
+        if (text.length > 0) {
+            const n = selectedPlates.length;
+            if (screenFlow.copyText(text, true))
+                showCopied(n > 1 ? qsTr("已复制 %1 块").arg(n) : qsTr("已复制"));
+            clearPlateSelection();
+            return;
+        }
+        const picked = pickedText();
+        if (picked.length > 0) {
+            if (screenFlow.copyText(picked, false))
+                showCopied(qsTr("已复制选中文字"));
+            textPicks = ({});
+            return;
+        }
+        if (screenFlow.copyResult())
+            showCopied(qsTr("已复制整屏"));
+    }
+
+    // 回执气泡：贴着工具栏上方（工具栏一定在可见范围内，不会算到屏幕外），
+    // 1.1 秒后自己淡掉。位置在 window 里，会跟着浮层一起消失。
+    function showCopied(text) {
+        copyToastText = text;
+        copyToastAt = Qt.point(ovbar.x + ovbar.width / 2, ovbar.y - 6);
+        copyToast.opacity = 1;
+        copyToastTimer.restart();
+    }
+
     // 找「正下方、横向有重叠」那一块的顶边（物理像素）。贴纸允许往下长高，
     // 但只能长到这一块之前 —— 否则两块叠在一起，译文就会互相压字。
     // 往后扫到 y 已经超过 bottom + 400 就停：行高再大也不会跨这么多。
@@ -1144,6 +1267,27 @@ Window {
                 break;
             if (b.x < right && b.x + b.w > block.x && b.y >= bottom)
                 best = Math.min(best, b.y);
+        }
+        return best;
+    }
+
+    // 同一行右边最近那一块的左边（物理像素）。贴纸允许往右吃空白，但不能吃到
+    // 相邻标签的头上 —— 导航栏那种一条横排里十几个短标签，一越界就是互相压字。
+    function nextPlateLeft(index, block) {
+        const list = screenFlow.blocks;
+        if (!list || !list.length)
+            return Infinity;
+
+        let best = Infinity;
+        const right = block.x + block.w;
+        const bottom = block.y + block.h;
+        for (let j = 0; j < list.length; ++j) {
+            if (j === index)
+                continue;
+            const b = list[j];
+            if (b.x < right || b.y >= bottom || b.y + b.h <= block.y)
+                continue;
+            best = Math.min(best, b.x);
         }
         return best;
     }
@@ -1224,8 +1368,18 @@ Window {
                                 : (overlay.menuOpen ? (overlay.menuOpen = false)
                                    : (overlay.working ? screenFlow.cancelTranslation() : screenFlow.cancel())))
         Keys.onReturnPressed: if (overlay.selecting && !overlay.confirmed) overlay.confirmCurrent(overlay.liveRect)
-        // 只认方向键，别的键原样放行；开关与修饰键在 handleArrowKey 里判。
-        Keys.onPressed: function (event) { overlay.handleArrowKey(event) }
+        // 只认方向键与 Ctrl+C，别的键原样放行；开关与修饰键在 handleArrowKey 里判。
+        Keys.onPressed: function (event) {
+            // Ctrl+C：选中的块 → 复制块；没选块 → 复制鼠标拖选的那段；
+            // 都没选 → 整屏复制（和工具栏那颗一致）。浮层没出结果时直接放行。
+            if (overlay.showing && event.key === Qt.Key_C
+                    && (event.modifiers & Qt.ControlModifier)) {
+                overlay.copyShortcut();
+                event.accepted = true;
+                return;
+            }
+            overlay.handleArrowKey(event);
+        }
     }
 
     // Window 上没有 forceActiveFocus；顶置窗口要自己抢一次激活才能收键盘。
@@ -1239,6 +1393,12 @@ Window {
             // 光靠启动时那一次 requestActivate，热键第二次就不一定有键盘了（方向键会失效）。
             if (screenFlow.phase === "Selecting")
                 overlay.requestActivate();
+
+            // 结果一收就清掉点选/拖选状态：下一单接着上一单的选中项会让人莫名其妙。
+            if (screenFlow.phase !== "Showing" && screenFlow.phase !== "ShowingOriginal") {
+                overlay.clearPlateSelection();
+                overlay.textPicks = ({});
+            }
 
 
             if (screenFlow.phase === "Idle") {
@@ -1407,6 +1567,52 @@ Window {
     }
 
     // ✕ 已抽成 components/CloseButton.qml（截图 / 小窗 / 设置面板 / 实时控制条共用）。
+
+    // ------------------------------------------------------------ 复制回执气泡
+    // 浮层是独立窗口，主界面的 Toast 弹不到这里，所以自己画一个：
+    // 贴在工具栏上方，出现即完全不透明，1.1 秒后淡出（不是瞬间消失，免得像闪了一下）。
+    Rectangle {
+        id: copyToast
+        z: 40
+        visible: opacity > 0
+        opacity: 0
+        width: copyToastRow.implicitWidth + Theme.s4 * 2
+        height: 28
+        radius: Theme.rSm
+        color: Theme.ink
+        x: Math.max(Theme.s2, Math.min(overlay.copyToastAt.x - width / 2,
+                                       overlay.width - width - Theme.s2))
+        y: Math.max(Theme.s2, overlay.copyToastAt.y - height)
+        Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.InOutQuad } }
+
+        Row {
+            id: copyToastRow
+            anchors.centerIn: parent
+            spacing: Theme.s1
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u2713"
+                color: Theme.surface
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSmall
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: overlay.copyToastText
+                color: Theme.surface
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSmall
+            }
+        }
+    }
+
+    Timer {
+        id: copyToastTimer
+        interval: 1100
+        onTriggered: copyToast.opacity = 0
+    }
 
     component OverlayButton: Rectangle {
         id: ob

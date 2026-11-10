@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%E7%BB%BF%E8%89%B2%E7%89%88-Releases-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4">
-  <img alt="version" src="https://img.shields.io/badge/version-1.2.1-informational">
+  <img alt="version" src="https://img.shields.io/badge/version-1.2.2-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -27,7 +27,7 @@
 
 ## 下载
 
-到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-1.2.1-win64.zip`。
+到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-1.2.2-win64.zip`。
 
 1. 解压到一个空文件夹（**别只把 exe 拖出来**，Qt 运行库就在旁边）
 2. 双击 `studious.exe`
@@ -130,6 +130,47 @@
 .\frontend\build\studious.exe         # 直接运行
 .\package.ps1                         # 出绿色包 dist\Studious-<版本>-win64.zip
 ```
+
+## 更新日志
+
+### 1.2.2
+
+**截图翻译：译文块可以直接点了**
+
+- 单击译文块即选中（整块背景变色）；按 Ctrl+C 或点工具栏「复制」复制所有选中的块，一块没选就复制整屏。
+- 显示译文时复制译文，显示原文时复制原文，不用再自己对。
+- 也能像在文档里那样用鼠标拖选译文中的几个字，Ctrl+C 只复制这一段（与块选中互不影响）。
+- 复制成功会在工具栏上方弹「✓ 已复制」，不会再出现点了没反应。
+
+**认得更准**
+
+- 新增视觉档位「快速 / 标准 / 精确」：快速省电，精确会把大图分块识别，长截图和 4K 屏明显更稳（配置 → 视觉引擎配置）。
+- 深色界面自动反色，白字黑底也能认；深色里嵌浅色卡片可以手动指定。
+- 横排标签（导航栏那种一行很多列）按文字间隙切开，不再把「问题 拉取请求 代理」并成一句。
+- 译文比原文长时自动换行、略微缩字号并避开右侧的下一块，不再互相压字。
+
+**翻得更稳**
+
+- 重写默认提示词：只输出译文，保留数字、版本号、文件名、URL、代码标识符与品牌名；界面短文字只给简短译名，不再自作解释。
+- 原文已经是目标语言时直接原样显示，不再白发一次请求，也不再误报「翻译失败」。
+- 带品牌名的句子（例如「基于MSBuild的项目」）不再被误判成没翻译；确实翻不出的段落改为显示原文，并在状态栏说明「N 段没有翻成…」，不再整屏报错。
+
+**实时翻译**
+
+- 控制条新增「刷新」，立刻重采一帧；同屏文字没变时也会强制重翻。
+- 选区贴到屏幕边缘时，工具栏自动放进选区里，不再跑到屏幕外；点暂停也不会再把工具栏弹回原位。
+
+**设置**
+
+- 新增「复制后关闭」：点复制后立刻收起浮层。
+- 新增小窗独立字号（11–28 px，默认 17），与外观页的字号互不影响。
+- 「浮层 → 按功能设置」改名为「功能设置」，并移除「保留原文标注」。
+
+**其他**
+
+- 日志能看到全过程：识别出的文字、提交给引擎的文本、引擎的原始回复与失败原因（`data/logs/studious.log`）。
+- 启动不再弹出黑色控制台窗口。
+- 发行包不再携带开发机上的测试接口地址与密钥。
 
 ## 反馈
 
