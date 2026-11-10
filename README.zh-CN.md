@@ -6,6 +6,8 @@
 
 <p align="center">截图、划词、实时翻译 —— 把屏幕上看到的外语，就地变成看得懂的语言。</p>
 
+<p align="center"><a href="README.md">English</a> · <b>简体中文</b></p>
+
 <p align="center">
   <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Releases-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4">
