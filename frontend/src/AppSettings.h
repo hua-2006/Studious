@@ -195,6 +195,15 @@ struct AppSettings {
     // 关掉 = 每帧都重翻，用来验证"引擎是不是真的在跑"。
     bool liveOnlyOnChange = true;
 
+    // ---- 视觉引擎（OCR）档位 ----
+    // 键 settings/ocr/preset：0 快速 / 1 标准 / 2 精确。只改"送进网络的分辨率 + 后处理尺度"，
+    // 不换模型资产，所以切换即时生效，不用重新下载。
+    int ocrPreset = 1;
+
+    // 键 settings/ocr/invert：0 自动（深色底才反色）/ 1 始终反色 / 2 从不反色。
+    // PP-OCR 主要拿浅底黑字训练，深色主题下不反色会明显掉字。
+    int ocrInvert = 0;
+
 
     // ---- 翻译历史（键 settings/history/enabled、settings/history/dir）----
     //

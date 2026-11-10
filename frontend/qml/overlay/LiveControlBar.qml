@@ -43,7 +43,12 @@ Window {
     readonly property bool hasHint: liveSession.slowHint !== ""
 
     // 只在这三个状态出现；Idle 和任何还没初始化出来的 phase 一律不显示。
-    visible: running || paused || errored
+    // 这里**必须直接比较 phase 字符串**，不能写成 running || paused || errored：
+    // 那三个是从 phase 派生出来的 bool，phase 一变 Qt 会先通知 visible 重算一次，
+    // 此刻 running 已经 false、paused 还没 true → 窗口先隐后显。对用户来说是
+    // 「点暂停，工具栏闪一下、并且被重新摆回初始位置」（隐一次会走 onVisibleChanged
+    // 的复位逻辑，把用户拖过的位置和"本局已摆位"标记一起清掉）。
+    visible: phase === "Running" || phase === "Paused" || phase === "Error"
 
     // 尺寸由内容撑开：三态控件数量不同，写死宽度会留一大片空白或把字截掉。
     // 菜单展开时窗口往下长出一块 —— 菜单是画在窗口里的（见 engineMenuOpen 的注释），
@@ -56,15 +61,24 @@ Window {
     // 这不影响浮层（那边是永远不抢焦点的）。
     // 收起来时顺手把「设置」小窗和引擎菜单一起关掉，免得留下孤儿窗口。
     onVisibleChanged: {
-        if (visible)
+        if (visible) {
             requestActivate();
-        else {
+            // 控制条抬到译文浮层上面：浮层的原文底色是一整块窗口，控制条被摆进
+            // 选区里时会被它压住（见 LiveSession::raiseControlWindow 的注释）。
+            raise();
+        } else {
             settingsOpen = false;
             engineMenuOpen = false;
             langMenuFor = "";
-            // 收起来 = 这一单结束：下一单重新按选区摆位，而不是沿用上一单被拖到的地方。
-            placedForSession = false;
-            userMoved = false;
+        }
+    }
+
+    // phase 变化时浮层会跟着显隐，可能又盖到控制条上；等这一轮布局跑完再抬一次。
+    Connections {
+        target: liveSession
+        function onPhaseChanged() {
+            if (bar.visible)
+                Qt.callLater(bar.raise);
         }
     }
 
@@ -117,6 +131,11 @@ Window {
                 bar.x = Math.round(startGeom.x + (bar.x + mouse.x) - pressScreenX);
                 bar.y = Math.round(startGeom.y + (bar.y + mouse.y) - pressScreenY);
             }
+
+            // 拖完再结算一次「有没有压到选区」：拖进选区要排除出抓屏，
+            // 拖出来要还原，不能只在自动摆位那一下算。
+            onReleased: bar.syncOverlap()
+            onCanceled: bar.syncOverlap()
         }
 
         Column {
@@ -335,6 +354,33 @@ Window {
                 }
 
                 VSep {}
+
+                // ---- 刷新：立刻采一帧 ----
+                // 定时拍是 400~1500 ms 一拍，画面刚换完字（比如点了下一集）时
+                // 用户不想干等下一拍。放在「暂停」右边的分隔符之后、✕ 之前：
+                // 它和「暂停」一样是会话级的动作，不跟设置/显示形态混在一起。
+                // 只在运行中给：暂停时没有"刷新"这回事（继续本来就会立刻补一帧）。
+                BarButton {
+                    id: refreshButton
+                    objectName: "liveRefreshButton"
+                    visible: bar.running
+                    text: qsTr("刷新")
+                    // 点下去必须有回执：主色实心闪 300 ms。
+                    // 屏幕上文字没变时，这一次重翻的结果和原来逐字相同，浮层不会动；
+                    // 只靠状态栏那行「正在翻译…」一闪，用户会以为点了没生效。
+                    property bool flash: false
+                    primary: flash
+                    onClicked: {
+                        refreshButton.flash = true;
+                        refreshFlash.restart();
+                        liveSession.refresh();
+                    }
+                    Timer {
+                        id: refreshFlash
+                        interval: 300
+                        onTriggered: refreshButton.flash = false
+                    }
+                }
 
                 // 右上角的 ✕：和「停止」同一个动作，位置固定在手最顺的角上。
                 Rectangle {
@@ -639,7 +685,16 @@ Window {
     Connections {
         target: liveSession
         function onRegionChanged() { bar.schedulePlace() }
-        function onPhaseChanged() { bar.schedulePlace() }
+        function onPhaseChanged() {
+            // 只有真正结束（Idle）才复位：下一单重新按选区摆位，而不是沿用上一单
+            // 被拖到的地方。以前这个复位挂在 onVisibleChanged(false) 上，而窗口在
+            // Running↔Paused 之间会瞬隐一次，于是"点暂停 → 工具栏跳回初始位置"。
+            if (bar.phase === "Idle") {
+                bar.placedForSession = false;
+                bar.userMoved = false;
+            }
+            bar.schedulePlace();
+        }
     }
 
     // 这一帧可能还没布局完（宽度是 0），推迟到下一轮事件循环再算。
@@ -651,7 +706,8 @@ Window {
         Qt.callLater(bar.placeNearRegion);
     }
 
-    // 默认位置：贴在实时选区正上方、水平居中；贴到屏幕顶放不下就落到选区下方。
+    // 默认位置：贴在实时选区正上方、水平居中；贴到屏幕顶放不下就落到选区下方；
+    // 上下都放不下（选区几乎占满整屏）就塞进选区贴底 —— 否则会被推到屏幕外。
     // 用户自己拖过就不再算（拖到哪就是哪，下次开局别抢回来）。
     function placeNearRegion() {
         if (bar.userMoved || bar.placedForSession || bar.width <= 0)
@@ -667,10 +723,28 @@ Window {
         let py = Math.round(r.y - bar.height - gap);
         if (py < gap)
             py = Math.round(r.y + r.height + gap);
-        py = Math.max(gap, Math.min(py, deskH - bar.height - gap));
+        if (py + bar.height > deskH - gap) {
+            // 全屏选区：上方是负坐标、下方又出界，只能放进来（贴底，尽量少挡译文）。
+            py = Math.round(r.y + r.height - bar.height - Theme.s3);
+            py = Math.max(gap, Math.min(py, deskH - bar.height - gap));
+        }
         bar.x = px;
         bar.y = py;
         bar.placedForSession = true;
+        bar.syncOverlap();
+        bar.raise();
+    }
+
+    // 工具栏压在选区上时，得让后端把它排除出抓屏：控制条平时故意"能被拍到"
+    // （用户要截图反馈），可一旦落在选区里，下一帧 OCR 就会把「暂停 / 刷新」
+    // 这些按钮文字当成原文再翻一遍。
+    function syncOverlap() {
+        const r = liveSession.regionLogical;
+        if (!r || r.width <= 0 || r.height <= 0)
+            return;
+        const overlaps = bar.x < r.x + r.width && bar.x + bar.width > r.x
+                      && bar.y < r.y + r.height && bar.y + bar.height > r.y;
+        liveSession.setControlBarOverlapping(overlaps);
     }
 
     // 内联按钮：跟 CaptureOverlay 的 OverlayButton 同一套观感 ——

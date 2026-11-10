@@ -33,11 +33,28 @@ namespace studious::ocr {
 
 struct OcrOptions {
     QStringList languages;      // "zh" / "en"，空 = 中英混合
-    int maxSideLen = 960;       // 送进检测网络前的最长边
-    float detThreshold = 0.3f;  // DBNet 概率图阈值（连通域平均分的下限）
-    float boxThreshold = 0.5f;  // 文本框二值化阈值（概率图 -> 0/1 掩码）
-    float unclipRatio = 1.6f;   // 文本框外扩比例（DBNet 的 unclip）
+
+    // 以下三个阈值留 0 = 按档位（preset）取默认值。以前这里是写死的 0.3 / 0.5 / 1.6，
+    // 结果档位改不动它们：调用方拿到的永远是默认拷贝，分不清"没设"和"设成默认"。
+    int maxSideLen = 0;         // 送进检测网络前的最长边；0 = 按档位
+    float detThreshold = 0.0f;  // DBNet 概率图阈值（连通域平均分的下限）
+    float boxThreshold = 0.0f;  // 文本框二值化阈值（概率图 -> 0/1 掩码）
+    float unclipRatio = 0.0f;   // 文本框外扩比例（DBNet 的 unclip）
     int threads = 0;            // 0 = 自动（min(8, 核数)）
+
+    // ---- 视觉引擎档位 ----
+    // 三档只改"送进网络的分辨率 + 后处理尺度 + 深色反色"，不换模型资产：
+    //   0 快速：4M 像素、宽 320、切片 6×字高 —— 实时翻译/连续截屏用。
+    //   1 标准：8M 像素、宽 480、切片 8×字高 —— 默认，截图翻译用。
+    //   2 精确：12M 像素 + 大图分块按原生分辨率检测、宽 640、切片 12×字高 —— 小字/4K/长行用。
+    int preset = 1;
+
+    // 深色底反色：深色主题下是白字黑底，PP-OCR 主要拿浅底黑字训练，不反色会明显掉识别率。
+    // 0 = 自动（按整图中位亮度判断）、1 = 始终反色、2 = 从不。
+    int invert = 0;
+
+    // 检测像素上限的显式覆盖（0 = 按档位）。档位里的值再走引擎内 1M~16M 的硬夹取。
+    qint64 detPixels = 0;
 };
 
 class OcrEngine {

@@ -2071,6 +2071,126 @@ Item {
                     Layout.preferredHeight: Theme.s6
                 }
             }
+            // 「视觉引擎配置」：OCR 的分辨率档位与深色反色。
+            // 单独一张卡、而不是塞进「引擎配置」，是因为它管的是"看图"这条链路 ——
+            // 截图翻译、实时翻译、小窗划词都走同一套 det/rec 参数，跟当前选哪个翻译引擎无关。
+            CollapsibleCard {
+                id: visionCard
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.s6
+                Layout.rightMargin: Theme.s6
+                collapsible: false
+                expanded: true
+                title: qsTr("视觉引擎配置")
+                hint: qsTr("识别截图的清晰度与速度；改完下一次识别就生效，无需重启。")
+
+                // 档位：只改送进网络的分辨率与后处理尺度，不换模型文件。
+                Segmented {
+                    id: ocrPresetBar
+                    Layout.alignment: Qt.AlignLeft
+                    items: [
+                        {
+                            code: "0",
+                            label: qsTr("快速")
+                        },
+                        {
+                            code: "1",
+                            label: qsTr("标准")
+                        },
+                        {
+                            code: "2",
+                            label: qsTr("精确")
+                        }
+                    ]
+                    current: String(backend.ocrPreset)
+                    onSelected: function (code) {
+                        backend.ocrPreset = Number(code);
+                    }
+                }
+                Text {
+                    // 把"档位"翻译成人能核对的具体数字：用户调完能对上日志里的
+                    // det=… / 最长边 / 像素上限，而不是只看到三个形容词。
+                    readonly property var specs: [
+                        {
+                            side: 960,
+                            px: "4M",
+                            width: 320,
+                            slice: 6
+                        },
+                        {
+                            side: 1280,
+                            px: "8M",
+                            width: 480,
+                            slice: 8
+                        },
+                        {
+                            side: 1600,
+                            px: "12M",
+                            width: 640,
+                            slice: 12
+                        }
+                    ]
+                    readonly property var spec: specs[Math.max(0, Math.min(2, backend.ocrPreset))]
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    font.family: Theme.fontUi
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.inkVariant
+                    text: backend.ocrPreset === 0
+                          ? qsTr("快速：最长边 %1 像素、上限 %2、识别宽 %3。实时翻译/连续截屏用，最省时间。")
+                                .arg(spec.side).arg(spec.px).arg(spec.width)
+                          : backend.ocrPreset === 2
+                            ? qsTr("精确：最长边 %1 像素、上限 %2、识别宽 %3；大图分块按原分辨率检测、长行按 %4×字高切段。小字、4K 全屏、长行最准，但慢 2~4 倍。")
+                                  .arg(spec.side).arg(spec.px).arg(spec.width).arg(spec.slice)
+                            : qsTr("标准：最长边 %1 像素、上限 %2、识别宽 %3、长行按 %4×字高切段。日常截图翻译的默认档。")
+                                  .arg(spec.side).arg(spec.px).arg(spec.width).arg(spec.slice)
+                }
+                Hint {
+                    // Hint 默认带 formLabelWidth 的左缩进（它平时活在 FieldRow 里）；
+                    // 这张卡里的说明是整行文字，不需要对齐到值列。
+                    Layout.leftMargin: 0
+                    text: qsTr("档位只调参数、不换模型：装了 OCR 资产就能用，切档不会重新下载。")
+                }
+
+                FieldRow {
+                    label: qsTr("深色反色")
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.s3
+                        Segmented {
+                            Layout.fillWidth: false
+                            items: [
+                                {
+                                    code: "0",
+                                    label: qsTr("自动")
+                                },
+                                {
+                                    code: "1",
+                                    label: qsTr("始终")
+                                },
+                                {
+                                    code: "2",
+                                    label: qsTr("从不")
+                                }
+                            ]
+                            current: String(backend.ocrInvert)
+                            onSelected: function (code) {
+                                backend.ocrInvert = Number(code);
+                            }
+                        }
+                        Item {
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+                Hint {
+                    Layout.leftMargin: 0
+                    text: qsTr("深色主题下是白字黑底，识别模型主要拿浅底黑字训练，反色后掉字会明显变少。「自动」按整图亮度判断，只在该反的时候反。")
+                }
+                Item {
+                    Layout.preferredHeight: Theme.s6
+                }
+            }
         }
         // 「这个引擎当前还用不了」拦截框。点解析不了的状态胶囊会调它；
         // 点行 / 框里的「去配置」都走 guard = false，不再拦第二次。

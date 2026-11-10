@@ -256,9 +256,20 @@ QString ScreenFlow::ocrTest(const QString &imagePath)
         return QStringLiteral("unavailable: ") + missing;
     }
 
-    const QVector<studious::platform::OcrWord> words =
-        engine.recognize(image, studious::ocr::OcrOptions{});
-    qInfo("[ocr-test] %d word(s) from %dx%d", int(words.size()), image.width(), image.height());
+    // 走查钩子也吃配置里的档位/反色：否则改了卡片里的设置再跑 --ocr-test，
+    // 拿到的还是标准档结果，等于没法验证"精确档到底有没有变清楚"。
+    studious::ocr::OcrOptions testOptions;
+    {
+        const AppSettings settings = AppSettings::load();
+        if (!langs::isAuto(settings.srcLang))
+            testOptions.languages = { langs::normalizeSource(settings.srcLang) };
+        testOptions.preset = settings.ocrPreset;
+        testOptions.invert = settings.ocrInvert;
+    }
+    const QVector<studious::platform::OcrWord> words = engine.recognize(image, testOptions);
+    qInfo("[ocr-test] %d word(s) from %dx%d (preset=%d invert=%d)",
+          int(words.size()), image.width(), image.height(), testOptions.preset,
+          testOptions.invert);
     for (const studious::platform::OcrWord &w : words) {
         qInfo("[ocr-test] %.3f %4d,%4d %4dx%-4d %s",
               w.confidence,
@@ -471,6 +482,9 @@ void ScreenFlow::confirmSelection(const QRect &region)
         // 源语言给了具体值就只认它，否则中英混合（界面文字的绝大多数情况）。
         if (!langs::isAuto(settings.srcLang))
             o.languages = { langs::normalizeSource(settings.srcLang) };
+        // 视觉引擎档位（配置页「视觉引擎配置」卡片）。
+        o.preset = settings.ocrPreset;
+        o.invert = settings.ocrInvert;
         return o;
     }();
     watcher->setFuture(QtConcurrent::run([engine, crop, options] { return engine->recognize(crop, options); }));

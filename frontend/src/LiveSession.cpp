@@ -254,6 +254,32 @@ void LiveSession::resume()
     runFrame();
 }
 
+void LiveSession::refresh()
+{
+    // 只在跑着的时候有意义：暂停/中断时既没有定时拍也没有值得刷新的画面，
+    // 控制条上这个按钮干脆是隐藏的（见 LiveControlBar.qml），这里再兜一道。
+    qInfo("[live] refresh requested (phase=%s busy=%d skip=%d)",
+          qUtf8Printable(m_phase),
+          int(m_frameBusy),
+          m_retrySkipFrames);
+    if (m_phase != QLatin1String("Running"))
+        return;
+    // 上一帧还在路上：这一拍回来就会刷新，再抓一次只是白烧 CPU + 可能触发本地引擎排队。
+    if (m_frameBusy)
+        return;
+    // 用户明确要现在看结果，就别受"本地 LLM 还在启动、先安静等几帧"的退避限制。
+    m_retrySkipFrames = 0;
+    // 连"画面未变"那道闸也跳过：点了刷新就是要重翻一次，否则屏幕上没变化时
+    // 点下去像没生效（这一帧在 acceptOcrLines 里用掉就清）。
+    m_forceNextFrame = true;
+    // 顺手把定时器重新计时：刚拍完的这一帧算作新一轮的起点，
+    // 不然 200 ms 后那拍又抓一次同一屏。
+    if (m_timer && m_timer->isActive())
+        m_timer->start();
+    setStatusText(tr("正在刷新…"));
+    runFrame();
+}
+
 void LiveSession::scheduleTimer()
 {
     if (!m_timer)
@@ -302,6 +328,10 @@ void LiveSession::runFrame()
     // 源语言给了具体值就只认它，否则中英混合（界面文字的绝大多数情况）。
     if (!langs::isAuto(settings.srcLang))
         options.languages = { langs::normalizeSource(settings.srcLang) };
+    // 视觉引擎档位跟配置页同源。精确档会分块 + 12M 像素，实时路径会掉帧 —— 用户自己选的，
+    // 就不在这里偷偷降档（降了反而"为什么精确档没变清楚"）。
+    options.preset = settings.ocrPreset;
+    options.invert = settings.ocrInvert;
 
     studious::platform::IPlatform *platform = m_platform;
     studious::ocr::OcrEngine *engine = m_ocr.get();
@@ -402,6 +432,8 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
 
     if (paragraphList.isEmpty()) {
         ++m_emptyFrames;
+        // 这一帧没字，"强制重翻"没有对象可翻，标志就地作废。
+        m_forceNextFrame = false;
         // 以前连续 3 帧就收单，结果「画面正好没有字」（过场、黑屏、对话框关掉）也会被判死。
         // 现在只记状态、不停止：用户开着就一直接着看，直到自己关。
         setStatusText(tr("这一帧没有文字（已连续 %1 帧）").arg(m_emptyFrames));
@@ -419,9 +451,14 @@ void LiveSession::acceptOcrLines(const QVector<OcrLine> &lines)
     // 指纹就是原文本身：一帧几百字，字符串比较比算哈希还快，也不会撞哈希漏翻。
     const QString fingerprint = paragraphList.join(QLatin1Char('\n'));
 
+    // 用户按了「刷新」：这一帧跳过"画面未变"那道闸，强制重翻一次。
+    // 用掉就清，下一拍照常按 liveOnlyOnChange 走。
+    const bool forced = m_forceNextFrame;
+    m_forceNextFrame = false;
+
     // 画面没变就不重翻。pending != last 说明上一趟还在飞（或上次失败了）：
     // 那种情况要重试，不能因为「和上一次相同」把失败的那一帧永久钉住。
-    if (settings.liveOnlyOnChange && fingerprint == m_lastText && fingerprint != m_pendingText) {
+    if (!forced && settings.liveOnlyOnChange && fingerprint == m_lastText && fingerprint != m_pendingText) {
         setStatusText(tr("画面未变 · 已更新 %1 次").arg(m_updateCount));
         return;
     }
@@ -643,7 +680,30 @@ bool LiveSession::attachControlWindow(QObject *window)
         setErrorText(error.isEmpty() ? tr("控制条不能接收点击。") : error);
         return false;
     }
+    // 新一单从「可以被拍到」起算：上一单它可能压在选区里被排除过，
+    // 不还原的话用户这次截图会看到一个空洞。真正压在选区上时 QML 会再打开。
+    setControlBarOverlapping(false);
     return true;
+}
+
+void LiveSession::setControlBarOverlapping(bool overlaps)
+{
+    if (!m_platform || !m_controlWindow)
+        return;
+    // 只有在"压进选区"和"回到选区外面"两种状态之间才动 WDA：
+    // 每改一次 display affinity，DWM 都会重算一次，抓屏那边能看到一帧闪。
+    if (overlaps == m_controlBarExcluded)
+        return;
+    QString error;
+    if (!m_platform->setExcludeFromCapture(m_controlWindow, overlaps, &error)) {
+        // 设不上不算致命：最坏情况是控制条自己的字被翻一遍，会话照常跑。
+        qWarning("[live] control bar capture-exclusion failed: %s (overlap=%d)",
+                 qUtf8Printable(error), int(overlaps));
+        return;
+    }
+    m_controlBarExcluded = overlaps;
+    qInfo("[live] control bar %s capture (overlap=%d)",
+          overlaps ? "excluded from" : "included in", int(overlaps));
 }
 
 void LiveSession::setEngineId(const QString &uiEngineId)
@@ -769,7 +829,19 @@ bool LiveSession::placeWindows()
         setErrorText(error.isEmpty() ? tr("译文浮层摆不到选区上。") : error);
         return false;
     }
+    // 原文底色（overlayBackdrop）是画在译文浮层那个整块窗口上的；控制条现在可能
+    // 被摆在选区里面，不重新抬一次就会被那层 70% 的底色压成灰蒙蒙一片。
+    raiseControlWindow();
     return true;
+}
+
+void LiveSession::raiseControlWindow()
+{
+    if (!m_controlWindow)
+        return;
+    // raise() 只走 SetWindowPos(HWND_TOP)，不激活、不改 WS_EX_NOACTIVATE，
+    // 控制条照样点得到、也不会把焦点从用户正在读的窗口抢走。
+    m_controlWindow->raise();
 }
 
 // ---------------------------------------------------------------------------

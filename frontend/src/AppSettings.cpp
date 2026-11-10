@@ -215,6 +215,10 @@ AppSettings AppSettings::load()
     s.mtIdleMinutes = clampedInt(store.value(key("mt/idleMinutes"), def.mtIdleMinutes).toInt(), 0,
                                  180);
 
+    // 视觉引擎档位：档位只有 0/1/2，色值只有 0/1/2，越界一律回默认（别让注册表脏值把引擎带崩）。
+    s.ocrPreset = clampedInt(store.value(key("ocr/preset"), def.ocrPreset).toInt(), 0, 2);
+    s.ocrInvert = clampedInt(store.value(key("ocr/invert"), def.ocrInvert).toInt(), 0, 2);
+
     // 界面语言：空串是有意义的值（= 跟随系统），所以不做 textOr 回落。
     // 注册表可能被手改成乱七八糟的值，不在白名单里就当"跟随系统"。
     const QString lang = store.value(key("ui/language")).toString().trimmed().toLower();
@@ -357,6 +361,8 @@ void AppSettings::save() const
     store.setValue(key("llm/localIdleMinutes"), localIdleMinutes);         // 1~240
     store.setValue(key("mt/preload"), mtPreload);
     store.setValue(key("mt/idleMinutes"), mtIdleMinutes);                  // 0 = 不自动释放
+    store.setValue(key("ocr/preset"), ocrPreset);                     // 0 快速 / 1 标准 / 2 精确
+    store.setValue(key("ocr/invert"), ocrInvert);                     // 0 自动 / 1 始终 / 2 从不
     store.setValue(key("ui/language"), uiLanguage);   // 空 = 跟随系统
     store.setValue(key("ui/theme"), themeMode);       // system / light / dark
     store.setValue(key("ui/fontScale"), fontScale);   // 80~150，100 = 原始大小

@@ -2560,3 +2560,60 @@ ormalizeTargetsAgainstSource(targets, source)——源不是 auto 时把同一�
 - 保留的调研结论（下次要做时不用重来）：官方 encoder 图的真实结构是
   x = emb*sqrt(d) + pos → attn(x) → x = x + attn → LN → ffn → x = LN(x + ffn)；
   最初漏了 FFN 之后那次残差，导致 encoder 余弦 0.995 但译文是垃圾。
+
+### 实时翻译控制条「刷新」：强制重翻 + 点击回执（2026-11-10）
+
+- 反馈：点了刷新但同屏文字没变时，浮层逐字不动、状态栏那行一闪就没了，看起来像没生效。
+  给 `liveRefreshButton` 加 `primary: flash` + 300 ms `Timer`，点下去主色实心闪一下。
+- 强制重翻：`LiveSession` 加 `m_forceNextFrame`，`refresh()` 置位，
+  `acceptOcrLines()` 的「画面未变」闸改成 `!forced && liveOnlyOnChange && …`，
+  空帧分支就地清掉（没字可翻，别把标志带到下一帧）。
+- 踩坑：GUI 子系统下 `--ui-shot` 的 `STUDIOUS_UI_CALL` 才生效；直接起 exe 不会跑走查钩子，
+  `begin@60000` 之后的 `refresh` 也要给足等待时间，否则抓到的是「正在翻译」而不是结果。
+- 验证：用户实测点击有回执；重编 15 步通过，日志无新增 QML 警告。
+## 浮层工具条摆位修复（2026-11-10）
+
+两个由用户报上来的摆位问题，都是 QML 里的定位逻辑，跟后端无关。
+
+### 1. 选区几乎占满整屏时工具栏跑到屏幕外（截图翻译 + 实时翻译）
+- 截图翻译：`CaptureOverlay.qml` 的工具栏只有"选区下方 / 选区上方"两条分支，
+  上下都没有余量时算出负的 y，整条被窗口裁掉。
+- 实时翻译：`LiveControlBar.qml` 虽然把位置 clamp 回桌面，但屏幕上下都贴着边时
+  也只能硬塞在屏幕外沿。
+- 修法：两条链都加第三条分支——`below` / `roomAbove` 都不成立时"塞进选区贴底"
+  （`选区底边 - 工具条高度 - Theme.s3`，再 clamp 进桌面）。
+- 侧带：控制条落进选区后必须把它排除出抓屏，否则下一帧 OCR 会把
+  「暂停 / 刷新 / 设置」当原文再翻一遍。新增 `LiveSession::setControlBarOverlapping()`，
+  只在状态变化时调 `setExcludeFromCapture()`（每改一次 DWM 要重算，会闪一帧）；
+  拖动结束也结算一次，新一局开始重置回"可被拍到"，否则上次留下的空洞会跟着用户。
+
+### 2. 点「暂停」时控制条被拽回初始位置
+- 根因不是代码里显式复位：`visible: running || paused || errored` 三个都是从 phase
+  派生的 bool，phase 从 Running 变 Paused 的瞬间 `running` 先变 false、`paused` 还没变 true，
+  Qt 按这个中间态重算了一次 visible → 窗口瞬隐现；`onVisibleChanged(false)` 里正好
+  在复位摆位状态，紧接着 `schedulePlace()` 又按"首次出现"摆回自动位置。
+- 修法：`visible` 改成直接比 phase 字符串（消灭中间态）；摆位状态只在 phase 回到
+  Idle 时复位，不再挂在 visible 上。
+- 日志实证：修前 `visible=false phase=Paused placed=true` 紧跟 `visible=true phase=Paused
+  placed=false` 再 `place -> 242,242`；修后一次 place，pause/resume 全程无 visible 抖动。
+
+### 验证（真跑）
+- 普通选区 `300,300,760,320`：控制条 `place -> 242,242 size=876x50` 只出现一次，
+  pause/resume 无重摆；截图流程 `confirmSelection` 走完 9 行正常出译文。
+- 近全屏 `0,0,1707,1060`：控制条 `place -> 823,969`（落在屏内）+ 日志
+  `control bar excluded from capture (overlap=1)`；截图工具栏
+  `inside=true y=1004`，整屏截图里能看到它贴在选区底部。
+- 编译：`cmake --build frontend\build` 全过；临时插桩日志（`[barplace]`/`[ovbarplace]`）已清干净。
+### 3. 工具栏被"框选框"盖住（2026-11-10 补）
+- 截图翻译：`CaptureOverlay.qml` 的工具栏 `z` 从 5 提到 12，压在选框（z=3）、手柄/尺寸标签（z=4）之上；
+  菜单是 20/21，仍在最上层。
+- 实时翻译：真正压住它的是**译文浮层窗口**——原文底色（默认 70%）画在那个整块窗口上，
+  控制条被摆进选区后就在它下面，看上去糊成一片。
+  - 新增 `LiveSession::raiseControlWindow()`（`SetWindowPos(HWND_TOP)`，不激活、不动 WS_EX_NOACTIVATE），
+    在 `placeWindows()` 摆完浮层后调用。
+  - QML 侧 `LiveControlBar.qml` 在 `onVisibleChanged(visible)`、`placeNearRegion()` 末尾抬一次，
+    并用 `Connections.onPhaseChanged → Qt.callLater(bar.raise)` 兜住"浮层随 phase 显隐又盖上来"。
+- 验证：`EnumWindows` 按 z 序枚举该进程的可见窗口 ——
+  控制条 `z=10 (501,969)-(1377,1019)`（在选区 0,0-1707,1060 之内）、译文浮层 `z=11 (0,0)-(1707,1060)`、
+  主窗口 `z=35`，索引越小越靠上 → 控制条已压在浮层上面；pause 之后仍是 10 / 11。
+  截图翻译整屏选区：工具栏「处理中… 本地 LLM 自动检测 → 英语 设置 重新框选」可见且不被框线遮住。

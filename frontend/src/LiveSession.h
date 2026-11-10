@@ -98,11 +98,18 @@ public:
     Q_INVOKABLE bool copyResult();
     // 丢掉 lastText：下一帧即使画面没变也重翻。给「换引擎/换语言后重来一单」用。
     Q_INVOKABLE void retranslate();
+    // 立刻采一帧（控制条上的「刷新」）：不等下一个定时拍，跳过"本地引擎还在启动"的退避。
+    // 正在抓帧时点了就忽略——这一拍本来就会出结果，排队反而会连抓两次。
+    Q_INVOKABLE void refresh();
 
     // 译文浮层：排除截图 + 点击穿透 + 摆到选区上。
     Q_INVOKABLE bool attachPlateWindow(QObject *window);
     // 控制条：**只**排除截图。它要能点、能拖、能收 Esc，穿透了就等于没有。
     Q_INVOKABLE bool attachControlWindow(QObject *window);
+    // 控制条是否压在实时选区上：压在选区里就必须排除出抓屏，否则它自己的
+    // 「暂停 / 刷新 / 设置」会被下一帧 OCR 当成原文再翻一遍。
+    // 平时（在选区外面）保持可被拍到 —— 用户要拿截图工具把它拍下来反馈问题。
+    Q_INVOKABLE void setControlBarOverlapping(bool overlaps);
     // 重新给译文浮层打一遍「穿透 + 排除截图」。
     // QML 侧改 visible / 主题会让 Qt 自己回写一次窗口样式，把 Win32 的 WS_EX_TRANSPARENT
     // 抹掉（QML 的 flags 和 SetWindowLong 是两拨人在写同一份数据），所以由 QML 在
@@ -154,6 +161,8 @@ private:
     bool ensureOcr();
     // 把译文浮层摆到选区上。返回 false = 摆位失败（错误已经写进 errorText）。
     bool placeWindows();
+    // 把控制条抬到译文浮层之上：控制条落进选区时会被那层原文底色盖住。
+    void raiseControlWindow();
     // 逻辑选区 → 物理选区。直接乘 AppSettings 里没有的缩放因子，所以从屏幕取。
     qreal resolvePixelScale() const;
 
@@ -202,6 +211,10 @@ private:
     // 本地 LLM 正在启动时的退避：接下来这几帧直接跳过（不抓屏、不发翻译请求）。
     // 600 ms 一帧的节奏下，一直硬试只会不断把「它还没起来」再问一遍。
     int m_retrySkipFrames = 0;
+    // 用户按了「刷新」：这一帧即使和上一帧文字一模一样也要重翻一次。
+    // 只作用于紧接着的那一帧（acceptOcrLines 里用掉就清），不会把"画面未变就不重翻"
+    // 这条规则永久废掉。
+    bool m_forceNextFrame = false;
     // 每 start/stop 自增：OCR 与翻译都可能跨局回来，靠它丢掉上一局的结果。
     quint64 m_session = 0;
     quint64 m_pendingSession = 0;
@@ -216,6 +229,8 @@ private:
 
     QPointer<QWindow> m_plateWindow;
     QPointer<QWindow> m_controlWindow;
+    // 控制条当前有没有被排除出抓屏（见 setControlBarOverlapping）。
+    bool m_controlBarExcluded = false;
 };
 
 } // namespace studious::ui

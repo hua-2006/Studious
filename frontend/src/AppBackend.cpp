@@ -348,6 +348,8 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_overlayBackdrop = settings.overlayBackdrop;
     m_liveIntervalMs = settings.liveIntervalMs;
     m_liveOnlyOnChange = settings.liveOnlyOnChange;
+    m_ocrPreset = settings.ocrPreset;
+    m_ocrInvert = settings.ocrInvert;
     m_historyEnabled = settings.historyEnabled;
     m_closeToTray = settings.closeBehavior == QLatin1String("tray");
     m_singleInstance = settings.singleInstance;
@@ -1441,8 +1443,38 @@ void AppBackend::setLiveIntervalMs(int ms)
     emit prefsChanged();
 }
 
-void AppBackend::setLiveOnlyOnChange(bool on)
+void AppBackend::setOcrPreset(int preset)
 {
+    const int next = std::clamp(preset, 0, 2);
+    if (m_ocrPreset == next) {
+        return;
+    }
+    m_ocrPreset = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.ocrPreset = next;
+    settings.save();
+
+    // 下一次识别就按新档位走（ScreenFlow / LiveSession 每次都重新读设置），不用重启引擎。
+    emit prefsChanged();
+}
+
+void AppBackend::setOcrInvert(int mode)
+{
+    const int next = std::clamp(mode, 0, 2);
+    if (m_ocrInvert == next) {
+        return;
+    }
+    m_ocrInvert = next;
+
+    AppSettings settings = AppSettings::load();
+    settings.ocrInvert = next;
+    settings.save();
+
+    emit prefsChanged();
+}
+
+void AppBackend::setLiveOnlyOnChange(bool on){
     if (m_liveOnlyOnChange == on) {
         return;
     }

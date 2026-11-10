@@ -716,6 +716,7 @@
     </message>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="73"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2165"/>
         <source>自动</source>
         <translation>Auto</translation>
     </message>
@@ -978,7 +979,7 @@
     </message>
     <message>
         <location filename="../qml/pages/ConfigPage.qml" line="1793"/>
-        <location filename="../qml/pages/ConfigPage.qml" line="2128"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2248"/>
         <source>去「资产」页</source>
         <translation>Go to Assets</translation>
     </message>
@@ -1068,7 +1069,72 @@
         <translation>Everything it needs is built in; no extra download.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="2113"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2084"/>
+        <source>视觉引擎配置</source>
+        <translation>Vision engine</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2085"/>
+        <source>识别截图的清晰度与速度；改完下一次识别就生效，无需重启。</source>
+        <translation>How sharp and how fast screenshots are recognized; changes apply to the next recognition, no restart needed.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2094"/>
+        <source>快速</source>
+        <translation>Fast</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2098"/>
+        <source>标准</source>
+        <translation>Standard</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2102"/>
+        <source>精确</source>
+        <translation>Precise</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2140"/>
+        <source>快速：最长边 %1 像素、上限 %2、识别宽 %3。实时翻译/连续截屏用，最省时间。</source>
+        <translation>Fast: longest side %1 px, cap %2, recognition width %3. For live translation and continuous capture; the cheapest option.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2143"/>
+        <source>精确：最长边 %1 像素、上限 %2、识别宽 %3；大图分块按原分辨率检测、长行按 %4×字高切段。小字、4K 全屏、长行最准，但慢 2~4 倍。</source>
+        <translation>Precise: longest side %1 px, cap %2, recognition width %3; large images are detected tile by tile at native resolution and long lines are split every %4× line height. Best for small text, full 4K screens and long lines, but 2-4× slower.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2145"/>
+        <source>标准：最长边 %1 像素、上限 %2、识别宽 %3、长行按 %4×字高切段。日常截图翻译的默认档。</source>
+        <translation>Standard: longest side %1 px, cap %2, recognition width %3, long lines split every %4× line height. The default for everyday screenshot translation.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2152"/>
+        <source>档位只调参数、不换模型：装了 OCR 资产就能用，切档不会重新下载。</source>
+        <translation>Presets only change parameters, not the model: once the OCR assets are installed every preset works, and switching never re-downloads anything.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2156"/>
+        <source>深色反色</source>
+        <translation>Invert</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2169"/>
+        <source>始终</source>
+        <translation>Always</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2173"/>
+        <source>从不</source>
+        <translation>Never</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2188"/>
+        <source>深色主题下是白字黑底，识别模型主要拿浅底黑字训练，反色后掉字会明显变少。「自动」按整图亮度判断，只在该反的时候反。</source>
+        <translation>On dark themes the text is white on black, while the recognizer is trained mostly on dark text on light paper; inverting cuts dropped characters noticeably. “Auto” looks at overall brightness and only inverts when it helps.</translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/ConfigPage.qml" line="2233"/>
         <source>缺少必需的文件，先到「资产」页下载。</source>
         <translation>Required files are missing — download them from Assets.</translation>
     </message>
@@ -1131,7 +1197,7 @@
         <translation type="vanished">Required asset files are missing - download them on the Assets page first.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="2113"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2233"/>
         <source>当前语言对下还用不了它，先检查一下配置。</source>
         <translation>It cannot be used for the current language pair yet - check its settings first.</translation>
     </message>
@@ -1352,7 +1418,7 @@
         <translation type="vanished">ONNX Runtime ships with the app - nothing to download. As long as the language pair directories above are complete, it just runs.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="2101"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2221"/>
         <source>%1 还没有配置好</source>
         <translation>%1 is not configured yet</translation>
     </message>
@@ -1361,7 +1427,7 @@
         <translation type="vanished">Fill in the connection settings before using it.</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="2124"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2244"/>
         <source>取消</source>
         <translation>Cancel</translation>
     </message>
@@ -1370,7 +1436,7 @@
         <translation type="vanished">Open Assets</translation>
     </message>
     <message>
-        <location filename="../qml/pages/ConfigPage.qml" line="2137"/>
+        <location filename="../qml/pages/ConfigPage.qml" line="2257"/>
         <source>去配置</source>
         <translation>Set up</translation>
     </message>
@@ -1782,6 +1848,11 @@
         <translation>Start over</translation>
     </message>
     <message>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="347"/>
+        <source>刷新</source>
+        <translation>Refresh</translation>
+    </message>
+    <message>
         <source>关闭</source>
         <translation type="vanished">Close</translation>
     </message>
@@ -1817,7 +1888,7 @@
         <translation type="vanished">Cloud LLM</translation>
     </message>
     <message>
-        <location filename="../qml/overlay/LiveControlBar.qml" line="475"/>
+        <location filename="../qml/overlay/LiveControlBar.qml" line="487"/>
         <source>自动</source>
         <translation>Auto</translation>
     </message>
@@ -2622,7 +2693,7 @@
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../src/LiveSession.cpp" line="321"/>
+        <location filename="../src/LiveSession.cpp" line="348"/>
         <source>抓屏失败。</source>
         <translation>Screen capture failed.</translation>
     </message>
@@ -4103,8 +4174,8 @@ The files will be removed; you can download them again later.</translation>
     </message>
     <message>
         <location filename="../src/LiveSession.cpp" line="161"/>
-        <location filename="../src/LiveSession.cpp" line="603"/>
-        <location filename="../src/LiveSession.cpp" line="632"/>
+        <location filename="../src/LiveSession.cpp" line="630"/>
+        <location filename="../src/LiveSession.cpp" line="659"/>
         <source>当前环境没有可用的抓屏后端。</source>
         <translation>No screen capture backend is available in this environment.</translation>
     </message>
@@ -4135,7 +4206,12 @@ The files will be removed; you can download them again later.</translation>
         <translation>Paused · updated %1 times</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="385"/>
+        <location filename="../src/LiveSession.cpp" line="276"/>
+        <source>正在刷新…</source>
+        <translation>Refreshing…</translation>
+    </message>
+    <message>
+        <location filename="../src/LiveSession.cpp" line="412"/>
         <source>抓屏失败。</source>
         <translation>Screen capture failed.</translation>
     </message>
@@ -4148,72 +4224,72 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">No text in this frame (%1/%2)</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="407"/>
+        <location filename="../src/LiveSession.cpp" line="434"/>
         <source>这一帧没有文字（已连续 %1 帧）</source>
         <translation>No text in this frame (%1 frame(s) in a row)</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="425"/>
+        <location filename="../src/LiveSession.cpp" line="452"/>
         <source>画面未变 · 已更新 %1 次</source>
         <translation>Unchanged · updated %1 times</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="433"/>
+        <location filename="../src/LiveSession.cpp" line="460"/>
         <source>引擎忙，等下一帧 · 已更新 %1 次</source>
         <translation>Engine busy, waiting for the next frame · updated %1 times</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="463"/>
+        <location filename="../src/LiveSession.cpp" line="490"/>
         <source>翻译没发出去：%1</source>
         <translation>Couldn&apos;t send the translation: %1</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="469"/>
+        <location filename="../src/LiveSession.cpp" line="496"/>
         <source>正在翻译 %1 行…</source>
         <translation>Translating %1 lines…</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="497"/>
+        <location filename="../src/LiveSession.cpp" line="524"/>
         <source>本地 LLM 正在启动，稍后自动重试…</source>
         <translation>Local LLM is starting; retrying in a moment…</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="500"/>
+        <location filename="../src/LiveSession.cpp" line="527"/>
         <source>翻译失败：%1</source>
         <translation>Translation failed: %1</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="542"/>
+        <location filename="../src/LiveSession.cpp" line="569"/>
         <source>当前引擎每次约 %1 秒，实时效果受限</source>
         <translation>The current engine takes about %1 s per frame, so live updates are limited</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="547"/>
+        <location filename="../src/LiveSession.cpp" line="574"/>
         <source>已更新 %1 次 · %2 行 · %3 ms</source>
         <translation>Updated %1 times · %2 lines · %3 ms</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="578"/>
+        <location filename="../src/LiveSession.cpp" line="605"/>
         <source>已复制 %1 行</source>
         <translation>Copied %1 lines</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="599"/>
+        <location filename="../src/LiveSession.cpp" line="626"/>
         <source>译文浮层窗口无效。</source>
         <translation>The translation overlay window is invalid.</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="614"/>
+        <location filename="../src/LiveSession.cpp" line="641"/>
         <source>译文浮层不能点击穿透。</source>
         <translation>The translation overlay cannot be made click-through.</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="618"/>
+        <location filename="../src/LiveSession.cpp" line="645"/>
         <source>译文浮层不能排除在截图之外。</source>
         <translation>The translation overlay cannot be excluded from screen capture.</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="628"/>
+        <location filename="../src/LiveSession.cpp" line="655"/>
         <source>控制条窗口无效。</source>
         <translation>The control bar window is invalid.</translation>
     </message>
@@ -4222,12 +4298,12 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">The control bar cannot be excluded from screen capture.</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="643"/>
+        <location filename="../src/LiveSession.cpp" line="670"/>
         <source>控制条不能接收点击。</source>
         <translation>The control bar cannot receive clicks.</translation>
     </message>
     <message>
-        <location filename="../src/LiveSession.cpp" line="769"/>
+        <location filename="../src/LiveSession.cpp" line="796"/>
         <source>译文浮层摆不到选区上。</source>
         <translation>The translation overlay cannot be placed over the selection.</translation>
     </message>
@@ -4292,47 +4368,47 @@ The files will be removed; you can download them again later.</translation>
         <translation>OCR models are missing: %1. Download them on the Assets page.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="338"/>
+        <location filename="../src/ScreenFlow.cpp" line="349"/>
         <source>这个平台不支持截屏。</source>
         <translation>This platform does not support screen capture.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="349"/>
+        <location filename="../src/ScreenFlow.cpp" line="360"/>
         <source>抓屏失败。</source>
         <translation>Screen capture failed.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="365"/>
+        <location filename="../src/ScreenFlow.cpp" line="376"/>
         <source>%1 × %2 · 拖拽框选要翻译的区域</source>
         <translation>%1 × %2 · Drag to select the area to translate</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="379"/>
+        <location filename="../src/ScreenFlow.cpp" line="390"/>
         <source>选区宽或高为 0，请重新框选。</source>
         <translation>The selection has zero width or height. Please reselect.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="383"/>
+        <location filename="../src/ScreenFlow.cpp" line="394"/>
         <source>没有抓到屏幕内容，请重新开始。</source>
         <translation>No screen content was captured. Please start again.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="398"/>
+        <location filename="../src/ScreenFlow.cpp" line="409"/>
         <source>选区不在屏幕内。</source>
         <translation>The selection is not on screen.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="409"/>
+        <location filename="../src/ScreenFlow.cpp" line="420"/>
         <source>识别中…</source>
         <translation>Recognizing…</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="444"/>
+        <location filename="../src/ScreenFlow.cpp" line="455"/>
         <source>识别失败：该区域没有检测到文字。</source>
         <translation>Recognition failed: no text found in that area.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="518"/>
+        <location filename="../src/ScreenFlow.cpp" line="532"/>
         <source>翻译中…</source>
         <translation>Translating…</translation>
     </message>
@@ -4341,7 +4417,7 @@ The files will be removed; you can download them again later.</translation>
         <translation type="vanished">Translation could not be started.</translation>
     </message>
     <message>
-        <location filename="../src/ScreenFlow.cpp" line="601"/>
+        <location filename="../src/ScreenFlow.cpp" line="615"/>
         <source>已取消。</source>
         <translation>Cancelled.</translation>
     </message>

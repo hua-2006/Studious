@@ -720,14 +720,20 @@ Window {
 
     // ---------------------------------------------------------------- 工具栏
     // 位置：选区下方；下方放不下就翻到上方（设计稿 A9 的贴边翻转）。
+    // 上下都放不下（选区几乎占满整屏）时塞进选区贴底 —— 否则 y 会算成负数，
+    // 整条被窗口裁掉，用户看到的就是"工具栏跑屏幕外面去了"。
     Rectangle {
         id: ovbar
         readonly property bool below: overlay.liveRect.y + overlay.liveRect.height + height + Theme.s4 < overlay.height
+        readonly property bool roomAbove: overlay.liveRect.y - height - Theme.s3 >= Theme.s2
+        readonly property bool inside: !below && !roomAbove
         x: Math.max(Theme.s2,
                     Math.min(overlay.liveRect.x + (overlay.liveRect.width - width) / 2,
                              overlay.width - width - Theme.s2))
         y: below ? overlay.liveRect.y + overlay.liveRect.height + Theme.s3
-                 : overlay.liveRect.y - height - Theme.s3
+                 : (inside
+                    ? Math.max(Theme.s2, overlay.liveRect.y + overlay.liveRect.height - height - Theme.s3)
+                    : overlay.liveRect.y - height - Theme.s3)
         width: barRow.implicitWidth + Theme.s3 * 2
         height: 44
         radius: Theme.rMd
@@ -736,8 +742,7 @@ Window {
         border.color: Theme.outlineVariant
         visible: overlay.engaged && overlay.liveRect.width > 1 && overlay.liveRect.height > 1
                  && !overlay.dragging
-        z: 5
-
+        z: 12   // 压在选框（z=3/4）之上：贴进选区时不能被框线、手柄或尺寸标签盖住
         Row {
             id: barRow
             anchors.centerIn: parent

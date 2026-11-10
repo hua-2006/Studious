@@ -259,6 +259,13 @@ class AppBackend : public QObject {
     Q_PROPERTY(int liveIntervalMs READ liveIntervalMs WRITE setLiveIntervalMs NOTIFY prefsChanged)
     // 画面没变就不重翻：省一次引擎调用，也让"已更新 N 次"这个数字有意义。
     Q_PROPERTY(bool liveOnlyOnChange READ liveOnlyOnChange WRITE setLiveOnlyOnChange NOTIFY prefsChanged)
+
+    // ---- 视觉引擎（OCR 档位）----
+    // 0 快速 / 1 标准 / 2 精确。只改"送进网络的分辨率 + 后处理尺度 + 是否分块"，
+    // 不换模型资产：切完下一次识别就生效，不需要重启或重下模型。
+    Q_PROPERTY(int ocrPreset READ ocrPreset WRITE setOcrPreset NOTIFY prefsChanged)
+    // 深色底反色：0 自动 / 1 始终 / 2 从不。
+    Q_PROPERTY(int ocrInvert READ ocrInvert WRITE setOcrInvert NOTIFY prefsChanged)
     // 锁本地引擎：云端 / Web 单次都在 1 秒以上，做实时没有意义。
 
     // 翻译历史目前只有框架：开关 + 目录。写入与浏览界面在后面批次接上。
@@ -479,6 +486,11 @@ public:
     void setLiveIntervalMs(int ms);
     bool liveOnlyOnChange() const { return m_liveOnlyOnChange; }
     void setLiveOnlyOnChange(bool on);
+
+    int ocrPreset() const { return m_ocrPreset; }
+    void setOcrPreset(int preset);
+    int ocrInvert() const { return m_ocrInvert; }
+    void setOcrInvert(int mode);
 
     bool historyEnabled() const { return m_historyEnabled; }
     void setHistoryEnabled(bool on);
@@ -825,6 +837,8 @@ private:
     int m_overlayBackdrop = 70;
     int m_liveIntervalMs = 600;
     bool m_liveOnlyOnChange = true;
+    int m_ocrPreset = 1;    // 0 快速 / 1 标准 / 2 精确
+    int m_ocrInvert = 0;    // 0 自动 / 1 始终 / 2 从不
     bool m_historyEnabled = false;
     bool m_minimizeToTray = false;
     bool m_miniAlwaysOnTop = true;

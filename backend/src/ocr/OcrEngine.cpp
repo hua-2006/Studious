@@ -39,10 +39,10 @@ constexpr int kSizeMultiple = 32;
 constexpr int kRecHeight = 48;
 constexpr int kRecWidth = 320;
 
-// 检测输入 / 概率图的像素上限（4M ≈ 2048×2048）。
-// 超了就要么按比例缩小、要么直接报错：extractComponents() 会按 w*h 分配 uint8 的 seen
-// 加同规模的 int 栈，一张 8000×8000 的截图就是 64 MB + 256 MB，直接把进程吃掉。
-constexpr qint64 kMaxDetPixels = 4'000'000;
+// 检测输入 / 概率图的像素上限不再写死：档位（Tuning::maxPixels）给 4M/8M/12M，
+// tuningFor() 里再夹到 1M~16M。上限本身的意义没变 —— extractComponents() 会按 w*h 分配
+// uint8 的 seen 加同规模的 int 栈，一张 8000×8000 的截图就是 64 MB + 256 MB，直接把进程吃掉。
+// 「精确」档走 detectTiled()：按原生分辨率分块，同样像素量只是分成若干次小推理。
 
 // 自动线程数上限：OCR 是交互式路径（截完图等结果），把核占满只会拖慢 UI。
 constexpr int kMaxAutoThreads = 8;
@@ -58,6 +58,89 @@ constexpr float kRecStd = 0.5f;
 // 连通域过滤：面积 / 最小边都太小的块当噪声扔掉（都在概率图坐标系里，单位=概率图像素）。
 constexpr int kMinComponentArea = 4;
 constexpr int kMinComponentSide = 2;
+
+// ---- 视觉引擎档位 ----------------------------------------------------------
+// 档位只调"送进网络的分辨率 + 后处理尺度"，不换 det/rec 模型：换模型要动资产清单、
+// 下载与验签，用户升级不了程序就换不了档；调参数则连重启都不用。
+struct Tuning {
+    int maxSideLen = 960;      // 检测输入最长边
+    qint64 maxPixels = 4'000'000;  // 检测输入 / 概率图像素上限
+    int recMaxWidth = 320;     // 识别宽度上限（模型宽度轴是动态时才生效）
+    float sliceFactor = 6.0f;  // 超宽行切片宽度 = 字高 × 该系数
+    float detThreshold = 0.3f;
+    float boxThreshold = 0.5f;
+    float unclipRatio = 1.6f;
+    bool tile = false;         // 大图分块检测（每块按原生分辨率过一遍网络）
+};
+
+Tuning tuningFor(const OcrOptions &opts)
+{
+    Tuning t;
+    switch (opts.preset <= 0 ? 0 : (opts.preset >= 2 ? 2 : 1)) {
+    case 0:   // 快速
+        t.maxSideLen = 960;
+        t.maxPixels = 4'000'000;
+        t.recMaxWidth = 320;
+        t.sliceFactor = 6.0f;
+        break;
+    case 2:   // 精确
+        t.maxSideLen = 1600;
+        t.maxPixels = 12'000'000;
+        t.recMaxWidth = 640;
+        t.sliceFactor = 12.0f;
+        t.detThreshold = 0.25f;   // 放宽召回：小字概率峰值本来就低
+        t.boxThreshold = 0.45f;
+        t.unclipRatio = 1.7f;
+        t.tile = true;
+        break;
+    default:  // 标准
+        t.maxSideLen = 1280;
+        t.maxPixels = 8'000'000;
+        t.recMaxWidth = 480;
+        t.sliceFactor = 8.0f;
+        break;
+    }
+
+    // 调用方显式给了就尊重（0 = 没给）。
+    if (opts.maxSideLen > 0) {
+        t.maxSideLen = opts.maxSideLen;
+    }
+    if (opts.detPixels > 0) {
+        t.maxPixels = opts.detPixels;
+    }
+    if (opts.detThreshold > 0.0f) {
+        t.detThreshold = opts.detThreshold;
+    }
+    if (opts.boxThreshold > 0.0f) {
+        t.boxThreshold = opts.boxThreshold;
+    }
+    if (opts.unclipRatio > 0.0f) {
+        t.unclipRatio = opts.unclipRatio;
+    }
+    // 硬夹取：extractComponents 按 w*h 分配 seen(uint8) + 栈(int)，16M 已经是 80 MB 的量级。
+    t.maxPixels = std::clamp<qint64>(t.maxPixels, 1'000'000, 16'000'000);
+    t.recMaxWidth = std::clamp(t.recMaxWidth, kRecWidth, 1280);
+    t.sliceFactor = std::clamp(t.sliceFactor, 4.0f, 16.0f);
+    return t;
+}
+
+// 深色底判断：缩到 64×64 求平均亮度。整图逐像素太贵，而"是不是深色主题"是全局属性，
+// 64×64 足够（下拉菜单、弹窗这类局部深色块也照样能判出来）。
+bool looksDark(const QImage &img)
+{
+    const QImage small = img.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::FastTransformation)
+                             .convertToFormat(QImage::Format_Grayscale8);
+    qint64 sum = 0;
+    int n = 0;
+    for (int y = 0; y < small.height(); ++y) {
+        const uchar *line = small.constScanLine(y);
+        for (int x = 0; x < small.width(); ++x) {
+            sum += line[x];
+            ++n;
+        }
+    }
+    return n > 0 && (sum / n) < 96;   // 96/255：明显暗于中灰
+}
 
 bool debugEnabled()
 {
@@ -562,6 +645,9 @@ struct OcrEngine::Session {
 
     bool loaded = false;
     int threads = 0;                 // 建会话时用的线程数（首次 load 固定，之后不再变）
+    // 本轮识别用的档位参数。recognize() 在拿锁之后按 OcrOptions 算好放进来，
+    // detect / recognizeBox / recognizeCrop 直接读 —— 同一实例同时只有一轮识别（mutex 串行化）。
+    Tuning tuning;
     int warnedThreads = -1;          // 已经 warning 过的"不同线程数"请求，避免每帧刷日志
     // 字典与模型类别数不匹配只提示一次。以前是函数级 static bool —— 前台截屏与实时翻译
     // 各有一个 OcrEngine/Session（各持各的锁），两个工作线程会并发写同一个 bool。
@@ -581,6 +667,12 @@ struct OcrEngine::Session {
 
     bool detect(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
                 QString *error);
+    // 单块检测（不进分块逻辑）。detect() 按档位决定是直接调它还是走 detectTiled()。
+    bool detectOnce(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
+                    QString *error);
+    // 大图分块：每块按原生分辨率过检测网络，再把框平移回原图坐标并去重。
+    bool detectTiled(const QImage &img, const OcrOptions &opts, std::vector<DetBox> &boxes,
+                     QString *error);
     bool recognizeBox(const QImage &img, const QRect &box, QString *text, qreal *confidence,
                       QString *error);
     // 单片的识别（prepare → run → CTC 解码）。recognizeBox 负责按宽度切片后逐片调它。
@@ -800,6 +892,112 @@ bool OcrEngine::Session::load(int wantThreads)
 bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
                                 std::vector<DetBox> &boxes, QString *error)
 {
+    boxes.clear();
+    if (img.isNull()) {
+        *error = i18n::s("OCR 检测：图像是空的", "OCR detection: the image is empty");
+        return false;
+    }
+
+    // 「精确」档才分块：把大图切成若干块，每块按原生分辨率过网络，等于绕过 kMaxDetPixels
+    // 的降采样。快速/标准档保持一次过网络（分块要多跑 N 次前向，实时路径受不了）。
+    const int longest = std::max(img.width(), img.height());
+    if (tuning.tile && longest > tuning.maxSideLen) {
+        return detectTiled(img, opts, boxes, error);
+    }
+    return detectOnce(img, opts, boxes, error);
+}
+
+bool OcrEngine::Session::detectTiled(const QImage &img, const OcrOptions &opts,
+                                     std::vector<DetBox> &boxes, QString *error)
+{
+    const int imgW = img.width();
+    const int imgH = img.height();
+    // 块边长取档位的 maxSideLen（对齐 32）：这样 detectOnce 里 scale==1，是真正的原生分辨率。
+    const int side = std::max(kSizeMultiple * 8, roundToMultiple(tuning.maxSideLen, kSizeMultiple));
+    // 重叠区必须够宽：一条横跨块边界的文字，两边各只有半条，任何一个框都框不全。
+    const int overlap = std::max(64, side / 5);
+    const int step = std::max(kSizeMultiple, side - overlap);
+
+    auto offsets = [](int total, int window, int stepLen) {
+        std::vector<int> out;
+        if (total <= window) {
+            out.push_back(0);
+            return out;
+        }
+        int pos = 0;
+        while (pos + window < total) {
+            out.push_back(pos);
+            pos += stepLen;
+        }
+        out.push_back(total - window);   // 最后一块贴右边，不足的宽度由 copy 裁掉
+        return out;
+    };
+
+    const std::vector<int> xs = offsets(imgW, side, step);
+    const std::vector<int> ys = offsets(imgH, side, step);
+
+    std::vector<DetBox> all;
+    for (const int y : ys) {
+        for (const int x : xs) {
+            const QRect tileRect(x, y, std::min(side, imgW - x), std::min(side, imgH - y));
+            if (tileRect.width() < kSizeMultiple || tileRect.height() < kSizeMultiple) {
+                continue;
+            }
+            std::vector<DetBox> part;
+            QString tileError;
+            if (!detectOnce(img.copy(tileRect), opts, part, &tileError)) {
+                *error = tileError;
+                return false;
+            }
+            for (DetBox &box : part) {
+                box.rect.translate(tileRect.topLeft());
+                all.push_back(box);
+            }
+        }
+    }
+
+    // 去重：重叠区里的同一条文字会被相邻两块各框一次。判定用「交集占小框的比例」，
+    // 因为它对半截框更敏感（IoU 在半截框上会偏小，容易漏掉真正的重复）。
+    auto area = [](const QRect &r) {
+        return static_cast<double>(std::max(0, r.width())) * std::max(0, r.height());
+    };
+    std::vector<DetBox> kept;
+    kept.reserve(all.size());
+    for (const DetBox &cand : all) {
+        bool duplicate = false;
+        for (DetBox &exist : kept) {
+            const QRect inter = exist.rect.intersected(cand.rect);
+            if (inter.isEmpty()) {
+                continue;
+            }
+            const double ia = area(inter);
+            const double ea = area(exist.rect);
+            const double ca = area(cand.rect);
+            const double iou = ia / std::max(1.0, ea + ca - ia);
+            const double cover = ia / std::max(1.0, std::min(ea, ca));
+            if (iou > 0.45 || cover > 0.7) {
+                // 保留更可信的那个；分数相同就留面积大的（半截框面积小）
+                if (cand.score > exist.score
+                    || (cand.score == exist.score && ca > ea)) {
+                    exist = cand;
+                }
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            kept.push_back(cand);
+        }
+    }
+
+    sortReadingOrder(kept);
+    boxes = std::move(kept);
+    return true;
+}
+
+bool OcrEngine::Session::detectOnce(const QImage &img, const OcrOptions &opts,
+                                    std::vector<DetBox> &boxes, QString *error)
+{
     const int imgW = img.width();
     const int imgH = img.height();
 
@@ -812,7 +1010,7 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
         detH = static_cast<int>(detShape[2]);
         detW = static_cast<int>(detShape[3]);
     } else {
-        const int maxSide = opts.maxSideLen > 0 ? opts.maxSideLen : 960;
+        const int maxSide = tuning.maxSideLen;
         const int longest = std::max(imgW, imgH);
         double scale = 1.0;
         if (longest > maxSide) {
@@ -828,7 +1026,7 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
 
     // 尺寸上限：下面的连通域会按 detW*detH 分配 seen（uint8）和等规模的栈，
     // 一张超大图能把内存吃光。动态尺寸就按比例缩回去；模型烧死的尺寸改不了，直接报错。
-    if (static_cast<qint64>(detW) * static_cast<qint64>(detH) > kMaxDetPixels) {
+    if (static_cast<qint64>(detW) * static_cast<qint64>(detH) > tuning.maxPixels) {
         if (fixedSize) {
             *error = i18n::sf("OCR 检测输入过大：模型固定要求 %1×%2（%3 像素），超过上限 %4。\n"
                               "请先裁剪截图再识别。",
@@ -837,17 +1035,17 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
                               "Crop the screenshot before running OCR.",
                               {QString::number(detW), QString::number(detH),
                                QString::number(static_cast<qint64>(detW) * detH),
-                               QString::number(kMaxDetPixels)});
+                               QString::number(tuning.maxPixels)});
             return false;
         }
-        const double shrink = std::sqrt(static_cast<double>(kMaxDetPixels)
+        const double shrink = std::sqrt(static_cast<double>(tuning.maxPixels)
                                         / (static_cast<double>(detW) * static_cast<double>(detH)));
         detW = std::max(kSizeMultiple,
                         roundToMultiple(static_cast<int>(std::lround(detW * shrink)), kSizeMultiple));
         detH = std::max(kSizeMultiple,
                         roundToMultiple(static_cast<int>(std::lround(detH * shrink)), kSizeMultiple));
         // roundToMultiple 可能往上取（例如 31 -> 32），再压一次，保证硬上限。
-        while (static_cast<qint64>(detW) * static_cast<qint64>(detH) > kMaxDetPixels
+        while (static_cast<qint64>(detW) * static_cast<qint64>(detH) > tuning.maxPixels
                && (detW > kSizeMultiple || detH > kSizeMultiple)) {
             if (detW >= detH && detW > kSizeMultiple) {
                 detW -= kSizeMultiple;
@@ -862,9 +1060,10 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
     std::vector<float> chw = toChwFloat(img, detW, detH, kDetMean, kDetStd);
     const std::vector<int64_t> inShape{1, 3, detH, detW};
 
-    const float boxThreshold = opts.boxThreshold > 0.0f ? opts.boxThreshold : 0.5f;
-    const float detThreshold = opts.detThreshold > 0.0f ? opts.detThreshold : 0.3f;
-    const float unclipRatio = opts.unclipRatio > 0.0f ? opts.unclipRatio : 1.6f;
+    // 阈值全部来自档位（tuningFor() 里按 preset 定，调用方显式覆盖时才走 opts）。
+    const float boxThreshold = tuning.boxThreshold;
+    const float detThreshold = tuning.detThreshold;
+    const float unclipRatio = tuning.unclipRatio;
 
     try {
         Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
@@ -916,13 +1115,13 @@ bool OcrEngine::Session::detect(const QImage &img, const OcrOptions &opts,
         const float *prob = out.GetTensorData<float>();
         // 概率图尺寸同样要设上限：模型若把输出上采样到比输入还大（少见但合法），
         // extractComponents 的 seen/栈就按这张图的 w*h 分配，一样能把内存吃光。
-        if (static_cast<qint64>(probW) * static_cast<qint64>(probH) > kMaxDetPixels) {
+        if (static_cast<qint64>(probW) * static_cast<qint64>(probH) > tuning.maxPixels) {
             *error = i18n::sf("OCR 检测概率图过大：%1×%2（%3 像素），超过上限 %4。",
                               "The OCR probability map is too large: %1×%2 (%3 pixels), above the "
                               "limit of %4.",
                               {QString::number(probW), QString::number(probH),
                                QString::number(static_cast<qint64>(probW) * probH),
-                               QString::number(kMaxDetPixels)});
+                               QString::number(tuning.maxPixels)});
             return false;
         }
         const std::vector<Component> comps = extractComponents(prob, probW, probH, boxThreshold);
@@ -994,7 +1193,7 @@ bool OcrEngine::Session::recognizeBox(const QImage &img, const QRect &box, QStri
     // 一行很长的文字（截图里是常态：整段正文一行 800~1200 px、字高 30 px）塞进
     // 320×48 的 rec 输入会被横向压掉三四倍，字母直接糊成一团。PaddleOCR 的做法是
     // 保持高 48、宽按比例裁到 320；对超宽行必须**按空白列切片**再拼回来。
-    const int sliceW = std::max(64, static_cast<int>(std::lround(box.height() * 6.0)));
+    const int sliceW = std::max(64, static_cast<int>(std::lround(box.height() * tuning.sliceFactor)));
     QVector<int> gapAfter;
     const QVector<QRect> slices = sliceAtGaps(img, box, sliceW, &gapAfter);
     if (slices.size() <= 1) {
@@ -1053,6 +1252,11 @@ bool OcrEngine::Session::recognizeCrop(const QImage &img, const QRect &box, QStr
         && recShape[3] <= 4096) {
         recH = static_cast<int>(recShape[2]);
         recW = static_cast<int>(recShape[3]);
+    } else if (recShape.size() == 4) {
+        // 宽度是动态轴（本机的 rec.onnx 就是 [-1,3,48,-1]）：上限交给档位 —— 宽 320 会把
+        // 一整行压到看不清，标准档 480 / 精确档 640 才留得住窄笔画的字间空隙。
+        recH = recShape[2] > 0 && recShape[2] <= 4096 ? static_cast<int>(recShape[2]) : kRecHeight;
+        recW = tuning.recMaxWidth;
     }
 
     // 高**保持模型的固定值**（默认 48）：PP-OCR 的 rec 是「高度固定、宽度按比例裁到上限」
@@ -1256,6 +1460,10 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
     // 锁住整轮识别，同一时刻只有一个推理在跑。
     std::lock_guard<std::mutex> lock(s.mutex);
 
+    // 档位参数每轮现算：detect / recognizeBox / recognizeCrop 都读 s.tuning，
+    // 而整轮识别都在锁里，所以不用担心被别的识别线程改掉。
+    s.tuning = tuningFor(opts);
+
     const int threads = resolveThreads(opts.threads);
     if (!s.load(threads)) {
         s.setLastError(s.loadError);
@@ -1266,7 +1474,17 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
     timer.start();
 
     // 一次转换，检测与识别共用：Format_RGB888 的 constScanLine 步长 = 3*w。
-    const QImage rgb = img.convertToFormat(QImage::Format_RGB888);
+    QImage rgb = img.convertToFormat(QImage::Format_RGB888);
+
+    // 深色底反色：深色主题下截出来是白字黑底，而 det/rec 都是拿浅底黑字训练的。
+    // 自动判定只看整图平均亮度（深色窗口占多数时才判深色），用户也可以强制开/关。
+    bool invertForOcr = opts.invert == 1;
+    if (opts.invert == 0) {
+        invertForOcr = looksDark(rgb);
+    }
+    if (invertForOcr) {
+        rgb.invertPixels(QImage::InvertRgb);
+    }
 
     std::vector<DetBox> boxes;
     QString error;
@@ -1303,12 +1521,18 @@ QVector<studious::platform::OcrWord> OcrEngine::recognize(const QImage &img, con
     }
 
     if (debugEnabled()) {
-        qInfo().noquote() << QStringLiteral("[ocr] det=%1 ms 总耗时=%2 ms 框=%3 文本=%4 threads=%5")
+        qInfo().noquote() << QStringLiteral("[ocr] det=%1 ms 总耗时=%2 ms 框=%3 文本=%4 threads=%5 "
+                                            "档位=%6 反色=%7 最长边=%8 像素上限=%9 分块=%10")
                                  .arg(detMs)
                                  .arg(timer.elapsed())
                                  .arg(boxes.size())
                                  .arg(words.size())
-                                 .arg(s.threads);
+                                 .arg(s.threads)
+                                 .arg(opts.preset)
+                                 .arg(invertForOcr ? 1 : 0)
+                                 .arg(s.tuning.maxSideLen)
+                                 .arg(s.tuning.maxPixels)
+                                 .arg(s.tuning.tile ? 1 : 0);
     }
     return words;
 }
