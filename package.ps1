@@ -3,6 +3,7 @@
 # 用法（在任意目录均可）:
 #   .\package.ps1                 # 编译 + 打包
 #   .\package.ps1 -SkipBuild      # 用现有 frontend\build 直接打包
+#   .\package.ps1 -WithVision     # 额外把 OCR（视觉）模型打进包，开箱即可用截图翻译
 #   .\package.ps1 -QtRoot D:\Qt -QtVer 6.12.0
 #
 # 产物:
@@ -11,10 +12,12 @@
 #
 # 不打包的东西:
 #   data\assets（模型 / runtime）—— 程序首次运行自行下载，或「资产」页导入
+#     例外：-WithVision 会把 data\assets\models\ocr\run（det/rec/dict，约 20 MB）带进包
 #   data\logs、data\cache —— 运行期生成
 
 param(
     [switch]$SkipBuild,
+    [switch]$WithVision,
     [string]$QtRoot = "C:\Code\language\Qt",
     [string]$QtVer  = "6.12.0",
     [string]$Config = "Release"
@@ -152,6 +155,24 @@ $staleData = Join-Path $stage "data"
 if (Test-Path $staleData) {
     Remove-Item $staleData -Recurse -Force
     Write-Host "  已清掉冒烟测试写出的 data\" -ForegroundColor DarkGray
+}
+
+# ---------- 5.5 视觉（OCR）模型 ----------
+# 放在冒烟测试之后：那一步会整份删掉 data\，先拷就被删了。
+# 只带 run\ 这三件（运行时副本），不带 ocr.*.ppocrv* 原件，省 30 MB。
+if ($WithVision) {
+    Write-Host ""
+    Write-Host "=== 视觉模型 ===" -ForegroundColor Cyan
+    $ocrSrc = Join-Path $root "data\assets\models\ocr\run"
+    if (Test-Path $ocrSrc) {
+        $ocrDst = Join-Path $stage "data\assets\models\ocr\run"
+        New-Item -ItemType Directory -Force $ocrDst | Out-Null
+        Copy-Item (Join-Path $ocrSrc "*") $ocrDst
+        $ocrMb = [math]::Round(((Get-ChildItem $ocrDst -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
+        Write-Host "  已拷入 det.onnx / rec.onnx / ppocr_keys_v1.txt（$ocrMb MB）" -ForegroundColor Green
+    } else {
+        Write-Host "  !! 找不到 $ocrSrc，视觉模型没进包" -ForegroundColor Yellow
+    }
 }
 
 # ---------- 6. 打包 ----------

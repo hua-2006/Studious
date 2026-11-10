@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%E7%BB%BF%E8%89%B2%E7%89%88-Releases-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4">
-  <img alt="version" src="https://img.shields.io/badge/version-1.2.2-informational">
+  <img alt="version" src="https://img.shields.io/badge/version-0.1.0-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -27,7 +27,7 @@
 
 ## 下载
 
-到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-1.2.2-win64.zip`。
+到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-0.1.0-win64.zip`。
 
 1. 解压到一个空文件夹（**别只把 exe 拖出来**，Qt 运行库就在旁边）
 2. 双击 `studious.exe`
@@ -133,7 +133,7 @@
 
 ## 更新日志
 
-### 1.2.2
+### 0.1.0
 
 **截图翻译：译文块可以直接点了**
 
