@@ -354,6 +354,7 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     m_historyEnabled = settings.historyEnabled;
     m_closeToTray = settings.closeBehavior == QLatin1String("tray");
     m_singleInstance = settings.singleInstance;
+    m_onboardingEnabled = settings.onboardingEnabled;
     // 开机自启以注册表为准：用户可能在任务管理器 / 别的工具里删过，
     // 界面不该还显示"已开启"然后点了没反应。
     m_autoStart = studious::platform::Desktop::autoStartRegistered();
@@ -435,11 +436,17 @@ AppBackend::AppBackend(studious::cache::TranslationCache *cache, QObject *parent
     connect(this,
             &AppBackend::assetProgressTick,
             this,
-            [this](const QString &id, int percent) {
+            [this](const QString &id, int percent, const QString &phase) {
                 QVariantMap updated = m_assetProgress;
                 updated.insert(id, percent);
                 m_assetProgress = updated;
+
+                QVariantMap phases = m_assetPhase;
+                phases.insert(id, phase);
+                m_assetPhase = phases;
+
                 emit assetProgressChanged();
+                emit assetPhasesChanged();
             },
             Qt::QueuedConnection);
 
@@ -1584,6 +1591,20 @@ void AppBackend::setSingleInstance(bool on)
               false);
 }
 
+void AppBackend::setOnboardingEnabled(bool on)
+{
+    if (m_onboardingEnabled == on) {
+        return;
+    }
+    m_onboardingEnabled = on;
+
+    AppSettings settings = AppSettings::load();
+    settings.onboardingEnabled = on;
+    settings.save();
+
+    // 只管下次启动弹不弹；当次要不要收卡片由 QML 自己决定。
+    emit prefsChanged();
+}
 bool AppBackend::trayAvailable()
 {
     return m_desktop.trayAvailable();
@@ -1906,7 +1927,10 @@ void AppBackend::importAssetFromFile(const QString &assetId, const QString &file
         return;
     }
     m_assetProgress.insert(id, -1);
+    // 手动导入也是长任务（拷几百 MB），任务卡上按「导入」显示。
+    m_assetPhase.insert(id, QStringLiteral("import"));
     emit assetProgressChanged();
+    emit assetPhasesChanged();
 
     auto *watcher = new QFutureWatcher<studious::asset::DownloadResult>(this);
     connect(watcher,
@@ -1916,8 +1940,7 @@ void AppBackend::importAssetFromFile(const QString &assetId, const QString &file
                 const studious::asset::DownloadResult result = watcher->result();
                 watcher->deleteLater();
 
-                m_assetProgress.remove(id);
-                emit assetProgressChanged();
+                retireAssetTask(id, result.ok);
 
                 if (result.ok) {
                     setStatus(studious::i18n::s("导入完成。", "Import finished."), false);
@@ -2647,7 +2670,11 @@ void AppBackend::downloadAsset(const QString &id)
     QVariantMap started = m_assetProgress;
     started.insert(id, 0);
     m_assetProgress = started;
+    QVariantMap startedPhase = m_assetPhase;
+    startedPhase.insert(id, QStringLiteral("download"));
+    m_assetPhase = startedPhase;
     emit assetProgressChanged();
+    emit assetPhasesChanged();
 
     auto *watcher = new QFutureWatcher<studious::asset::DownloadResult>(this);
     connect(watcher,
@@ -2658,10 +2685,7 @@ void AppBackend::downloadAsset(const QString &id)
                 watcher->deleteLater();
 
                 m_assetCancel.remove(id);
-                QVariantMap done = m_assetProgress;
-                done.remove(id);
-                m_assetProgress = done;
-                emit assetProgressChanged();
+                retireAssetTask(id, result.ok);
 
                 if (!result.ok) {
                     emit errorRaised(i18n::s().settings.assets, result.error);
@@ -2697,13 +2721,46 @@ void AppBackend::downloadAsset(const QString &id)
             const int percent = pr.total > 0
                                     ? static_cast<int>(pr.received * 100 / pr.total)
                                     : -1;
-            emit self->assetProgressTick(id, percent);
+            const QString phase =
+                pr.phase.isEmpty() ? QStringLiteral("download") : pr.phase;
+            emit self->assetProgressTick(id, percent, phase);
         };
 
         return downloader.download(id, onProgress, cancelFlag.get());
     }));
 }
 
+void AppBackend::retireAssetTask(const QString &id, bool ok)
+{
+    // 收尾也要留个终态：右上角的任务卡要显示「可用 / 失败」再消失。
+    // 直接从表里删掉的话，用户只看到面板少了一行，分不清是装好了还是失败了。
+    QVariantMap progress = m_assetProgress;
+    progress.insert(id, ok ? 100 : progress.value(id).toInt());
+    m_assetProgress = progress;
+
+    QVariantMap phases = m_assetPhase;
+    phases.insert(id, ok ? QStringLiteral("done") : QStringLiteral("failed"));
+    m_assetPhase = phases;
+
+    emit assetProgressChanged();
+    emit assetPhasesChanged();
+
+    QTimer::singleShot(1800, this, [this, id] {
+        // 这期间同一资产可能又被点了一次：只有还停在终态时才摘掉。
+        const QString phase = m_assetPhase.value(id).toString();
+        if (phase != QLatin1String("done") && phase != QLatin1String("failed")) {
+            return;
+        }
+        QVariantMap p = m_assetProgress;
+        p.remove(id);
+        m_assetProgress = p;
+        QVariantMap ph = m_assetPhase;
+        ph.remove(id);
+        m_assetPhase = ph;
+        emit assetProgressChanged();
+        emit assetPhasesChanged();
+    });
+}
 void AppBackend::cancelAssetDownload(const QString &id)
 {
     const auto it = m_assetCancel.find(id);

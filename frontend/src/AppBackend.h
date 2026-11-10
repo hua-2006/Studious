@@ -76,6 +76,9 @@ class AppBackend : public QObject {
 
     // 正在下载的资产：id → 进度百分比 0~100。不在表里 = 没在下载。
     Q_PROPERTY(QVariantMap assetProgress READ assetProgress NOTIFY assetProgressChanged)
+    // 同一批任务的阶段：id → "download" / "verify" / "extract" / "install" / "done" / "failed"。
+    // 解压和落盘没有可量化的进度，光有百分比会让界面停在 100% 看着像卡死。
+    Q_PROPERTY(QVariantMap assetPhases READ assetPhases NOTIFY assetPhasesChanged)
 
     // ---- 缓存统计 ----
     Q_PROPERTY(int cacheEntries READ cacheEntries NOTIFY cacheStatsChanged)
@@ -233,6 +236,8 @@ class AppBackend : public QObject {
     Q_PROPERTY(int miniFontSize READ miniFontSize WRITE setMiniFontSize NOTIFY prefsChanged)
     Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY prefsChanged)
     Q_PROPERTY(bool singleInstance READ singleInstance WRITE setSingleInstance NOTIFY prefsChanged)
+    // 启动时是否弹新手引导（设置 → 通用）。卡片上的「不再提示」会把它关掉。
+    Q_PROPERTY(bool onboardingEnabled READ onboardingEnabled WRITE setOnboardingEnabled NOTIFY prefsChanged)
     // 托盘是否真的装上了（没 shell 的会话 / 非 Windows 为 false），界面据此置灰。
     Q_PROPERTY(bool trayAvailable READ trayAvailable NOTIFY prefsChanged)
 
@@ -313,6 +318,7 @@ public:
     QVariantList assets() const { return m_assets; }
     QString assetInstallRoot() const { return m_assetInstallRoot; }
     QVariantMap assetProgress() const { return m_assetProgress; }
+    QVariantMap assetPhases() const { return m_assetPhase; }
 
     int cacheEntries() const;
     int cacheHits() const;
@@ -509,6 +515,9 @@ public:
     void setCloseToTray(bool on);
     bool singleInstance() const { return m_singleInstance; }
     void setSingleInstance(bool on);
+
+    bool onboardingEnabled() const { return m_onboardingEnabled; }
+    void setOnboardingEnabled(bool on);
     bool trayAvailable();
     // 点「最小化到托盘」时用：不管设置里怎么配，先把图标挂上再藏窗口。
     // 装不上返回 false —— 调用方就不该藏窗口，否则用户彻底找不回来。
@@ -536,6 +545,7 @@ public slots:
 
     // ---- 资产操作 ----
     // 下载在工作线程跑（Downloader 内部同步）；进度经 assetProgress 回传。
+
     Q_INVOKABLE void downloadAsset(const QString &id);
     Q_INVOKABLE void cancelAssetDownload(const QString &id);
     Q_INVOKABLE void uninstallAsset(const QString &id);
@@ -685,8 +695,9 @@ signals:
     void cacheStatsChanged();
     void assetsChanged();
     void assetProgressChanged();
+    void assetPhasesChanged();
     // 工作线程 → 主线程的进度回传（不要直接改成员，跨线程不安全）
-    void assetProgressTick(const QString &id, int percent);
+    void assetProgressTick(const QString &id, int percent, const QString &phase);
     void blocksChanged();
     void showSourceChanged();
     void activeDstChanged();
@@ -849,6 +860,7 @@ private:
     int m_miniFontSize = 17;
     bool m_closeToTray = false;
     bool m_singleInstance = true;
+    bool m_onboardingEnabled = true;
     bool m_duplicateInstance = false;
 
     // 托盘 / 开机自启 / 单实例。放在 AppBackend 里而不是 main()：
@@ -864,10 +876,14 @@ private:
     // 实时翻译的会话缓冲：begin → append* → finish 合成一条记录。
 
     QVariantList m_engineStatuses;
+    // 任务收尾：把 id 标成 done/failed 并留 1.8 秒再清，右上角任务卡要用这个终态。
+    void retireAssetTask(const QString &id, bool ok);
     QStringList m_enginePriority;
     QVariantList m_assets;
     QString m_assetInstallRoot;
     QVariantMap m_assetProgress;
+    // 与 m_assetProgress 同键：当前阶段名（见 assetPhases 的注释）。
+    QVariantMap m_assetPhase;
     // 导入本地模型时挡住重复点击：复制几百 MB 的 GGUF 期间再点一次会拷出第二份。
     bool m_modelImporting = false;
     // 每个下载任务的取消标志（工作线程读，主线程写）。

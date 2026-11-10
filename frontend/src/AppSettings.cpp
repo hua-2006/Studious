@@ -70,6 +70,7 @@ AppSettings AppSettings::defaults()
     s.minimizeToTray = false;       // 默认老老实实待在任务栏
     s.closeBehavior = QStringLiteral("exit");
     s.singleInstance = true;        // 防多开是绝大多数人的预期
+    s.onboardingEnabled = true;    // 新手第一次打开需要有人告一次路
     s.sameLangHint = true;
     s.suspiciousLangWarn = true;
     s.autoDetectSource = true;
@@ -257,6 +258,7 @@ AppSettings AppSettings::load()
     s.autoStart = store.value(key("desktop/autoStart"), def.autoStart).toBool();
     s.minimizeToTray = store.value(key("desktop/minimizeToTray"), def.minimizeToTray).toBool();
     s.singleInstance = store.value(key("desktop/singleInstance"), def.singleInstance).toBool();
+    s.onboardingEnabled = store.value(key("ui/onboarding"), def.onboardingEnabled).toBool();
 
     // 关闭行为只认两个白名单值，其它一律当"退出"。
     const QString closeBehavior =
@@ -376,6 +378,7 @@ void AppSettings::save() const
     store.setValue(key("desktop/minimizeToTray"), minimizeToTray);
     store.setValue(key("desktop/closeBehavior"), closeBehavior);   // exit / tray
     store.setValue(key("desktop/singleInstance"), singleInstance);
+    store.setValue(key("ui/onboarding"), onboardingEnabled);
     store.setValue(key("translate/sameLangHint"), sameLangHint);
     store.setValue(key("translate/suspiciousLangWarn"), suspiciousLangWarn);
     store.setValue(key("translate/autoDetectSource"), autoDetectSource);

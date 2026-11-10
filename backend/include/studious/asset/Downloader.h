@@ -19,6 +19,10 @@ struct DownloadProgress {
     qint64 total = 0;         // 0 = 服务端未告知
     int    sourceIndex = 0;   // 当前用的第几个 url（0 起）
     int    sourceCount = 1;
+    // 阶段名：download / verify / extract / install（done、failed 由 AppBackend 追加）。
+    // 解压和安装没有字节进度可报，received/total 保持下载完成时的值，
+    // 前端只看 phase 换文案——否则"下载完 100%"会一直停在那儿，看起来像卡住了。
+    QString phase = QStringLiteral("download");
 };
 
 struct DownloadResult {
@@ -54,11 +58,13 @@ private:
     // 把已校验的源文件安装到目标位置。moveSource=true 表示源文件可以搬走（下载的 .part），
     // false 表示是用户文件，必须复制。sourceSha256 是刚算出的整包哈希：跨盘拷贝时会边拷边比对，
     // 保证交给 rename 的字节就是校验过的那一批。成功返回安装绝对路径，失败返回空串并写 *error。
+    // onPhase 可选：安装分几步（解压 / 落盘），调用方据此推进度文案。
     QString finalizeInstall(const AssetEntry &entry,
                             const QString &sourcePath,
                             bool moveSource,
                             const QString &sourceSha256,
-                            QString *error);
+                            QString *error,
+                            const std::function<void(const QString &)> &onPhase = {});
 
     net::IHttpClient &m_http;
     AssetRegistry &m_registry;

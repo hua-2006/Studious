@@ -639,6 +639,53 @@ Window {
             }
         }
 
+        // ---------------- 资产任务卡（右上角）----------------
+        // 顶栏右侧、分隔线以下：下载 → 校验 → 解压 → 安装，一路跟到"可用"。
+        // 不放进上面的 ColumnLayout：它是覆盖层，出现/消失不该把页面挤动。
+        AssetTasks {
+            id: assetTasks
+            z: 40
+            // frame 的直属子级（顶栏在 RowLayout → ColumnLayout 里，跨层级不能 anchor），
+            // 所以贴 frame 的顶边、让出顶栏高度。
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: appBar.height + Theme.s2
+            anchors.rightMargin: Theme.s4
+        }
+
+        // ---------------- 新手引导（覆盖层，启动时一次）----------------
+        // 盖住整个界面（含顶栏），z 高于 Toast / NoticeBar。
+        OnboardingCard {
+            id: onboarding
+            anchors.fill: parent
+            z: 120
+
+            // 看完 / 点「不再提示」都算"知道了"，下次启动不再弹；想再看去「设置 → 通用」。
+            onFinished: {
+                onboarding.open = false
+                backend.onboardingEnabled = false
+            }
+            onDismissed: {
+                onboarding.open = false
+                backend.onboardingEnabled = false
+            }
+            // 最后一页的「去配置引擎」：收起卡片并跳到配置页（3 = 引擎配置）。
+            onOpenConfig: {
+                onboarding.open = false
+                backend.onboardingEnabled = false
+                root.currentPage = 3
+            }
+
+            Component.onCompleted: {
+                if (backend.onboardingEnabled) {
+                    onboarding.show()
+                    // 走查用：STUDIOUS_ONBOARDING_PAGE=1..3 直接开到某一页（-1 = 第 1 页）。
+                    if (typeof startupOnboardingPage === "number" && startupOnboardingPage >= 0)
+                        onboarding.page = startupOnboardingPage
+                }
+            }
+        }
+
         // ---------------- 全局轻提示（覆盖层）----------------
         // 解释"为什么这一步不行"这类一句话；自己淡出，不需要用户点。
         // 页面里的提示统一转到这里：页面被 StackLayout 裁切，自己贴边的会被切掉。

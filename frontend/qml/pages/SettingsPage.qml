@@ -695,6 +695,37 @@ Item {
                                     }
                                 }
 
+                                // 新手引导：启动时弹那张 4 页的卡片。
+                                // 关掉 = 以后不弹；卡片上的「不再提示」也是改这一项。
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.s1
+
+                                    FieldRow {
+                                        label: qsTr("启动时显示新手引导")
+
+                                        AppToggle {
+                                            Layout.alignment: Qt.AlignVCenter
+                                            checked: backend.onboardingEnabled
+                                            onToggled: function (checked) {
+                                                backend.onboardingEnabled = checked
+                                                checked = backend.onboardingEnabled
+                                            }
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+                                    }
+
+                                    Text {
+                                        Layout.leftMargin: page.labelWidth + Theme.s3
+                                        Layout.fillWidth: true
+                                        text: qsTr("打开后下次启动会再弹一次；卡片上的「不再提示」会把它关掉。")
+                                        wrapMode: Text.WordWrap
+                                        font.family: Theme.fontUi
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.inkVariant
+                                    }
+                                }
                                 // 单实例：QLocalServer 防多开，第二个实例把请求转给已运行进程。
                                 ColumnLayout {
                                     Layout.fillWidth: true

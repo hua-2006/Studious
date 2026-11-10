@@ -133,6 +133,8 @@ qml/components/Toast.qml
         qml/components/AppComboBox.qml
         qml/components/Stub.qml
         qml/components/NoticeBar.qml
+    qml/components/AssetTasks.qml
+        qml/components/OnboardingCard.qml
         qml/pages/TranslatePage.qml
         qml/pages/HotkeysPage.qml
         qml/pages/OverlayPage.qml

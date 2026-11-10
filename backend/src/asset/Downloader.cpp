@@ -820,6 +820,16 @@ DownloadResult Downloader::download(const QString &assetId,
         return result;
     }
 
+    // 字节已经收全，接下来是校验 + 解压 + 落盘：这三步对用户是"看不见的长等待"
+    // （大 zip 解压几十秒），所以要单独报阶段，别让进度条停在 100% 假装完成了。
+    if (progress) {
+        DownloadProgress p;
+        p.received = writtenBytes;
+        p.total = writtenBytes;
+        p.phase = QStringLiteral("verify");
+        progress(p);
+    }
+
     // ---- 校验：清单里的 sha256 是唯一的"这份字节能不能装"的依据 ----
     // 哈希是在写入过程中同步累积的（downloadOnce 的 hasher），这里绝不重新读一遍再算：
     // "算哈希"与"rename 成正式文件"之间因此没有可以被外部替换的时间窗口（TOCTOU）。
@@ -865,8 +875,22 @@ DownloadResult Downloader::download(const QString &assetId,
     // ---- 原子安装 ----
     // 把刚算出来的哈希一起交下去：finalizeInstall 会在 rename 之前再验一次落地字节。
     QString installError;
-    const QString installedPath =
-        finalizeInstall(*entry, partPath, true, actualSha, &installError);
+    const QString installedPath = finalizeInstall(
+        *entry,
+        partPath,
+        true,
+        actualSha,
+        &installError,
+        [&progress, writtenBytes](const QString &phase) {
+            if (!progress) {
+                return;
+            }
+            DownloadProgress p;
+            p.received = writtenBytes;
+            p.total = writtenBytes;
+            p.phase = phase;
+            progress(p);
+        });
     if (installedPath.isEmpty()) {
         result.error = installError.isEmpty()
                            ? i18n::s("安装失败：未知原因", "Installation failed for an unknown reason")
@@ -969,7 +993,8 @@ QString Downloader::finalizeInstall(const AssetEntry &entry,
                                     const QString &sourcePath,
                                     bool moveSource,
                                     const QString &sourceSha256,
-                                    QString *error)
+                                    QString *error,
+                                    const std::function<void(const QString &)> &onPhase)
 {
     if (error != nullptr) {
         error->clear();
@@ -1033,9 +1058,16 @@ QString Downloader::finalizeInstall(const AssetEntry &entry,
         }
 
         QString zipError;
+        if (onPhase) {
+            onPhase(QStringLiteral("extract"));
+        }
         if (!extractZip(sourcePath, staging, entry.size, &zipError)) {
             removePath(staging);
             return fail(zipError);
+        }
+
+        if (onPhase) {
+            onPhase(QStringLiteral("install"));
         }
 
         if (!QFileInfo(staging).isDir()) {
@@ -1055,6 +1087,10 @@ QString Downloader::finalizeInstall(const AssetEntry &entry,
 
     // 单文件资产（例如 .gguf）：拷/搬到 staging，再改名到最终位置。
     QFile::remove(staging);
+
+    if (onPhase) {
+        onPhase(QStringLiteral("install"));
+    }
 
     // 同盘 rename 最快且原子；跨盘时退回"边拷边算哈希"，拷完立刻比对。
     // 无论哪条路，交给 rename 的都是刚刚校验过的那份字节。

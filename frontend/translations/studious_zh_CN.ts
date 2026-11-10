@@ -115,6 +115,64 @@
     </message>
 </context>
 <context>
+    <name>AssetTasks</name>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="49"/>
+        <source>校验中…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="51"/>
+        <source>解压中…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="53"/>
+        <source>安装中…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="55"/>
+        <source>导入中…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="57"/>
+        <source>可用</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="59"/>
+        <source>失败</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="61"/>
+        <source>下载中…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="61"/>
+        <source>下载中 %1%</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="97"/>
+        <source>资产任务 · %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="109"/>
+        <source>收起</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/AssetTasks.qml" line="110"/>
+        <source>+%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>CaptureOverlay</name>
     <message>
         <location filename="../qml/overlay/CaptureOverlay.qml" line="133"/>
@@ -1415,27 +1473,27 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="965"/>
+        <location filename="../qml/Main.qml" line="1012"/>
         <source>关闭 Studious</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="974"/>
+        <location filename="../qml/Main.qml" line="1021"/>
         <source>是要收进托盘继续在后台跑，还是直接关掉程序？</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="987"/>
+        <location filename="../qml/Main.qml" line="1034"/>
         <source>关闭软件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="994"/>
+        <location filename="../qml/Main.qml" line="1041"/>
         <source>最小化到托盘</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="1102"/>
+        <location filename="../qml/Main.qml" line="1149"/>
         <source>截图 · 划词 · 实时翻译</source>
         <translation>截图 · 划词 · 实时翻译</translation>
     </message>
@@ -1628,6 +1686,173 @@
     <message>
         <location filename="../qml/overlay/MiniWindow.qml" line="1258"/>
         <source>历史对话是关着的。去「设置 · 缓存」里打开「保存翻译历史」。</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>OnboardingCard</name>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="116"/>
+        <source>欢迎使用 Studious</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="117"/>
+        <source>四种翻译引擎，各有各的用处</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="118"/>
+        <source>怎么选</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="119"/>
+        <source>可以开始了</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="128"/>
+        <source>%1 / %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="164"/>
+        <source>截图、划词、实时翻译，把屏幕上的任何文字变成你看得懂的语言。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="173"/>
+        <source>版本 %1 · %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="182"/>
+        <source>这份向导只出现一次；以后想再看，可以在「设置 → 通用」里打开「启动时显示新手引导」。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="199"/>
+        <location filename="../qml/components/OnboardingCard.qml" line="300"/>
+        <source>Web 在线</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="200"/>
+        <source>用公开的网页翻译接口，不用配置、不用下载，开箱就能用。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="203"/>
+        <location filename="../qml/components/OnboardingCard.qml" line="306"/>
+        <source>云端 LLM</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="204"/>
+        <source>调你自己的云端大模型（OpenAI 兼容接口），填服务地址、模型名和 Key 即可。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="207"/>
+        <location filename="../qml/components/OnboardingCard.qml" line="312"/>
+        <source>本地 LLM</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="208"/>
+        <source>模型跑在你自己电脑上，不联网，翻译内容不出本机。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="211"/>
+        <location filename="../qml/components/OnboardingCard.qml" line="318"/>
+        <source>本地 MT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="212"/>
+        <source>专门的机器翻译小模型，体积小、出字快，适合字幕和口语。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="252"/>
+        <source>本地 LLM 和本地 MT 要先下载资产（模型 / 运行时），在「设置 → 资产」里下；没下完之前可以先用 Web 或云端 LLM。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="274"/>
+        <source>引擎</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="281"/>
+        <source>准确度</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="288"/>
+        <source>速度</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="301"/>
+        <source>速度看网速</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="307"/>
+        <source>看服务商和模型</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="313"/>
+        <source>看模型大小和硬件</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="319"/>
+        <source>够快，但只适合日常句子</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="374"/>
+        <source>想省事用 Web；要质量用云端 LLM；不想联网用本地 LLM；要实时字幕用本地 MT。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="390"/>
+        <source>先选好源语言和目标语言，再从首页任一入口开始：小窗口随手翻、截图框选翻、实时盯屏翻。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="399"/>
+        <source>卡住了可以在「设置 → 通用」重新打开这份向导，或去「设置 → 日志」看看发生了什么。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="435"/>
+        <source>上一步</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="442"/>
+        <source>不再提示</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="450"/>
+        <source>去配置引擎</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="456"/>
+        <source>开始使用</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/components/OnboardingCard.qml" line="456"/>
+        <source>下一步</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -1934,37 +2159,37 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="98"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="739"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="770"/>
         <source>翻译行为</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="99"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="845"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="876"/>
         <source>缓存</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="100"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1174"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1205"/>
         <source>网络</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="101"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1336"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1367"/>
         <source>资产</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="102"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1712"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1743"/>
         <source>数据</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="103"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1874"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1905"/>
         <source>关于</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1991,7 +2216,7 @@
     </message>
     <message>
         <location filename="../qml/pages/SettingsPage.qml" line="196"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2457"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2488"/>
         <source>已安装</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2051,322 +2276,332 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="704"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="705"/>
+        <source>启动时显示新手引导</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/SettingsPage.qml" line="722"/>
+        <source>打开后下次启动会再弹一次；卡片上的「不再提示」会把它关掉。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/pages/SettingsPage.qml" line="735"/>
         <source>单实例运行</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="721"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="752"/>
         <source>再次打开时只会把已有窗口叫到前面，不会开第二份。改完需要重启生效。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="740"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="771"/>
         <source>决定结果怎么表达。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="748"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="779"/>
         <source>同语言直返提示</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="765"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="796"/>
         <source>源语言与目标语言相同时提示「这是原文」。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="779"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="810"/>
         <source>源语言可疑警告</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="796"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="827"/>
         <source>源语言可疑时给出警告。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="810"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="841"/>
         <source>自动检测源语言</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="850"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="881"/>
         <source>清空缓存</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="855"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="886"/>
         <source>重置统计</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="862"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="893"/>
         <source>启用翻译缓存</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="934"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2624"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="965"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2655"/>
         <source>复制</source>
         <translation>复制</translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="956"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="987"/>
         <source>历史对话</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="967"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="998"/>
         <source>保存翻译历史</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="992"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1023"/>
         <source>历史对话目录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1178"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1209"/>
         <source>代理</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1226"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1257"/>
         <source>超时</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1307"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1338"/>
         <source>毫秒</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1342"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1373"/>
         <source>全部</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1344"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2308"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1375"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2339"/>
         <source>本地 MT</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1358"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1389"/>
         <source>总占用：%1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1366"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1397"/>
         <source>（当前分类 %1 项）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1376"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2373"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1407"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2404"/>
         <source>从文件导入</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1395"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1426"/>
         <source>自己导入的文件来自本地，没有可信来源，只确认文件在、能读；校验哈希只针对线上下载的那份。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1419"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1450"/>
         <source>状态</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1428"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1459"/>
         <source>大小</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1437"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1468"/>
         <source>路径</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1447"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1478"/>
         <source>操作</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1537"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1658"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1568"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1689"/>
         <source>用户导入</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1575"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1606"/>
         <source>下载中 %1%</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1576"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1607"/>
         <source>下载中…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1581"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1612"/>
         <source>导入文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1582"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1613"/>
         <source>暂不支持</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1584"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2102"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2152"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1615"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2133"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2183"/>
         <source>卸载</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1584"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1615"/>
         <source>下载</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1690"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2233"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1721"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2264"/>
         <source>删除</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1986"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2017"/>
         <source>本地翻译推理组件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2132"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2163"/>
         <source>删掉之后就没法识别图像了：截图翻译和实时翻译都会停在「缺少 OCR 模型」，直到你把这三个组件重新下载回来。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2192"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2223"/>
         <source>删除用户语言包</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2193"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2224"/>
         <source>删除用户模型</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2203"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2234"/>
         <source>确定删除「%1」？
 这会把 models/mt-user 里这个语言包目录整个删掉，清单里的资产不受影响。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2204"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2235"/>
         <source>确定删除「%1」？
 这会删掉 models/llm-user 里的那份文件，清单里的资产不受影响。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2214"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2245"/>
         <source>如果你还想留着，先从下载目录重新导入一次即可（原始下载文件不会被删）。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2272"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2303"/>
         <source>要导入哪一类？</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2290"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2321"/>
         <source>选好类别再挑本地文件；装到哪一条写在按钮下面。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2307"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2338"/>
         <source>本地 LLM</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2309"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2340"/>
         <source>OCR</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2332"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2363"/>
         <source>暂不支持从文件导入：语言包请在资产页下载</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2335"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2366"/>
         <source>装到 %1（已安装，会覆盖）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2336"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2367"/>
         <source>装到 %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2337"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2368"/>
         <source>这一类还没有可装的条目，先去下载。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2486"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2517"/>
         <source>选择要装进 %1 的文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2496"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2527"/>
         <source>选择 GGUF 模型文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2498"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2529"/>
         <source>GGUF 模型 (*.gguf)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2498"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2529"/>
         <source>所有文件 (*)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2730"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2761"/>
         <source>本程序包含以下第三方开源组件，各自遵循其原始许可证。完整许可证文本随各自源码分发，也能在仓库的 backend/third_party/&lt;组件名&gt;/LICENSE 里读到。
 
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2735"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2766"/>
         <source>  源文本 / 译文分词（SentencePiece 模型）；静态编入，随附其 vendored 子库：
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2736"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2767"/>
         <source>  absl（Apache-2.0）、darts-clone（BSD-3-Clause）、esaxx（MIT）、protobuf-lite（BSD-3-Clause）
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2745"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2776"/>
         <source>  桌面界面框架；以动态链接方式分发，允许替换 Qt 库文件
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2750"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2781"/>
         <source>推断与翻译模型（Qwen2.5、OPUS-MT、PP-OCRv4）不属于本程序，按需单独下载，各自遵循其原始许可证。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1006"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="1737"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1037"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1768"/>
         <source>打开目录</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2456,277 +2691,277 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="846"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="877"/>
         <source>同一句原文、同样的语言和引擎，才会直接复用已有译文。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="877"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="908"/>
         <source>已缓存译文</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="891"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="922"/>
         <source>复用 / 新翻译</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="905"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="936"/>
         <source>缓存文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="984"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1015"/>
         <source>开启后翻译完成就自动存档，不用再手动点保存。截屏、小窗、实时各存一个库，下面把三个库按时间合并着列出来。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1015"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1046"/>
         <source>三个库是 records/capture.db、mini.db、live.db；实时翻译从开启到关闭算一组，写一条记录。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1030"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1061"/>
         <source>最近 %1 条</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1039"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1070"/>
         <source>刷新</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1062"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1093"/>
         <source>时间</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1069"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1100"/>
         <source>来源</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1076"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1107"/>
         <source>摘要</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1156"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1187"/>
         <source>还没有记录。翻一屏或译一句就会自动出现在这里。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1157"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1188"/>
         <source>历史关着，不写记录。打开上面的开关后，翻译完成会自动存档。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1175"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1206"/>
         <source>只影响本软件联网时使用的代理与等待时间。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1218"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1249"/>
         <source>留空表示跟随系统代理设置。改完下次联网生效。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1319"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1350"/>
         <source>毫秒。只影响联网请求，本地引擎不受影响。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1337"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1368"/>
         <source>在这里下载或导入模型与组件。分三类：本地 AI 模型、翻译模型、图像识别组件。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1345"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1376"/>
         <source>图像识别</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1409"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1440"/>
         <source>标识</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1473"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1504"/>
         <source>这一分类下还没有内容</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1713"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1744"/>
         <source>数据目录 / 日志 / 重置。重置会清掉配置与缓存，保留已安装资产。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1726"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1757"/>
         <source>数据目录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1793"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1824"/>
         <source>日志目录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1804"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1835"/>
         <source>打开</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1811"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1842"/>
         <source>清理 30 天前</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1842"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1873"/>
         <source>重置会清掉配置与缓存，已安装的模型保留；迁移会把整个数据目录搬到新位置，目标必须是空目录或不存在。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1851"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1882"/>
         <source>迁移目录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1858"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2523"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1889"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2554"/>
         <source>重置应用</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1875"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1906"/>
         <source>版本 / 第三方组件 / 许可证。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1898"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1929"/>
         <source>版本 %1 · 提交 %2 · 构建 %3 / Qt %4</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1943"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1974"/>
         <source>第三方组件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1951"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1982"/>
         <source>版本</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1959"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1990"/>
         <source>用途</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1967"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="1998"/>
         <source>许可证</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1987"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2018"/>
         <source>分词</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1988"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2019"/>
         <source>下载校验 / 加密</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1989"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2020"/>
         <source>压缩包解压</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2739"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2770"/>
         <source>  下载内容的签名校验；本项目按 BSD-2-Clause 使用
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2742"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2773"/>
         <source>  压缩包解压
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1990"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2021"/>
         <source>界面框架（动态链接）</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1991"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2022"/>
         <source>内置字体</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="1991"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2022"/>
         <source>思源黑体 / 霞鹜文楷</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2046"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2077"/>
         <source>查看许可证</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2052"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2691"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2083"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2722"/>
         <source>第三方声明</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2111"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2142"/>
         <source>确定删除 %1 ？
 文件会被移除，之后可以重新下载。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2147"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2228"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2282"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2546"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2178"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2259"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2313"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2577"/>
         <source>取消</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2391"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2422"/>
         <source>先选要装的条目，再挑本地文件；已安装的也可以覆盖。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2417"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2448"/>
         <source>这一分类下暂时没有可下载的内容。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2487"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2518"/>
         <source>选择文件</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2532"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2563"/>
         <source>会清掉全部设置与翻译缓存，已下载的模型保留，随后自动重启。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2565"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2596"/>
         <source>选择新的数据目录</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2614"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2645"/>
         <source>%1 许可证</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2383"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2632"/>
-        <location filename="../qml/pages/SettingsPage.qml" line="2701"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2414"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2663"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2732"/>
         <source>关闭</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2741,35 +2976,35 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="827"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="858"/>
         <source>关掉后源语言必须手选；本地 MT 这类要求明确源语言的引擎会更好用。</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2551"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2582"/>
         <source>确认重置</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2732"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2763"/>
         <source>  本地翻译推理组件；随包分发，无需另外下载
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2747"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2778"/>
         <source>字体：
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2748"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2779"/>
         <source>  思源黑体 Source Han Sans SC — Adobe — SIL Open Font License 1.1
 </source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/SettingsPage.qml" line="2749"/>
+        <location filename="../qml/pages/SettingsPage.qml" line="2780"/>
         <source>  霞鹜文楷 LXGW WenKai — 落霞孤鹜 — SIL Open Font License 1.1
 
 </source>

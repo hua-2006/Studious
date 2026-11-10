@@ -2725,3 +2725,26 @@ ormalizeTargetsAgainstSource(targets, source)——源不是 auto 时把同一�
 实测：双击后剪贴板不变（RESET 值原样）；单击一块 + Ctrl+C → 剪贴板 `基于你的技术栈`，
 日志 `[copy] 7 char(s) (1 line(s)) from overlay selection, close-after-copy=0`；
 截图 OCR 回读到气泡文案 `√已复制2块`。
+## 新手引导（4 页卡片，2026-11-11）
+
+启动时在窗口正中弹一张 4 页卡片：欢迎（含版本号）→ 四种引擎 → 对比表（★ 准确度 / 速度）→ 结束页（可直达引擎配置）。
+
+- 新文件 `frontend/qml/components/OnboardingCard.qml`，并登记进 `frontend/CMakeLists.txt` 的 QML_FILES（漏了运行时报 "OnboardingCard is not a type"）。
+- 开关：`AppSettings::onboardingEnabled`（键 `settings/ui/onboarding`，默认 true）→ `AppBackend` 的同名 Q_PROPERTY → 「设置 → 通用 → 启动时显示新手引导」。
+  看完最后一页或点「不再提示」都会把它置 false；想再看就在设置里打开。
+- Main.qml 里以 `z: 120` 覆盖整个 frame（高于 Toast 110 / NoticeBar 100），全屏 MouseArea 吞点击，避免引导期间误触底层。
+- 双语长度差：卡片宽度上限 560、正文区是 Flickable（超出才滚）、所有 Text 都 `wrapMode: Text.WordWrap` + `width: parent.width`；最小窗口 1040×660 下中文第 2 页仍完整放得下。
+- 两个真踩到的坑：
+  1. Flickable 的 `implicitHeight` 默认是 0，放在 ColumnLayout 里靠它撑高会让卡片只剩标题行 —— 必须显式 `implicitHeight: Math.min(pages.implicitHeight, contentCap)`。
+  2. `card.height` 只算 `body.implicitHeight` 忘了 body 的 `anchors.margins`，底部按钮会被卡片下沿裁掉 —— 改成 `body.implicitHeight + Theme.s5 * 2`。
+- 走查钩子：`STUDIOUS_ONBOARDING_PAGE=0..3` 直接开到某一页（截图工具点不到卡片里的按钮），main.cpp 注入 `startupOnboardingPage`。
+- 翻译：lupdate 643 条（34 新），`studious_en.ts` 全部补齐（659 finished / 0 unfinished）。
+- 验证：`--ui-shot` 拍中文 / 英文各 4 页 + 最小窗口 1040×660 + `settings/ui/onboarding=0` 时不弹；注册表测试期间改过的 `ui/language`、`ui/onboarding` 均已复原。
+### 追加：引导期间底层不该响应鼠标（同日，两轮才修对）
+
+- 现象：卡片开着时鼠标滑到底下的入口卡片/按钮上，它们仍会亮起描边（用户两次截图指出）。
+- 原因：卡片上的全屏 MouseArea 只挡点击，挡不住 hover —— Qt Quick 的悬浮不靠 grab，遮挡层拦不下来。
+- **第一版（错）**：`frontend/qml/Main.qml` 根 RowLayout 加 `enabled: !onboarding.open`。当时 A/B 差分（真移鼠标 + CopyFromScreen）显示卡片区域逐像素相同，判定生效；但被停用的元素收不到 leave 事件，`HoverHandler.hovered` 会冻在停用前那一帧 —— 启动时指针恰好停在入口卡片上，绿色描边就一直亮着（用户第二次复现）。
+- **最终版**：删掉 `enabled` 绑定；`frontend/qml/components/OnboardingCard.qml` 的吞点击 MouseArea 之后加 `HoverHandler { blocking: true }`，让下层 HoverHandler / MouseArea 根本收不到悬浮（Qt 6.12 实测支持 `blocking`，运行无 "Cannot assign" 警告）。
+- 验证（量化像素，指针固定在入口卡片内部）：引导开 → 卡片边框区域绿色像素 **0**；把 `settings/ui/onboarding` 置 0 再跑同一位置 → **440** 绿像素。
+- 经验：**停用整块内容不是拦 hover 的手段**（状态会冻结），`blocking: true` 才是。

@@ -61,6 +61,7 @@ namespace engine = studious::ui::engine;
 #endif
 
 #include <atomic>
+#include <algorithm>
 
 namespace {
 
@@ -1695,6 +1696,14 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(
         QStringLiteral("startupSplash"),
         !uiShotMode && !qEnvironmentVariableIsSet("STUDIOUS_NO_SPLASH"));
+
+    // 新手引导的起始页。默认 -1 = 第 1 页；走查时用 STUDIOUS_ONBOARDING_PAGE=1..3
+    // 直接打开某一页，省得手点（截图工具点不到卡片里的按钮）。
+    bool pageOk = false;
+    const int startupPage = qEnvironmentVariable("STUDIOUS_ONBOARDING_PAGE").toInt(&pageOk);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("startupOnboardingPage"),
+        pageOk ? std::clamp(startupPage, 0, 3) : -1);
 
     engine.loadFromModule(QStringLiteral("Studious"), QStringLiteral("Main"));
 

@@ -46,6 +46,10 @@ struct AppSettings {
     // 需要重启才生效 —— 本地 socket 在启动时就绑定了。
     bool singleInstance = true;
 
+    // 启动时弹新手引导（键 settings/ui/onboarding）。
+    // 卡片上的「不再提示」会把它置 false，设置 → 通用 里可以再打开。
+    bool onboardingEnabled = true;
+
     // ---- 翻译行为（纯展示层开关，不改翻译结果）----
 
     // 源语言 == 目标语言时给一行「这是原文」的提示（键 settings/translate/sameLangHint）。
