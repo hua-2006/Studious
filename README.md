@@ -7,7 +7,7 @@
 <p align="center">截图、划词、实时翻译 —— 把屏幕上看到的外语，就地变成看得懂的语言。</p>
 
 <p align="center">
-  <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%E7%BB%BF%E8%89%B2%E7%89%88-Releases-2ea44f"></a>
+  <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Releases-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4">
   <img alt="version" src="https://img.shields.io/badge/version-0.1.0-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
@@ -27,22 +27,29 @@
 
 ## 下载
 
-到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-0.1.0-win64.zip`。
+到 [**Releases**](https://github.com/hua-2006/Studious/releases) 取最新版（`v0.1.0`），两个包功能完全一样，挑顺手的：
 
-1. 解压到一个空文件夹（**别只把 exe 拖出来**，Qt 运行库就在旁边）
-2. 双击 `studious.exe`
+**安装版** · `Studious-0.1.0-setup.exe`
 
-不用安装，不会往系统里塞东西，删掉文件夹就干净了。
+1. 双击，一路下一步。默认装到当前用户目录（`%LOCALAPPDATA%\Programs\Studious`），**不需要管理员权限**。
+2. 开始菜单里会有图标。卸载走「设置 → 应用」，或安装目录里的 `unins000.exe`。
 
+**绿色版** · `Studious-0.1.0-win64.zip`
+
+1. 解压到一个空文件夹（**别只把 exe 拖出来**，Qt 运行库就在旁边）。
+2. 双击 `studious.exe`。删掉文件夹就干净了。
+
+> 数据（模型、缓存、翻译记录、日志）都放在程序旁边的 `data/`，安装版也一样 —— 换台机器时连文件夹一起拷就能接着用。
 > 系统要求：Windows 10 / 11（64 位）。目前只有 Windows 版本。
 
 ## 第一次用，三步
 
-1. **下 OCR 资产** —— 「设置 → 资产 → 视觉 / OCR」，约 15 MB。不下的话截图翻译识别不出文字。
+1. **启动** —— 会弹四页新手引导，讲清三个入口和四种引擎怎么选。看完点「开始使用」；想再看一次，「设置 → 通用 → 启动时显示新手引导」。
 2. **录一条热键** —— 「快捷键 → 截图翻译 → 录制」，按你顺手的组合键。默认是空的，避免和别的软件撞车。
 3. **试试截图翻译** —— 按下热键框选一段外文，松手点「翻译」，译文就贴在原文上了。
 
-想用本地引擎（不联网）再去「设置 → 资产」下模型和运行时；想用云端 LLM 就去「配置 → 云端 LLM」填 API 地址和 Key。
+截图翻译要用的 OCR 模型**已经内置**（约 20 MB），装完就能识别，不用另外下。
+想用本地引擎（不联网）就到「配置 → 引擎」下模型和运行时，右上角会挂一张任务卡，显示下载 → 校验 → 解压 → 安装 → 「可用」；想用云端 LLM 就到「配置 → 云端 LLM」填接口地址和 Key。
 
 ## 三种用法
 
@@ -104,7 +111,10 @@
 ## 常见问题
 
 **本地 LLM / 本地 MT 是灰的，写着「未装」？**
-模型和运行时没打进安装包（太大）。去「设置 → 资产」下载，或者把别人机器上的 `data/assets` 拷过来。
+这两个的运行时和模型太大，没打进安装包（包里只有 OCR 模型）。到「配置 → 引擎」点下载，右上角会显示进度直到「可用」；也可以把别人机器上的 `data/assets` 整份拷过来。
+
+**安装版把我东西装哪了？**
+默认 `%LOCALAPPDATA%\Programs\Studious`，数据就在同一个文件夹下的 `data/`。想全机共用可以装到 `Program Files`，但那样 `data/` 需要管理员权限才写得进去，日常用不推荐。
 
 **双击会弹黑框吗？**
 不会，程序是 GUI 程序。从终端带参数运行才会接回控制台输出，那是给排错用的。
@@ -128,7 +138,8 @@
 ```powershell
 .\build.ps1 -Test                     # 自动找 Qt，编译并跑自测
 .\frontend\build\studious.exe         # 直接运行
-.\package.ps1                         # 出绿色包 dist\Studious-<版本>-win64.zip
+.\package.ps1 -WithVision             # 绿色包 dist\Studious-<版本>-win64.zip（带 OCR 模型）
+.\package.ps1 -MakeInstaller          # 安装包 dist\Studious-<版本>-setup.exe（需 Inno Setup 6）
 ```
 
 ## 更新日志
@@ -178,6 +189,7 @@
 - 日志能看到全过程：识别出的文字、提交给引擎的文本、引擎的原始回复与失败原因（`data/logs/studious.log`）。
 - 启动不再弹出黑色控制台窗口。
 - 发行包不再携带开发机上的测试接口地址与密钥。
+- 新增 Inno Setup 安装版（免管理员、可卸载干净）；绿色版打包可把 OCR 模型一起带上。
 
 ## 反馈
 
@@ -192,7 +204,7 @@
 1. ~~用户自定义导入本地 llm 模型~~ — 已完成：配置页「浏览…」或资产页「从文件导入」；本地 mt 语言包导入暂缓（原始 opus-mt 包要先导出+量化，接口位置已留）
 2. ~~软件初始引导~~ — 已完成：首次启动四页引导（欢迎 / 三种入口 / 引擎对比 / 开始使用），双语自适应，设置 → 通用 可重新打开或关闭
 3. 加入更多的web翻译源
-4. 优化增强图像识别准度,增加图像识别档位
+4. ~~优化增强图像识别准度,增加图像识别档位~~ — 已完成三档（快速 / 标准 / 精确）、深色自动反色、横排标签切分、译文块避让排版；继续调阈值与短标签译法
 
 ## 许可证
 
