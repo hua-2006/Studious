@@ -60,18 +60,27 @@ private:
     // 单段翻译。失败返回 false 并写 outError（中文可读原因）。
     // maxAttempts：换策略重试的次数上限。默认 5（用户直接请求一段时值得多试几次）；
     // 批量的逐段补救传 1 —— 那里已经失败过一轮，再各跑 5 次会让请求数按段数放大。
+    // 翻一段。softFail（可选出参）在失败时回答"这次失败属于哪一类"：
+    //   true  = 输出质量判据拒收（照抄原文 / 语种不符 / 空 / 复读）——多半是判据误杀
+    //           或这段本来就不该翻，调用方应该保留原文继续，而不是整单失败；
+    //   false = 连不上 / HTTP 报错 / 响应不是 JSON / 超时 / 取消——必须让用户看见。
     bool translateOne(const QString &text,
                       const QString &dstLang,
                       QString &outText,
                       QString &outError,
-                      int maxAttempts = 5);
+                      int maxAttempts = 5,
+                      bool *softFail = nullptr);
 
     // 多段合并成一次请求（JSON 字符串数组输出）。
     // 解析失败内部会重试 1 次；仍失败返回 false，由调用方回退到逐段。
+    // softKept（可选出参）：本次批量里有多少条被质量判据拒收、最终保留了原文。
+    // 调用方用它汇总成"N 段按原文显示"的提示 —— 批量路径最容易静默降级：
+    // 译文 == 原文时界面按未翻译显示，用户看不出是我们没翻成。
     bool translateBatch(const QStringList &texts,
                         const QString &dstLang,
                         QStringList &outTexts,
-                        QString &outError);
+                        QString &outError,
+                        int *softKept = nullptr);
 
     // 发一次 /chat/completions，返回已剥掉包装的 content。
     // translateOne 与 translateBatch 共用，避免两份 HTTP 代码各写各的。

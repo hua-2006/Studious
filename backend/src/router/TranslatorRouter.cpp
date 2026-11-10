@@ -407,7 +407,17 @@ core::TranslateOutcome TranslatorRouter::translate(const core::TranslateRequest 
         }
 
         if (attempt.ok) {
-            attempt.warning = sourceWarning;
+            // 引擎自带的非阻断提示（例如"3 段按原文显示"）必须保住：这里以前是
+            // 直接覆盖成源语言提示，等于把后端辛苦报上来的降级信息整条吞掉，
+            // 用户只会看到一屏夹杂原文的译文而没有任何说明。
+            QStringList notes;
+            if (!attempt.warning.trimmed().isEmpty()) {
+                notes << attempt.warning;
+            }
+            if (!sourceWarning.trimmed().isEmpty()) {
+                notes << sourceWarning;
+            }
+            attempt.warning = notes.join(i18n::s("；", "; "));
             return attempt;
         }
 
@@ -499,6 +509,14 @@ core::TranslateOutcome TranslatorRouter::runEngine(core::ITranslator *engine,
         if (!missTexts.isEmpty()) {
             const core::TranslateOutcome sub =
                 engine->translate(missTexts, src, QStringList{dst}, req.options);
+            // 引擎的"非阻断提示"（有段落按原文显示等）要原样带出去，
+            // 否则 runEngine 聚合完只剩 ok / byLang，前端拿不到任何降级信号。
+            if (!sub.warning.trimmed().isEmpty()) {
+                if (!out.warning.trimmed().isEmpty()) {
+                    out.warning += i18n::s("；", "; ");
+                }
+                out.warning += sub.warning;
+            }
             if (!sub.ok) {
                 // 引擎前缀由调用方统一加（降级聚合时格式才统一）。
                 errors << (sub.error.trimmed().isEmpty()

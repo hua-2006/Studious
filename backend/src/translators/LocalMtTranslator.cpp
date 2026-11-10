@@ -816,6 +816,12 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
 
     core::TranslateOutcome out;
 
+    // 日志：本地 MT 这一侧收到的原文规模。译文本身由上层（QuickTranslate / 界面）
+    // 记录，这里只为把"哪一段进来的"和"哪一段没翻出来"对上号。
+    qInfo("[mt] translate %lld paragraph(s) src=%s dst=%s", 
+          static_cast<long long>(paragraphs.size()), qUtf8Printable(srcLang),
+          qUtf8Printable(dstLangs.join(QLatin1Char(','))));
+
     // 取消标志不在这里清：清零权归 Router（每次请求开始清一次，见 ICancelControl.h）。
     // 各引擎在自己的 translate() 入口清会吞掉降级边界上到达的取消。
 
@@ -932,6 +938,7 @@ core::TranslateOutcome LocalMtTranslator::translate(const QStringList &paragraph
     out.ok = errors.isEmpty();
     if (!out.ok) {
         out.error = errors.join(QStringLiteral("；"));
+        qWarning("[mt] translate failed: %s", qUtf8Printable(out.error));
     }
     return out;
 }

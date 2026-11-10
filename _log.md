@@ -2617,3 +2617,22 @@ ormalizeTargetsAgainstSource(targets, source)——源不是 auto 时把同一�
   控制条 `z=10 (501,969)-(1377,1019)`（在选区 0,0-1707,1060 之内）、译文浮层 `z=11 (0,0)-(1707,1060)`、
   主窗口 `z=35`，索引越小越靠上 → 控制条已压在浮层上面；pause 之后仍是 10 / 11。
   截图翻译整屏选区：工具栏「处理中… 本地 LLM 自动检测 → 英语 设置 重新框选」可见且不被框线遮住。
+## 截图浮层：译文比原文长时的排版（2026-11-10）
+
+问题：译文比原文长时，贴纸按原文框宽定尺寸 + 单行 + ElideRight，长句直接被省略
+（例：「Based on your tech stack」→「基于你的技术栈…」），相邻块还会互相压字。
+
+改法（只动 `frontend/qml/overlay/CaptureOverlay.qml`，块装饰器 + 一个 JS 辅助函数）：
+1. 先向右吃空白：`limitW = min(原文宽*1.6, 选区右边界 - 块x)`，宽度取 `min(limitW, 实测单行宽+4)`。
+2. 再等比缩字号：`fitPx = clamp(basePx * limitW / 单行宽, max(9, basePx*0.7), basePx)`。
+3. 缩到底仍放不下就换行（`maximumLineCount: 2`），块高最多长到「正下方那一块的顶边」之前
+   （`nextPlateTop()` 只统计横向有重叠的后续块），吃掉空隙的 80%，避免两块叠在一起。
+4. 实在放不下才保留 elide 兜底。
+尺寸测量用三个 `visible: false` 的 Text 做（Qt 照样排版），避免每帧去问 QFontMetrics。
+
+踩坑：
+- `Repeater` 的 `index` 在老代码里没声明，直接用会是 `ReferenceError: index is not defined`，
+  而且不会中断渲染 —— 只是 `gapBelow` 静默退化成 Infinity，块高会算成 1.8 倍行高去压下一块。
+  正解：delegate 里写 `required property int index`。
+- 验证时别用 `--ui-shot` 结尾那张图（那时浮层已经收起），要在运行中另一路 `CopyFromScreen` 连拍。
+- 压测用「目标语言 ru」：俄文比中文长得多，最容易压出换行/省略分支。

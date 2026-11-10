@@ -23,6 +23,18 @@ namespace studious::translate {
 
 namespace {
 
+// 日志单行化：模型回复里全是换行和空行，直接打会把日志撑成十几行；
+// 截断则保证一次「整屏上百行」的翻译不会把日志文件灌爆。
+QString oneLine(const QString &text, int maxChars = 2000)
+{
+    QString s = text;
+    s.replace(QLatin1String("\r\n"), QStringLiteral("⏎"));
+    s.replace(QLatin1Char('\n'), QStringLiteral("⏎"));
+    if (s.size() > maxChars)
+        s = s.left(maxChars) + QStringLiteral(" …(截断，共 %1 字)").arg(s.size());
+    return s;
+}
+
 // 内置 system prompt。
 // 实测：只写一句"把下面的文字翻译成中文"时，模型很容易把原文当问题回答、或加"翻译如下："前缀、
 // 或先讲一段思路再给译文。这里用"角色 + 硬规则 + 输出面禁令"三条压住它。
@@ -220,6 +232,20 @@ bool hasNoLetters(const QString &text)
 // 以前这里要求"拉丁目标必须含拉丁字母""日文必须含假名"，于是 "3.14"/"OK"/「東京」
 // 被判语种不符，进而触发补救请求（每段最多 5 次）—— 全是白花钱。
 // 真正的"没翻译"由 isUntranslatedOutput()（译文 == 原文）单独判，那条才是硬失败。
+// 中日韩字母数（汉字 + 假名 + 谚文）。判定"译文里到底有多少目标语言内容"用。
+int countCjkLetters(const QString &text)
+{
+    int count = 0;
+    for (const QChar ch : text) {
+        const ushort u = ch.unicode();
+        if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3040 && u <= 0x30FF)
+            || (u >= 0xAC00 && u <= 0xD7AF)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 bool matchesTargetScript(const QString &text, const QString &dstLang)
 {
     int latinLetters = 0;
@@ -243,19 +269,39 @@ bool matchesTargetScript(const QString &text, const QString &dstLang)
         return true;
     }
 
-    // 目标语言是中日韩，却有一半以上是拉丁字母 —— 说明只翻了半句
-    // （实测 0.5B/1.5B 英文→日文会输出 "quick brown foxがさぼったogeを跳び越える。"）。
-    const bool tooMuchLatin = latinLetters * 100 / allLetters > 50;
+    // 中日韩目标：必须真的出现了目标语言字符，且**不能是"整段还是英文"**。
+    //
+    // 以前这里用"拉丁字母占比 ≤ 50%"，结果是专名把正确译文判死：
+    // 「基于MSBuild的项目」= 汉字 5 + 拉丁 7 → 58% > 50% → 判「语种不符」，
+    // 而它明明翻对了（MSBuild 本来就该保留）。短句里只要有一个品牌名，
+    // 汉字就压不过拉丁字母，用户看到的是"整张图翻译失败"。
+    //
+    // 现在改成"比例容差"：拉丁字母不得超过汉字的 3 倍再加 8 个常数容差。
+    //  - 「基于MSBuild的项目」7 ≤ 5*3+8 ✓ 放行
+    //  - 「通过GitHub Actions」7 ≤ 4*3+8 ✓ 放行
+    //  - 整段照抄英文：汉字 0 → 直接失败（另有 isUntranslatedOutput 兜底）
+    //  - 只翻半句（200 个英文词 + 2 个汉字）：200 > 14 ✗ 仍然拦下
+    const int cjkLetters = countCjkLetters(text);
+    const auto latinWithinTolerance = [&](int targetLetters) {
+        return targetLetters > 0 && latinLetters <= targetLetters * 3 + 8;
+    };
 
     if (dstLang == QLatin1String("zh") || dstLang == QLatin1String("zh-TW")) {
-        return containsCjk(text) && !tooMuchLatin;
+        return latinWithinTolerance(cjkLetters);
     }
     if (dstLang == QLatin1String("ja")) {
-        // 3. 日文允许纯汉字（「東京」「情報」），不再强制必须有假名。
-        return (hasKana(text) || hasHanzi(text)) && !tooMuchLatin;
+        // 日文允许纯汉字（「東京」「情報」），所以按"中日韩字母数"算，不强制假名。
+        return latinWithinTolerance(cjkLetters);
     }
     if (dstLang == QLatin1String("ko")) {
-        return hasHangul(text) && !tooMuchLatin;
+        int hangul = 0;
+        for (const QChar ch : text) {
+            const ushort u = ch.unicode();
+            if (u >= 0xAC00 && u <= 0xD7AF) {
+                ++hangul;
+            }
+        }
+        return latinWithinTolerance(hangul);
     }
     // 拉丁语系（en/fr/de/es/it/pt…）：不得整段残留中日韩文字即可。
     // 不再要求"必须含拉丁字母"——数字/符号串与短串已由上面两条放行。
@@ -414,6 +460,16 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
     // 早就超了默认预算还在跑，界面看起来像卡死。
     m_retryClock.start();
 
+    // 日志：引擎这一侧收到的原文。前端（截图 / 小窗 / 实时）都会各记一条自己的，
+    // 这里再记一条是为了分清"前端传错了"还是"后端自己切错了"。
+    if (paragraphs.size() > 0) {
+        qInfo("[llm] translate %lld paragraph(s) src=%s dst=%s batchSize=%d",
+              static_cast<long long>(paragraphs.size()), qUtf8Printable(srcLang),
+              qUtf8Printable(dstLangs.join(QLatin1Char(','))), m_cfg.batchSize);
+        qInfo("[llm] input: %s",
+              qUtf8Printable(oneLine(paragraphs.join(QStringLiteral(" ⏎ ")))));
+    }
+
     // 三个前置条件缺失都要有明确原因：前端据此引导用户去设置页。
     if (!m_cfg.isValid()) {
         out.error = i18n::s("未配置 LLM API：请在设置中填写 API 地址 / Key / 模型",
@@ -432,6 +488,9 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
     }
 
     QStringList langErrors;
+    // 非阻断提示（"N 段按原文显示"）。翻译仍然算成功，前端用黄字状态栏展示。
+    QStringList softWarnings;
+    int totalSoftKept = 0;
 
     for (const QString &rawDst : dstLangs) {
         const QString dst = core::LanguageRegistry::normalize(rawDst);
@@ -445,6 +504,8 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
         QStringList translated;
         translated.reserve(paragraphs.size());
         QString firstParagraphError;
+        // 有段落被质量判据拒收、但保留了原文（不算整单失败）。计数用于告知前端/用户。
+        int softKept = 0;
         QVector<int> pending;   // 需要真正翻译的段落下标（跳过空段/纯空白）
         for (int i = 0; i < paragraphs.size(); ++i) {
             translated << QString();
@@ -494,8 +555,17 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
             if (texts.size() == 1) {
                 QString one;
                 QString err;
-                if (!translateOne(texts.first(), dst, one, err)) {
-                    if (firstParagraphError.isEmpty()) {
+                bool soft = false;
+                if (!translateOne(texts.first(), dst, one, err, 5, &soft)) {
+                    if (soft) {
+                        // 质量判据拒收（照抄原文 / 语种不符 / 空 / 复读）：
+                        // 保留原文，界面按「未翻译」显示（ScreenFlow 会把"译文==原文"清空），
+                        // 不再让一段判据误杀拖死整单。计数交给 warning 告知用户。
+                        translated[chunk.first()] = texts.first();
+                        ++softKept;
+                        qWarning("[llm] paragraph %d kept as source (soft rejection): %s",
+                                 chunk.first() + 1, qUtf8Printable(err));
+                    } else if (firstParagraphError.isEmpty()) {
                         firstParagraphError =
                             i18n::sf("目标语言 %1 第 %2 段失败：%3",
                                      "Target language %1, paragraph %2 failed: %3",
@@ -509,9 +579,17 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
 
             QStringList results;
             QString batchError;
-            const bool batchOk = translateBatch(texts, dst, results, batchError)
+            int batchSoftKept = 0;
+            const bool batchOk = translateBatch(texts, dst, results, batchError, &batchSoftKept)
                                  && results.size() == texts.size();
             if (batchOk) {
+                // 批量里"照抄原文"的条目已经被 translateBatch 换成了原文（界面按未翻译显示），
+                // 这里必须把它算进 softKept，否则用户看到原文却收不到任何提示。
+                if (batchSoftKept > 0) {
+                    softKept += batchSoftKept;
+                    qWarning("[llm] %d/%lld item(s) kept as source (soft rejection) in one batch",
+                             batchSoftKept, static_cast<long long>(texts.size()));
+                }
                 // 批量给回来的结果里，空串表示"这一条被判定可疑"（其余照用）。
                 for (int k = 0; k < chunk.size(); ++k) {
                     if (!results.at(k).isEmpty()) {
@@ -563,12 +641,19 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
                 }
                 QString one;
                 QString err;
+                bool soft = false;
                 // 补救只给 1 次机会（maxAttempts=1）：
                 // 批量请求已经把这一批的"正常节奏"用掉了，逐段再各跑 5 次的话
                 // 8 段最坏就是 40 次请求，全部计费，而首轮就失败的段落换个 prompt
                 // 通常也翻不出来。1 次足够区分"偶发格式抖动"和"真的不行"。
-                if (translateOne(texts.at(k), dst, one, err, 1)) {
+                if (translateOne(texts.at(k), dst, one, err, 1, &soft)) {
                     translated[chunk.at(k)] = one;
+                } else if (soft) {
+                    // 与单段路径同一口径：判据拒收就保留原文，不让整单失败。
+                    translated[chunk.at(k)] = texts.at(k);
+                    ++softKept;
+                    qWarning("[llm] paragraph %d kept as source (soft rejection): %s",
+                             chunk.at(k) + 1, qUtf8Printable(err));
                 } else if (firstParagraphError.isEmpty()) {
                     firstParagraphError = i18n::sf("目标语言 %1 第 %2 段失败：%3",
                                                    "Target language %1, paragraph %2 failed: %3",
@@ -584,14 +669,36 @@ core::TranslateOutcome LlmTranslator::translate(const QStringList &paragraphs,
         }
 
         out.byLang.insert(rawDst, translated);
+        if (softKept > 0) {
+            totalSoftKept += softKept;
+            // 非阻断提示：翻译整体成功，但有几段被判据拒收、按原文显示了。
+            // 必须说出来 —— 否则用户看到中文里夹着英文，会以为是"翻译结果就这样"。
+            softWarnings << i18n::sf("%1 段没有翻成%2，已按原文显示（可在日志里看原因）",
+                                     "%1 paragraph(s) were not translated into %2; "
+                                     "the source text is shown instead (see the log for why)",
+                                     {QString::number(softKept),
+                                      core::LanguageRegistry::displayName(dst)});
+        }
         if (!firstParagraphError.isEmpty()) {
             langErrors << firstParagraphError;
         }
     }
 
     out.ok = langErrors.isEmpty();
+    out.warning = softWarnings.join(i18n::s("；", "; "));
     if (!out.ok) {
         out.error = langErrors.join(QStringLiteral("；"));
+        // 整单失败的收口日志：段数、失败原因。上面每条 [llm] reply / rejected 是过程，
+        // 这一条是结论——排查时先看结论，再往上翻是哪一段、模型当时回了什么。
+        qWarning("[llm] translate failed (%lld paragraph(s) -> %s): %s",
+                 static_cast<long long>(paragraphs.size()),
+                 qUtf8Printable(dstLangs.join(QLatin1Char(','))), qUtf8Printable(out.error));
+    } else {
+        qInfo("[llm] translate done: %lld paragraph(s) -> %s%s%s",
+              static_cast<long long>(paragraphs.size()),
+              qUtf8Printable(dstLangs.join(QLatin1Char(','))),
+              totalSoftKept > 0 ? "; (soft) kept as source: " : "",
+              totalSoftKept > 0 ? qUtf8Printable(QString::number(totalSoftKept)) : "");
     }
     return out;
 }
@@ -720,7 +827,8 @@ bool LlmTranslator::translateOne(const QString &text,
                                  const QString &dstLang,
                                  QString &outText,
                                  QString &outError,
-                                 int maxAttempts)
+                                 int maxAttempts,
+                                 bool *softFail)
 {
     if (maxAttempts < 1) {
         maxAttempts = 1;
@@ -764,10 +872,19 @@ bool LlmTranslator::translateOne(const QString &text,
     // 再各跑 5 次会让成本按段数线性放大（8 段最坏 40 次请求）。
     QString lastError;
 
+    // 这一段的失败属于哪一类：
+    //   soft = 输出质量判据拒收（照抄原文 / 语种不符 / 空 / 复读）。单段拒收很可能是
+    //          判据误杀或这段本来就不该翻，调用方应该"保留原文继续"，而不是整单失败；
+    //   hard = 连不上、HTTP 报错、响应不是 JSON、超时、取消。这类必须让用户看见。
+    bool softRejection = false;
+
     for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
         // 用户按了取消：别再为这一段换下一种 prompt 重试（每次都是一次完整请求）。
         if (m_cancelRequested) {
             outError = i18n::s("llm 翻译已取消", "The llm translation was cancelled.");
+            if (softFail) {
+                *softFail = false;
+            }
             return false;
         }
         // 时间预算：m_retryClock 是 translate() 开头起的那个钟，整次调用共享一个 deadline，
@@ -814,6 +931,8 @@ bool LlmTranslator::translateOne(const QString &text,
         QString err;
         if (!postChat(systemPrompt, userPrompt, temperature, maxTokens, content, err)) {
             lastError = err;
+            // 传输/协议层失败是硬失败：换 prompt、换温度都救不回来。
+            softRejection = false;
             // 连不上 / 没响应：换 prompt、换温度都救不回来，重试只会多等 30 秒。
             if (m_lastTransportFailure) {
                 break;
@@ -828,6 +947,7 @@ bool LlmTranslator::translateOne(const QString &text,
 
         if (content.isEmpty()) {
             lastError = i18n::s("LLM 未返回译文", "The LLM returned no translation.");
+            softRejection = true;
             continue;
         }
 
@@ -836,6 +956,7 @@ bool LlmTranslator::translateOne(const QString &text,
             content = truncateRepetition(content, text);
             if (looksDegenerate(content, text)) {
                 lastError = i18n::s("模型输出重复内容", "The model produced repeated output.");
+                softRejection = true;
                 continue;
             }
         }
@@ -846,6 +967,11 @@ bool LlmTranslator::translateOne(const QString &text,
             if (isUntranslatedOutput(content, text)) {
                 lastError = i18n::s("模型没有翻译（返回了原文）",
                                     "The model returned the source text unchanged.");
+                // 这条最容易在日志里"看起来像翻译成功"：模型确实回了东西，只是原样退回。
+                // 把被拒的那一段打出来，才能判断是模型偷懒还是这段本来就不该翻。
+                qWarning("[llm] attempt %d/%d rejected (echoed the source): %s", attempt,
+                         maxAttempts, qUtf8Printable(oneLine(text, 200)));
+                softRejection = true;
                 continue;
             }
 
@@ -853,6 +979,13 @@ bool LlmTranslator::translateOne(const QString &text,
             if (!matchesTargetScript(content, dstLang)) {
                 lastError = i18n::s("译文语种与目标语言不符",
                                     "The output is not in the target language.");
+                // 判据是启发式的，拒收的段落要能在日志里复盘：
+                // 打印原文与被拒译文，才能分清"真译错语言"和"专名把判据顶爆"。
+                qWarning("[llm] attempt %d/%d rejected (script mismatch, dst=%s): src=[%s] out=[%s]",
+                         attempt, maxAttempts, qUtf8Printable(dstLang),
+                         qUtf8Printable(oneLine(text, 120)),
+                         qUtf8Printable(oneLine(content, 120)));
+                softRejection = true;
                 continue;
             }
         }
@@ -866,6 +999,9 @@ bool LlmTranslator::translateOne(const QString &text,
     if (m_lastTransportFailure && !lastError.isEmpty()) {
         // 连不上还劝人"换更大的模型"属于误导，原样报连接失败即可。
         outError = lastError;
+        if (softFail) {
+            *softFail = false;
+        }
         return false;
     }
     outError = i18n::sf("翻译失败（已尝试 %1 次）：%2。可以换成更大的模型，或手动指定源语言。",
@@ -873,6 +1009,9 @@ bool LlmTranslator::translateOne(const QString &text,
                         "Try a larger model, or set the source language explicitly.",
                         {maxAttempts,
                          lastError.isEmpty() ? i18n::s("未给出原因", "no reason given") : lastError});
+    if (softFail) {
+        *softFail = softRejection && !m_lastTransportFailure;
+    }
     return false;
 }
 
@@ -909,6 +1048,12 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
     const net::HttpRequest request =
         buildChatRequest(systemPrompt, userPrompt, temperature, maxTokens);
     const bool trace = qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE");
+    // 请求面固定记一行：只记大小和参数，不记 header —— Authorization 里有 API key，
+    // 日志是要发给别人看的，密钥一个字都不能进。prompt 正文上面的 [translate] text 已经有。
+    qInfo("[llm] post url=%s timeout=%dms prompt=system %lld B + user %lld B temp=%.2f maxTokens=%d",
+          qUtf8Printable(request.url.toString()), request.timeoutMs,
+          static_cast<long long>(systemPrompt.toUtf8().size()),
+          static_cast<long long>(userPrompt.toUtf8().size()), temperature, maxTokens);
     if (trace) {
         qInfo("[llm] post start url=%s timeout=%dms body=%lld",
               qUtf8Printable(request.url.toString()),
@@ -943,6 +1088,11 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
         } else {
             outError = describeHttpFailure(resp);
         }
+        // 失败原因必须落地：界面上只有一句人话，正文里的 status / 报错细节
+        //（比如 401、模型名写错、服务端 500 的 HTML）只有日志里能看到。
+        qWarning("[llm] post failed status=%d err=%s body=%lld B head=%s", resp.status,
+                 qUtf8Printable(outError), static_cast<long long>(resp.body.size()),
+                 qUtf8Printable(oneLine(QString::fromUtf8(resp.body.left(300)), 300)));
         return false;
     }
     m_lastTransportFailure = false;
@@ -953,6 +1103,8 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
         outError = i18n::sf("LLM 响应解析失败：%1",
                             "Failed to parse the LLM response: %1",
                             {QString::fromUtf8(resp.body.left(200))});
+        qWarning("[llm] reply is not JSON (%s): %s", qUtf8Printable(perr.errorString()),
+                 qUtf8Printable(oneLine(QString::fromUtf8(resp.body.left(500)), 500)));
         return false;
     }
 
@@ -967,6 +1119,10 @@ bool LlmTranslator::postChat(const QString &systemPrompt,
     // 那是"思考过程"，一旦当译文用，用户看到的就是一堆自言自语。
     const QJsonObject message = choices.at(0).toObject().value(QStringLiteral("message")).toObject();
     outContent = stripWrapper(message.value(QStringLiteral("content")).toString());
+    // 日志：模型的原始回复（剥壳后）。判定"返回了原文 / 语种不符 / 重复"全靠它，
+    // 只记结论的话，事后没人知道模型当时到底说了什么。
+    qInfo("[llm] reply %lld chars: %s", static_cast<long long>(outContent.size()),
+          qUtf8Printable(oneLine(outContent)));
     return true;
 }
 
@@ -1022,8 +1178,17 @@ bool LlmTranslator::parseJsonStringArray(const QString &content, int expected, Q
 bool LlmTranslator::translateBatch(const QStringList &texts,
                                    const QString &dstLang,
                                    QStringList &outTexts,
-                                   QString &outError)
+                                   QString &outError,
+                                   int *softKept)
 {
+    // 本批有多少条被"策略性拒收"（回声/复读/空）后按原文保留。批量路径以前对这一幕
+    // 完全静默：界面把"译文==原文"按未翻译显示，用户分不清是"没翻成"还是"本来就这样"。
+    // review() 每次都会重数（降温重试会再跑一遍），只留最后一次的账。
+    int echoedKept = 0;
+    if (softKept != nullptr) {
+        *softKept = 0;
+    }
+
     if (texts.isEmpty()) {
         outTexts.clear();
         return true;
@@ -1089,6 +1254,7 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
     // 照抄原文、语种不符——缺一条，批量就会成为"用户开着批量时唯一的质量黑洞"。
     const auto review = [&](QStringList &results, QStringList &reasons) {
         QVector<int> bad;
+        echoedKept = 0;
         for (int i = 0; i < results.size() && i < texts.size(); ++i) {
             if (m_cfg.stripModelNotes) {
                 results[i] = stripAnnotationLines(results.at(i)).trimmed();
@@ -1116,8 +1282,10 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
                 // 模型把原文原样退回来了。常见于本来就不该翻的东西：菜单名（文件/编辑）、
                 // 型号、人名、已经是目标语言的短句。以前这里判「可疑 → 清空 → 逐段补救 →
                 // 还是原样 → 整单失败」，实时翻译每 600 ms 撞一次，界面就永远停在「翻译失败」。
-                // 现在收下原文（界面按「未翻译」显示），不再算失败。
+                // 现在收下原文（界面按「未翻译」显示），不再算失败；但**必须记账**，
+                // 否则调用方拿不到"这一段没翻成"的信号，用户看到的是原文却没有任何提示。
                 results[i] = texts.at(i);
+                ++echoedKept;
                 continue;
             } else if (!sameLanguage && !matchesTargetScript(results.at(i), dstLang)) {
                 reason = i18n::sf("第 %1 条语种不符", "item %1 is not in the target language",
@@ -1155,6 +1323,15 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
     QStringList results;
     QStringList reasons;
     QVector<int> bad;
+
+    // 成功收口用同一段代码：交出译文的同时把"按原文保留"的条数带出去。
+    const auto acceptBatch = [&]() {
+        if (softKept != nullptr) {
+            *softKept = echoedKept;
+        }
+        outTexts = results;
+        return true;
+    };
     if (parseJsonStringArray(content, texts.size(), results)) {
         bad = review(results, reasons);
         if (qEnvironmentVariableIsSet("STUDIOUS_LLM_TRACE") && !bad.isEmpty()) {
@@ -1164,14 +1341,12 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
                   qUtf8Printable(reasons.join(QStringLiteral("; "))));
         }
         if (bad.isEmpty()) {
-            outTexts = results;
-            return true;
+            return acceptBatch();
         }
         // 部分可疑：好条目照用，可疑条目留空交给调用方逐段重试。
         // 一条怪段落不该让同批 8 段的正常结果一起作废，更不该拖出 8 段 × 5 次重试。
         if (bad.size() < results.size()) {
-            outTexts = results;
-            return true;
+            return acceptBatch();
         }
     } else {
         reasons.clear();
@@ -1219,8 +1394,7 @@ bool LlmTranslator::translateBatch(const QStringList &texts,
     if (parseJsonStringArray(retryContent, texts.size(), results)) {
         bad = review(results, reasons);
         if (bad.size() < results.size()) {   // 含 bad 为空（全部可用）的情况
-            outTexts = results;
-            return true;
+            return acceptBatch();
         }
     } else {
         reasons.clear();

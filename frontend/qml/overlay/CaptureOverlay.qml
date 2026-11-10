@@ -637,15 +637,52 @@ Window {
         Repeater {
             model: screenFlow.blocks
             delegate: Rectangle {
+                id: plate
                 required property var modelData
+                // Repeater 的 index 要显式声明成 required property 才稳定拿得到，
+                // 否则 gapBelow 里读它会是 ReferenceError（表现为每块都按"下方没东西"算）。
+                required property int index
+                readonly property string shown: overlay.showOriginal
+                    ? modelData.original
+                    : (modelData.untranslated ? modelData.original : modelData.text)
+                // 译文比原文长是这个浮层最常见的翻车场景：以前是「一行 + 按行高定字号 +
+                // 超宽就 elide」，长句直接变成"基于你的技术栈…"。现在的顺序是：
+                //   1) 先向右吃掉空白（最多到原文宽 1.6 倍，且不出选区）；
+                //   2) 还不够就等比缩字号（下限 0.7 倍、且不小于 9px）；
+                //   3) 缩到底仍放不下就换行（最多两行），高度只能往下吃掉「到下一块之间的空隙」；
+                //   4) 最后才回到 elide。
+                readonly property real limitW: {
+                    const rightEdge = overlay.sel.x + overlay.sel.width;
+                    return Math.max(pw, Math.min(pw * 1.6, rightEdge - px - 2));
+                }
+                readonly property real basePx: Math.max(9, Math.min(backend.overlayFontSize, ph * 0.92));
+                readonly property real minPx: Math.max(9, basePx * 0.7);
+                readonly property real fitPx: metricBase.implicitWidth <= limitW
+                    ? basePx
+                    : Math.max(minPx, Math.min(basePx,
+                                               basePx * limitW / Math.max(1, metricBase.implicitWidth)));
+                // 正下方那一块的顶边（物理像素）→ 换算成本块最多能往下长多少。
+                readonly property real gapBelow: {
+                    const top = overlay.nextPlateTop(index, modelData);
+                    if (top === Infinity) {
+                        return ph;
+                    }
+                    return Math.max(0, top - (modelData.y + modelData.h)) / overlay.scale;
+                }
+                readonly property real limitH: ph + Math.min(gapBelow * 0.8, ph * 0.9);
+                readonly property bool wraps: metricLine.implicitWidth > limitW + 0.5;
+                readonly property real plateW: Math.max(pw, Math.min(limitW, metricLine.implicitWidth + 4));
+                readonly property real plateH: Math.max(ph, Math.min(limitH,
+                                                                  (wraps ? metricWrap.implicitHeight
+                                                                         : metricLine.implicitHeight) + 2));
                 readonly property real px: overlay.sel.x + modelData.x / overlay.scale
                 readonly property real py: overlay.sel.y + modelData.y / overlay.scale
                 readonly property real pw: Math.max(8, modelData.w / overlay.scale)
                 readonly property real ph: Math.max(8, modelData.h / overlay.scale)
                 x: px - 2
                 y: py - 1
-                width: pw + 4
-                height: ph + 2
+                width: plateW
+                height: plateH
                 radius: Theme.rXs
                 // 底色用 surfaceLow（设计稿的 --plate = --sc-low），
                 // 它比 surface 亮一档，压在原文上才看得出是一块「贴纸」。
@@ -654,21 +691,54 @@ Window {
                 border.width: overlay.showOriginal ? 1 : 0
                 border.color: Theme.outlineVariant
 
+                // 量三个尺寸：基础字号下一行的宽度、缩字号后一行的宽度、缩字号后两行的高度。
+                // 都是 visible:false 的 Text（Qt 照样排版，只是不上屏），比每帧去 C++ 里问 QFontMetrics 省事。
+                Text {
+                    id: metricBase
+                    visible: false
+                    text: plate.shown
+                    font.family: Theme.fontContent
+                    font.pixelSize: plate.basePx
+                    wrapMode: Text.NoWrap
+                }
+
+                Text {
+                    id: metricLine
+                    visible: false
+                    text: plate.shown
+                    font.family: Theme.fontContent
+                    font.pixelSize: plate.fitPx
+                    wrapMode: Text.NoWrap
+                }
+
+                Text {
+                    id: metricWrap
+                    visible: false
+                    text: plate.shown
+                    font.family: Theme.fontContent
+                    font.pixelSize: plate.fitPx
+                    width: plate.plateW
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 2
+                }
+
                 Text {
                     anchors.fill: parent
                     anchors.leftMargin: 2
                     anchors.rightMargin: 2
                     verticalAlignment: Text.AlignVCenter
-                    text: overlay.showOriginal
-                              ? modelData.original
-                              : (modelData.untranslated ? modelData.original : modelData.text)
+                    text: plate.shown
                     color: modelData.untranslated && !overlay.showOriginal ? Theme.inkVariant : Theme.ink
                     font.family: Theme.fontContent
-                    // 设置里的字号是「原文行高 13px 时的大小」，这里按行高再收一次，
-                    // 免得小行被大字号撑破。
-                    font.pixelSize: Math.max(9, Math.min(backend.overlayFontSize, ph * 0.92))
+                    // 字号由 plate.fitPx 算好（先试原字号，超宽再等比缩，下限 9px），
+                    // 这里不再按行高硬收，否则长译文永远只能被截断。
+                    font.pixelSize: plate.fitPx
+                    wrapMode: Text.Wrap
                     elide: Text.ElideRight
-                    maximumLineCount: 1
+                    maximumLineCount: 2
+                    // 块高只放到「下一块之前」为止，放不下才会真的 ellipsis，
+                    // 而不是把下面的行盖住。
+                    height: parent.height - 2
                 }
 
                 // 「保留原文标注」：译文条上方压一条薄原文条，底部一道浅线分隔。
@@ -1055,6 +1125,27 @@ Window {
         h = Math.min(h, overlay.height - y);
 
         overlay.localRect = Qt.rect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    // 找「正下方、横向有重叠」那一块的顶边（物理像素）。贴纸允许往下长高，
+    // 但只能长到这一块之前 —— 否则两块叠在一起，译文就会互相压字。
+    // 往后扫到 y 已经超过 bottom + 400 就停：行高再大也不会跨这么多。
+    function nextPlateTop(index, block) {
+        const list = screenFlow.blocks;
+        if (!list || index < 0 || index + 1 >= list.length)
+            return Infinity;
+
+        const right = block.x + block.w;
+        const bottom = block.y + block.h;
+        let best = Infinity;
+        for (let j = index + 1; j < list.length; ++j) {
+            const b = list[j];
+            if (b.y > bottom + 400)
+                break;
+            if (b.x < right && b.x + b.w > block.x && b.y >= bottom)
+                best = Math.min(best, b.y);
+        }
+        return best;
     }
 
     function commitSelection(r) {

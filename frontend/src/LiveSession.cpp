@@ -581,10 +581,16 @@ void LiveSession::applyTranslation(const QuickTranslateResult &result)
                      : QString());
 
     setErrorText(QString());
-    setStatusText(tr("已更新 %1 次 · %2 行 · %3 ms")
-                      .arg(m_updateCount)
-                      .arg(index)
-                      .arg(result.elapsedMs));
+    QString status = tr("已更新 %1 次 · %2 行 · %3 ms")
+                         .arg(m_updateCount)
+                         .arg(index)
+                         .arg(result.elapsedMs);
+    // 有行没翻成（后端判据拒收、保留原文）时说出来：
+    // 否则屏上一半英文一半中文，用户分不清是"翻错了"还是"本来就这样"。
+    if (!result.warning.isEmpty()) {
+        status = QStringLiteral("%1 · %2").arg(status, result.warning);
+    }
+    setStatusText(status);
 }
 
 // ---------------------------------------------------------------------------

@@ -38,6 +38,17 @@ using studious::ui::engine::toUi;
 
 // ─── 段落切分 ────────────────────────────────────────────────────────────────
 
+// 日志单行化：译文里全是换行，直接打会把一条结果撑成十几行；截断防止整屏长文灌爆日志。
+QString oneLine(const QString &text, int maxChars = 2000)
+{
+    QString s = text;
+    s.replace(QLatin1String("\r\n"), QStringLiteral("⏎"));
+    s.replace(QLatin1Char('\n'), QStringLiteral("⏎"));
+    if (s.size() > maxChars)
+        s = s.left(maxChars) + QStringLiteral(" …(截断，共 %1 字)").arg(s.size());
+    return s;
+}
+
 // 切段规则只有一份：Paragraphs.h 的 paragraphs::split()（段落数 = 缓存键的一部分，
 // 小窗和主页必须算出同样的段数，否则同一段文本换个窗口就重新翻）。
 
@@ -528,6 +539,11 @@ void QuickTranslate::onJobFinished(const TranslateJobResult &result, qint64 elap
         out.ok = false;
         out.error = result.outcome.error;
         m_lastError = out.error;
+        // 日志：失败原因必须落地。界面上的横幅一闪就没了，用户回头只记得"翻不了"，
+        // 具体是哪一段、什么原因，只能从这一行看。
+        qWarning("[translate] failed after %lld ms (%d paragraph(s)): %s",
+                 static_cast<long long>(elapsedMs), int(m_pendingParagraphs.size()),
+                 qUtf8Printable(out.error));
         emit progress(static_cast<int>(m_pendingParagraphs.size()),
                       static_cast<int>(m_pendingParagraphs.size()));
         emit finished(out);
@@ -557,6 +573,22 @@ void QuickTranslate::onJobFinished(const TranslateJobResult &result, qint64 elap
     if (!problems.isEmpty()) {
         out.error = problems.join(l10n::s("；", "; "));   // 不整体失败，只把问题挂出来
         m_lastError = out.error;
+    }
+    // 后端报上来的非阻断提示（"N 段按原文显示"）原样转给界面：
+    // 翻译是成功的，但用户必须知道有几段显示的其实是原文。
+    out.warning = result.outcome.warning;
+    if (!out.warning.isEmpty()) {
+        qInfo("[translate] warning: %s", qUtf8Printable(out.warning));
+    }
+
+    // 日志：界面最终拿到的译文。和 backend 的 [llm] reply 那一行对照着看，
+    // 就能分清是"模型答歪了"还是"我们解析/对齐错了"。
+    qInfo("[translate] ok in %lld ms, %d paragraph(s), cache %lld hit(s)",
+          static_cast<long long>(elapsedMs), int(m_pendingParagraphs.size()),
+          static_cast<long long>(result.cacheHits));
+    for (auto it = out.byLang.cbegin(); it != out.byLang.cend(); ++it) {
+        qInfo("[translate] %s: %s", qUtf8Printable(it.key()),
+              qUtf8Printable(oneLine(it.value().join(QStringLiteral(" ⏎ ")))));
     }
 
     emit progress(static_cast<int>(m_pendingParagraphs.size()),

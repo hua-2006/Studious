@@ -61,6 +61,19 @@ QString ocrModelsDir()
     return studious::ui::ocr::stageModels();
 }
 
+// 日志单行化：换行压成 ⏎、超长截断。日志是「一行一件事」，正文里带换行会把
+// 后面的事件挤出可视区；截断则保证一张整屏截图的上百行不会把日志文件灌爆。
+QString oneLine(const QString &text, int maxChars = 2000)
+{
+    QString s = text;
+    s.replace(QLatin1String("\r\n"), QStringLiteral("⏎"));
+    s.replace(QLatin1Char('\n'), QStringLiteral("⏎"));
+    s.replace(QLatin1Char('\t'), QLatin1Char(' '));
+    if (s.size() > maxChars)
+        s = s.left(maxChars) + QStringLiteral(" …(截断，共 %1 字)").arg(s.size());
+    return s;
+}
+
 // OCR 的 box 是「裁剪图」坐标；浮层要按「相对选区左上角」画，两者是同一套物理像素。
 // 一行文字对应一张贴纸：OCR 给的是「词」，翻译与贴纸都按「行」来，所以这里把
 // 同一水平带上的词并成一块（见 groupWordsIntoLines()）。
@@ -121,7 +134,13 @@ ScreenFlow::ScreenFlow(studious::platform::IPlatform *platform, QObject *parent)
             block.insert(QStringLiteral("untranslated"), text.isEmpty());
             m_blocks[i] = block;
         }
-        setStatusText(QStringLiteral("%1 · %2 ms").arg(m_engineLabel).arg(r.elapsedMs));
+        // 有段落没翻成（后端判据拒收、已按原文显示）时，状态栏必须写出来：
+        // 否则用户看到中文里夹着英文，会以为是"翻译结果就这样"，其实是我们没翻。
+        QString status = QStringLiteral("%1 · %2 ms").arg(m_engineLabel).arg(r.elapsedMs);
+        if (!r.warning.isEmpty()) {
+            status = QStringLiteral("%1 · %2").arg(status, r.warning);
+        }
+        setStatusText(status);
         setPhase(QStringLiteral("Showing"));
         // 设置里的「翻译后自动复制」：只复制第一目标语言的那一份。
         if (AppSettings::load().captureAutoCopy) {
@@ -426,7 +445,7 @@ void ScreenFlow::confirmSelection(const QRect &region)
     auto *watcher = new QFutureWatcher<QVector<studious::platform::OcrWord>>(this);
     m_ocrWatcher = watcher;
     m_recognizing = true;
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, token]() {
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, token, physical]() {
         // 线程已经收工，之后才允许下一次识别（无论这一单是否已被取消）。
         m_recognizing = false;
         if (m_ocrWatcher == watcher)
@@ -463,9 +482,17 @@ void ScreenFlow::confirmSelection(const QRect &region)
         // text / confidence 现在都由 OcrLines 一起给出（confidence 取行内最小值，
         // 口径没变，只是从这里的循环挪进了 OcrLines）。
         const QVector<OcrLine> lines = groupWordsIntoLines(words);
-        for (const OcrLine &line : lines) {
+        // 日志：OCR 到底认出了什么。翻译出问题时第一件事是分清"图没认对"还是
+        // "模型没翻"——这两件事必须在日志里各占一段，不能最后只剩一句"翻译失败"。
+        qInfo("[ocr] region %dx%d -> %d line(s)", physical.width(), physical.height(),
+              int(lines.size()));
+        for (int i = 0; i < lines.size(); ++i) {
+            const OcrLine &line = lines.at(i);
             if (line.text.isEmpty())
                 continue;
+            qInfo("[ocr]  #%d conf=%.3f box=%d,%d %dx%d text=%s", i, line.confidence,
+                  line.box.x(), line.box.y(), line.box.width(), line.box.height(),
+                  qUtf8Printable(line.text));
             m_blocks.append(lineToMap(line.box, line.text, line.confidence));
             m_lastWords.append(line.text);
         }
@@ -539,6 +566,12 @@ void ScreenFlow::startTranslation()
     for (const QVariant &v : std::as_const(m_lastWords))
         paragraphs.append(v.toString());
     const QString text = paragraphs.join(QStringLiteral("\n\n"));
+
+    // 日志：交给引擎的原文（按段拼好、单行化）。用户报"整块翻不了"时先看这一条：
+    // 段落数、源语言、目标语言，以及认出来的是不是人话。
+    qInfo("[translate] submit %d paragraph(s) src=%s dst=%s", int(paragraphs.size()),
+          qUtf8Printable(settings.srcLang), qUtf8Printable(dst.join(QLatin1Char(','))));
+    qInfo("[translate] text: %s", qUtf8Printable(oneLine(text)));
 
     // 开发钩子：把每行贴纸的框与原文打出来，用来核对"贴纸没盖住原行"这类几何问题。
     if (qEnvironmentVariableIsSet("STUDIOUS_DEBUG_BLOCKS")) {

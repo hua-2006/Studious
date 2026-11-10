@@ -59,6 +59,9 @@ void setLocalEngineStarter(std::function<void()> starter);
 struct QuickTranslateResult {
     bool ok = false;
     QString error;
+    // 非阻断提示：翻译成功，但有段落没翻成目标语言、按原文显示了。
+    // 界面必须用显眼但不报错的方式说一句，否则用户会把"原文"当成"译文"。
+    QString warning;
     QString engineLabel;                       // 例 "Web 在线 · google" 或 "本地 MT"
     QHash<QString, QStringList> byLang;        // dstLang -> 段落译文
     QStringList paragraphs;                    // 回显输入分段（调用方可能没存）
