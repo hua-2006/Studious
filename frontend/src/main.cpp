@@ -368,6 +368,8 @@ void printUsage()
     say(QStringLiteral("                                     # 真实下载一个资产（含续传/校验/安装），不开 GUI"));
     say(QStringLiteral("  studious.exe --asset-verify <assetId>"));
     say(QStringLiteral("                                     # 按启动前规则校验一条已安装资产（导入的不校验哈希）"));
+    say(QStringLiteral("  studious.exe --import-model <模型.gguf>"));
+    say(QStringLiteral("                                     # 把自己的 GGUF 复制进模型目录并登记（复制，不移动原文件）"));
     say(QStringLiteral("  studious.exe --capture-probe <x,y,w,h,out.png>   （诊断：抓一块物理像素区域）"));
 }
 
@@ -1299,6 +1301,45 @@ int runAssetVerify(const QStringList &args)
     return ok ? 0 : 1;
 }
 
+// --import-model <path.gguf>：把用户自己的模型复制进模型目录并登记，不开 GUI。
+// 和界面上「模型文件 → 浏览…」是同一套逻辑，方便脚本验收 / 批量导入。
+int runImportModel(const QStringList &args)
+{
+    QString sourcePath;
+    for (int i = 0; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        if (arg == QLatin1String("--import-model")) {
+            const bool hasValue =
+                (i + 1) < args.size() && !args.at(i + 1).startsWith(QLatin1String("--"));
+            if (hasValue) {
+                sourcePath = args.at(++i);
+            }
+        } else if (arg == QLatin1String("--help") || arg == QLatin1String("-h")) {
+            printUsage();
+            return 0;
+        }
+    }
+
+    if (sourcePath.isEmpty()) {
+        say(QStringLiteral("[FAIL] 用法：studious.exe --import-model <模型.gguf>"));
+        return 1;
+    }
+
+    QString destName;
+    QString error;
+    if (!LocalEngine::importModelFile(sourcePath, &destName, &error)) {
+        say(QStringLiteral("[FAIL] 导入失败：") + error);
+        return 1;
+    }
+
+    say(QStringLiteral("[import] ok -> ") + destName);
+    say(QStringLiteral("[import] 模型目录：")
+        + QDir::toNativeSeparators(LocalEngine::userLlmModelsDir()));
+    say(QStringLiteral("[import] 下拉里现在能看到：") +
+        LocalEngine::availableModels().join(QStringLiteral(", ")));
+    return 0;
+}
+
 // --capture-probe <x,y,w,h,out.png>：诊断用，抓一块物理像素区域并打印亮度。
 //
 // 用途：确认「游戏窗口抓出来是黑的」到底是 GDI 读不到硬件平面，还是我们的调用错了。
@@ -1444,6 +1485,14 @@ int main(int argc, char *argv[])
         applyUiLanguageFromSettings();
         installLogSink(app);
         return runAssetDownload(QCoreApplication::arguments());
+    }
+
+    if (hasFlag(argc, argv, "--import-model")) {
+        QCoreApplication app(argc, argv);
+        QCoreApplication::setApplicationName(QStringLiteral("studious"));
+        applyUiLanguageFromSettings();
+        installLogSink(app);
+        return runImportModel(QCoreApplication::arguments());
     }
 
     // DPI 感知必须在 QGuiApplication 构造之前设置（Windows 上只生效一次）。

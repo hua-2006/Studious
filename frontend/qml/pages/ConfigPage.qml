@@ -5,6 +5,8 @@ import QtQuick.Controls
 // 默认（Windows 原生）样式不允许改 background / contentItem，
 // 显式用 Basic 样式覆盖同名类型，才能把输入控件做成模板里的 .input / .field-like。
 import QtQuick.Controls.Basic
+// 挑本地 .gguf 用（FileDialog.selectedFile 给的是 file:// URL，后端直接收 QUrl）。
+import QtQuick.Dialogs
 import Studious
 // 配置页：按 docs/TempUI/index.html 的 config 段复刻。
 //
@@ -1486,10 +1488,21 @@ Item {
                         }
                         AppButton {
                             text: qsTr("浏览…")
-                            // 后端 installFromFile 是按 manifest 里的资产 id 校验 sha256 的，
-                            // 随便挑一个 .gguf 过不了校验，所以这里仍然只保留接口。
-                            onClicked: page.importHint = qsTr("暂时只能从「资产」页下载；手动导入文件稍后开放。")
+                            // 挑一个本地 .gguf：后端会按「魔数 + 大小」放行，**复制**进
+                            // models/llm 并登记，原文件留在原地（复制不移动）。
+                            // 民间量化版和清单里的 sha256 对不上，所以这条路不查清单。
+                            onClicked: {
+                                page.importHint = "";
+                                modelImportDialog.open();
+                            }
                         }
+                    }
+                    // 非可视对象，放在布局里不会被当成一列。
+                    FileDialog {
+                        id: modelImportDialog
+                        title: qsTr("选择 GGUF 模型文件")
+                        nameFilters: [qsTr("GGUF 模型 (*.gguf)"), qsTr("所有文件 (*)")]
+                        onAccepted: backend.importLocalModel(selectedFile)
                     }
                     Hint {
                         visible: text.length > 0

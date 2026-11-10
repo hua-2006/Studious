@@ -2443,3 +2443,120 @@ ormalizeTargetsAgainstSource(targets, source)——源不是 auto 时把同一�
   HTTP 客户端 parent 误用、未初始化捕获矩形、MtModel 张量形状校验）、只装 Vulkan 时锁定「优先 GPU」
   并把已安装加速组件标绿、启动开场动画（logo → 进度条 → 主界面弹出）。
 - 提交 elease: 1.1.1 修复bug，打标签 1.1.1。
+## 本地 LLM 自定义导入（2026-11-10）
+
+- 需求：把自己的 .gguf 导进来就能用；**复制，不移动**原文件。
+- `frontend\src\LocalEngine.{h,cpp}`：新增 `importModelFile()` / `importedModelNames()`。
+  校验只有两级——文件 ≥1 MB + 头 4 字节是 `GGUF`；再往下就等于自己重写一遍 llama.cpp 的加载器，
+  而且民间量化版本来就和清单 sha256 对不上，硬校验等于禁止导入。
+  落盘用 `QFile::copy`（复制），登记写 `data\assets\state\imported-llm.json`（`QSaveFile` 原子提交）。
+  `availableModels()` 在清单之外再并一轮「登记过且文件还在」的名字，仍然不从目录里瞎猜。
+- `frontend\src\AppBackend.{h,cpp}`：`Q_INVOKABLE importLocalModel(QUrl)`，复制丢进 `QtConcurrent`，
+  结果经 `statusText` / `errorRaised` 回传；导入成功顺手 `setLocalModel()` 选中它；
+  `m_modelImporting` 挡住连点两次复制出两份。`localModels` 属性从 `CONSTANT` 改成 `NOTIFY localStateChanged`
+  （否则下拉框不会刷新——这是"导入完看不到"的经典坑）。
+- `frontend\qml\pages\ConfigPage.qml`：加 `import QtQuick.Dialogs`，`浏览…` 打开 `FileDialog`
+  （`GGUF 模型 (*.gguf)` / `所有文件 (*)`），`onAccepted: backend.importLocalModel(selectedFile)`。
+- `frontend\src\main.cpp`：新增 `--import-model <模型.gguf>`，和界面同一套逻辑，方便脚本验收。
+- 翻译：lupdate 3 条新增（`选择 GGUF 模型文件` / `GGUF 模型 (*.gguf)` / `所有文件 (*)`），
+  en 与 zh_CN 都补齐，lrelease 输出 563 finished / 0 unfinished。
+- 验证（真跑）：
+  - 下载 `https://hf-mirror.com/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`
+    → `C:\Users\hua\Downloads\Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`（379.4 MB）。huggingface.co 在本机连不上（443 超时），
+    hf-mirror.com / modelscope.cn 可通。
+  - `studious.exe --import-model <该文件>` → `[import] ok -> Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`，
+    下拉列表里出现；源文件仍在（`Test-Path` = True，源/目标同为 397808192 字节）。
+  - 重复导入 → 报「同名文件已存在」；塞一个 2 MB 假 .gguf → 报「文件头不是 GGUF」；不存在的路径 → 报「找不到」。
+  - 端到端：`--smoke "Hello, how are you today?" --to zh --engine llm-local --local-model Qwen2.5-0.5B-Instruct-Q4_K_M.gguf --cache off`
+    → vulkan 后端 1529 ms 拉起 llama-server（pid 有值、端口 18080），译文「你好，<<<」（0.5B 小模型的水平，链路是通的）。
+  - 界面：`--ui-page 3 --ui-shot` 拍到「模型文件」下拉显示 `Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`、右侧「浏览…」按钮在位；
+    `QtQuick.Dialogs` 模块解析正常（页面能加载出来就说明插件在）。
+- 坑：改成 GUI 子系统后，PowerShell 的 `& exe args` 不再同步等待，CLI 验收必须
+  `Start-Process -Wait -RedirectStandardOutput`，否则读到的是空文件。
+## 资产页：驱动 / 模型分组 + 移除 7B 占位（2026-11-10）
+
+- `frontend\qml\pages\SettingsPage.qml`：新增 `assetRows`（引擎驱动 runtime 排在前、模型跟在后，第一行模型带 `dividerBefore`），表格 delegate 改成 `ColumnLayout` + 分割线；`importTargetFor` 里 7B 的举例注释同步去掉。
+- `backend\asset\manifest.json`：删掉 `model.qwen2.5-7b-instruct.q4km`（原 `urls: []`，只用来接「导入文件」）；清单 16 → 15 条。
+- `data\assets\state\asset-origins.json`：删掉指向该条目、已经失效的 `"import"` 记录。
+- 验证：Python 解析清单 = 15 条、无 7b；`cmake --build frontend\build` 通过；真机点「设置 → 资产」和「LLM」标签截图确认分割线与条目顺序；新日志段无 qml 报错。
+## 资产页：用户导入条目内嵌进分类表格（2026-11-10）
+
+- 用户自己导入的模型与清单资产彻底分家：GGUF 落 `data/assets/models/llm-user/`，
+  语言包落 `data/assets/models/mt-user/mt.opus.<src>-<dst>/`（六件套齐全才算一条）。
+  这样清单资产的 sha256 校验永远只作用于线上那份，用户文件不参与。
+- `LocalEngine`：新增 `userLlmModelsDir()` / `userModelFiles()` / `removeUserModel()`；
+  `importModelFile()` 的目标目录从 `models/llm` 改到 `models/llm-user`；
+  `availableModels()` 收录用户目录里的文件；`pathForName()` 先查用户目录再回落清单目录。
+- `AppBackend::userModels()` 汇总 LLM 与 MT 的用户条目（MT 用 `LocalMtTranslator::requiredFiles()`
+  判齐），`removeUserModel()` 分别处理单文件删除与语言包目录递归删除。
+- 资产页不再单开「用户导入」标签（第一版这样做，用户否了）：改成在「LLM」「本地 MT」两个分类的
+  清单条目下面加一条分割线，接用户导入的行（徽章「用户导入」、操作「删除」）；一条都没有时
+  整段连分割线一起隐藏。「全部」栏混排说不清归属，不显示用户行。
+- 验证：`--import-model` 导入 Qwen2.5-0.5B 改名版落在 llm-user 并出现在 LLM 栏；
+  造 `mt.opus.en-test` 六件套目录后出现在 MT 栏，确认弹窗删掉后目录消失、分割线一起消失。
+## 资产页导入：用户模型不再套清单哈希（2026-11-10）
+
+- 现象：资产页「从文件导入」选自己的 gguf，仍报「导入文件与清单哈希不一致：实际 …，期望 …，未做任何安装」。
+- 根因：`beginImport("llm")` 会先算 `importTargetFor("llm")`；三条模型都装好后它回退到清单第一条（0.5b），
+  于是导入走的是 `importAssetFromFile` → `Downloader::installFromFile` 的清单 sha256 校验，用户文件必然对不上。
+- 改法：
+  - `SettingsPage.qml` 的 `beginImport(category)`：`llm` → 直接 `openUserModelDialog()`
+    （新 `FileDialog{id:userModelFileDialog}`，标题「选择 GGUF 模型文件」，过滤器只留 gguf），
+    `onAccepted` 交给 `backend.importLocalModel()`；`mt` → `backend.notifyMtImportUnavailable()` 说明六件套目录；
+    其余类别（图像识别等）保持原来的「清单条目 + 哈希」路径。
+  - 行内「导入文件」对 `type === "model"` 的占位条目也改走 `openUserModelDialog()`。
+  - `AppBackend::notifyMtImportUnavailable()`：状态栏提示把六件套目录放到 `models/mt-user/`。
+- 验证：LLM 栏点「从文件导入」弹的是「选择 GGUF 模型文件」（GGUF 过滤器），不再是「选择要装进 model.qwen2.5-0.5b…」；
+  走完文件框后 `Qwen2.5-0.5B-user2-Q4_K_M.gguf`（379.4 MB）落进 `models/llm-user/`，
+  资产页底部出现「用户导入」行（分割线之上是清单条目），`--import-model` CLI 同样正常。
+- 测试期间在 `C:\Users\hua\Downloads` 造的副本已删除，用户自己的 `Qwen2.5-0.5B-test-Instruct-Q4_K_M.gguf` 未动。
+## 弹窗布局：长文本不再把按钮顶出弹窗（2026-11-10）
+
+- 现象：资产页「删除用户模型」确认弹窗里，文件名一长（`Qwen2.5-0.5B-user2-Q4_K_M.gguf` 这种），
+  正文不换行、整段往右顶，`取消`/`删除` 两个按钮被挤出弹窗右边界。
+- 根因：`Popup { width: 460 }` 只定了外框宽度，内部 `ColumnLayout` 没有宽度约束，
+  Qt 会按子项 `implicitWidth`（一整行不换行的文本宽度）撑开布局，`Layout.fillWidth` 只在这个
+  被撑开的宽度里分配，于是按钮跟着一起跑出去。
+- 改法：所有 `Popup` 的内容 `ColumnLayout` 显式写 `width: <popupId>.availableWidth`
+  （SettingsPage.qml 里 7 处：uninstallConfirm / userModelRemoveConfirm / importCategoryPicker /
+  importPicker / resetConfirm / licensePopup / thirdPartyPopup；后三个原本已有 contentWidth）。
+  标题那行同时加 `Layout.fillWidth: true` + `wrapMode: Text.Wrap`。
+- 验证：拿 64 字符的假模型名 `Qwen2.5-14B-Instruct-AWQ-Longname-Layout-Stress-Test-Q4_K_M.gguf`
+  做压力测试 —— 文件名折成两行，按钮完整留在弹窗内（截图 `%TEMP%\d-confirm4-crop.png`）。
+- 顺手修英文挤压：`暂不支持` 的英文译文 `Not supported yet` 比列宽还长，会压到「路径」列上，
+  改成 `Unavailable`；lrelease 重新生成 569 条。
+## 数据页目录树同步（2026-11-10）
+
+「设置 · 数据」里那棵树只画了旧的六行，`models/` 下新加的 `llm-user/`、`mt-user/`
+和 `state/` 都没露脸，用户看不出自定义模型该放哪儿。补齐并同步 `data/README.md`。
+
+- `frontend/qml/pages/SettingsPage.qml` 的 `dirTree`：补 `models/llm-user/`（只验文件头）、
+  `models/mt-user/`（六件套齐全才认）、`models/ocr/run/`、`runtime/runtime.llama.cpu.win-x64/`、
+  `state/`（导入记录与资产来源）；说明列对齐到第 35 列，中英都排得下。
+- 顺手清掉 3 条「有译文但带 `type="unfinished"`」的文件框串（`选择 GGUF 模型文件` /
+  `GGUF 模型 (*.gguf)` / `所有文件 (*)`）—— 这种条目 lrelease 仍当未翻译，英文界面会掉回中文。
+  用 `%TEMP%\clear_unfinished.py` 去标记，lrelease 变成 576 finished / 0 unfinished。
+- 验证：`studious.exe --ui-shot ... --ui-page 4 --ui-section 5` 中英各拍一张
+  （`tree-zh-crop.png` / `tree-en-crop.png`），树对齐、无截断、无 qml 报错。
+- `data/README.md`：目录树加 `llm-user/`、`mt-user/`、`imported-llm.json`；「规则」小节
+  改写为「清单资产每次启动核对 sha256，用户目录不参与核对，两边互不影响」。
+
+
+## 回滚 MT 转换器 + 禁用「本地 MT」导入（2026-11-10）
+
+- 用户判断「原始 opus-mt 包 → 本程序格式」的转换器工程量太大、收益不高，决定只支持
+  多语言语言包（en-mul / mul-en 已经在清单里），把导入入口先关掉。
+- 回滚范围：转换器原型只在 %TEMP%（torchbin.py / mtgraph.py / mkpack.py /
+  validate_conv.py + 约 730 MB 的原始包与产物），仓库代码一行未动；
+  %APPDATA%\studious\assets\models\mt.opus.en-zh 下我造的转换产物已删，
+  仓库自带的 data\assets\models\mt\mt.opus.en-zh 完好（8 个文件未变）。
+- 界面改动（frontend/qml/pages/SettingsPage.qml）：
+  - 「从文件导入」类别选择弹窗里「本地 MT」按钮置灰，提示改成
+    「暂不支持从文件导入：语言包请在资产页下载」。
+  - 资产页「本地 MT」分类栏的「从文件导入」按钮同样置灰
+    （buttonEnabled: page.assetTab !== "mt"）。
+  - 翻译：lupdate 577 条（1 新增），studious_en.ts 填
+    "Importing is not supported yet: download language packs from the assets page"。
+- 保留的调研结论（下次要做时不用重来）：官方 encoder 图的真实结构是
+  x = emb*sqrt(d) + pos → attn(x) → x = x + attn → LN → ffn → x = LN(x + ffn)；
+  最初漏了 FFN 之后那次残差，导致 encoder 余弦 0.995 但译文是垃圾。

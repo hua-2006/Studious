@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/hua-2006/Studious/releases"><img alt="download" src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD%E7%BB%BF%E8%89%B2%E7%89%88-Releases-2ea44f"></a>
   <img alt="platform" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4">
-  <img alt="version" src="https://img.shields.io/badge/version-1.1.1-informational">
+  <img alt="version" src="https://img.shields.io/badge/version-1.2.1-informational">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
@@ -27,7 +27,7 @@
 
 ## 下载
 
-到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-1.1.1-win64.zip`。
+到 [**Releases**](https://github.com/hua-2006/Studious/releases) 下载 `Studious-1.2.1-win64.zip`。
 
 1. 解压到一个空文件夹（**别只把 exe 拖出来**，Qt 运行库就在旁边）
 2. 双击 `studious.exe`
@@ -141,7 +141,7 @@
 
 ## 当前进度
 
-1. 用户自定义导入本地llm模型和本地mt语言包
+1. ~~用户自定义导入本地 llm 模型~~ — 已完成：配置页「浏览…」或资产页「从文件导入」；本地 mt 语言包导入暂缓（原始 opus-mt 包要先导出+量化，接口位置已留）
 2. 软件初始引导
 3. 加入更多的web翻译源
 4. 优化增强图像识别准度,增加图像识别档位

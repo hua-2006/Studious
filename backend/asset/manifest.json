@@ -116,23 +116,6 @@
         "note": "【3B · 推荐】质量与稳定性优于 1.5B，中→英/日明显更稳。实际体积 2.0 GB，内存约 3 GB（建议 8 GB 以上机器）。适合：长剧情、对译文质量要求高、有独立显卡的用户。"
       },
       {
-        "id": "model.qwen2.5-7b-instruct.q4km",
-        "type": "model",
-        "family": "qwen2.5",
-        "quant": "Q4_K_M",
-        "version": "2025-01",
-        "size": 4680000000,
-        "sha256": "",
-        "archive": "",
-        "urls": [],
-        "files": [
-          "qwen2.5-7b-instruct-q4_k_m.gguf"
-        ],
-        "requiresRamGB": 10,
-        "requiresVramGB": 6,
-        "note": "【7B · 需自行导入】下载渠道已撤下。请自己从 HuggingFace / ModelScope 取 qwen2.5-7b-instruct-q4_k_m.gguf，在「设置 · 资产」里点这一行的「导入文件」装上（用户导入的资产不做哈希校验）。质量最高档，内存约 6.3 GB（建议 16 GB 以上 + 8 GB 显存）。"
-      },
-      {
         "id": "mt.opus.en-zh",
         "type": "model",
         "family": "opus-mt",

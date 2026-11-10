@@ -1734,6 +1734,112 @@ bool AppBackend::migrateAssetRoot(const QString &newRoot)
     return true;
 }
 
+namespace {
+
+// 后台线程只负责搬文件，成功/失败的文案统一回 GUI 线程说。
+struct LocalModelImportOutcome {
+    bool ok = false;
+    QString name;
+    QString error;
+};
+
+}  // namespace
+
+void AppBackend::importLocalModel(const QUrl &fileUrl)
+{
+    const QString path = fileUrl.isLocalFile() ? fileUrl.toLocalFile() : fileUrl.toString();
+    if (path.trimmed().isEmpty()) {
+        setStatus(studious::i18n::s("没有选中文件。", "No file was selected."), true);
+        return;
+    }
+
+    if (m_modelImporting) {
+        return;
+    }
+    m_modelImporting = true;
+    setStatus(studious::i18n::s("正在导入模型…（几百 MB 的权重需要几十秒）",
+                                "Importing the model… (large weights can take a while)"),
+              false);
+
+    auto *watcher = new QFutureWatcher<LocalModelImportOutcome>(this);
+    connect(watcher, &QFutureWatcher<LocalModelImportOutcome>::finished, this, [this, watcher] {
+        const LocalModelImportOutcome outcome = watcher->result();
+        watcher->deleteLater();
+        m_modelImporting = false;
+
+        if (!outcome.ok) {
+            setStatus(studious::i18n::sf("导入失败：%1", "Import failed: %1", {outcome.error}), true);
+            emit errorRaised(studious::i18n::s("导入本地模型失败", "Local model import failed"),
+                             outcome.error);
+            return;
+        }
+
+        // 导入完直接选中它：刚挑的文件通常就是现在要跑的那个。
+        setLocalModel(outcome.name);
+        setStatus(studious::i18n::sf("已导入模型 %1（已复制进模型目录，原文件没动）。",
+                                     "Imported %1 (copied into the model directory; the original file is untouched).",
+                                     {outcome.name}),
+                  false);
+        refreshLocalState();
+    });
+
+    watcher->setFuture(QtConcurrent::run([path]() {
+        LocalModelImportOutcome outcome;
+        outcome.ok = LocalEngine::importModelFile(path, &outcome.name, &outcome.error);
+        return outcome;
+    }));
+}
+
+void AppBackend::removeUserModel(const QString &fileName)
+{
+    // 用户语言包是一个目录（models/mt-user/mt.opus.<src>-<dst>），和 LLM 的单文件
+    // 走两条删除路径；两者都只接受纯名字，挡掉 "../" 这类路径穿越。
+    const QString name = fileName.trimmed();
+    const bool isMtPair = name.startsWith(QStringLiteral("mt.opus.")) && !name.contains(QLatin1Char('/'))
+                          && !name.contains(QLatin1Char('\\')) && !name.contains(QStringLiteral(".."));
+    if (isMtPair) {
+        QDir pair(userMtDir());
+        if (!pair.exists(name) || !QDir(pair.filePath(name)).removeRecursively()) {
+            setStatus(studious::i18n::s("删不掉这个语言包目录，可能被占用。",
+                                        "Could not remove that language pack folder (it may be in use)."),
+                      true);
+            return;
+        }
+        setStatus(studious::i18n::sf("已删除用户语言包「%1」。", "Removed the user language pack: %1.", {name}),
+                  false);
+        refreshLocalState();
+        return;
+    }
+
+    QString error;
+    if (!LocalEngine::removeUserModel(fileName, &error)) {
+        setStatus(error, true);
+        return;
+    }
+
+    // 删掉的正好是当前选中的模型：把选择清空（空 = 用第一个可用模型），
+    // 否则设置里会留一个指向已删文件的死名字，下次启动才报错。
+    if (m_localModel == fileName) {
+        setLocalModel(QString());
+    }
+
+    setStatus(studious::i18n::sf("已删除用户模型「%1」。", "Removed the user model: %1.",
+                                 {LocalEngine::shortModelName(fileName)}),
+              false);
+    refreshLocalState();
+}
+
+void AppBackend::notifyMtImportUnavailable()
+{
+    // 本地 MT 的"从文件导入"还没做：用户能做的只是把导出的六件套目录丢进 mt-user。
+    // 这里不走错误横幅（那不是出错，是还没做），只在状态栏说清楚该放哪儿。
+    setStatus(studious::i18n::s("本地 MT 还不能从文件导入：把六件套目录放到 models/mt-user/ 下，"
+                                "它会出现在「本地 MT」分类里。",
+                                "Importing a local MT pack from a file is not supported yet. Drop the "
+                                "six-file folder into models/mt-user/ and it shows up under Local MT."),
+              false);
+}
+
 void AppBackend::importAssetFromFile(const QString &assetId, const QString &filePath)
 {
     const QString id = assetId.trimmed();
@@ -3126,6 +3232,68 @@ QStringList AppBackend::localModels() const
 {
     return LocalEngine::availableModels();
 }
+
+QVariantList AppBackend::userModels() const
+{
+    QVariantList out;
+
+    // ---- 本地 LLM：models/llm-user 里的文件 ----
+    const QString llmDir = LocalEngine::userLlmModelsDir();
+    const QStringList names = LocalEngine::userModelFiles();
+    out.reserve(names.size());
+    for (const QString &name : names) {
+        const QFileInfo info(QDir(llmDir).filePath(name));
+        QVariantMap item;
+        item.insert(QStringLiteral("id"), name);
+        // kind 决定它跟在哪个分类表格下面：llm → 本地 LLM，mt → 本地 MT。
+        item.insert(QStringLiteral("kind"), QStringLiteral("llm"));
+        item.insert(QStringLiteral("name"), LocalEngine::shortModelName(name));
+        item.insert(QStringLiteral("sizeBytes"), static_cast<double>(info.size()));
+        item.insert(QStringLiteral("sizeText"), studious::frontend::humanBytes(info.size()));
+        item.insert(QStringLiteral("path"), info.absoluteFilePath());
+        out << item;
+    }
+
+    // ---- 本地 MT：models/mt-user/mt.opus.<src>-<dst>/，六件套齐全才算一条 ----
+    // 目录名规则与清单资产一致（installedPairs() 只认 mt.opus.*），这样用户自己
+    // 导出的语言包丢进去就能直接用，路由那边不用区分来源。
+    const QDir mtRoot(userMtDir());
+    const QStringList required = studious::translate::LocalMtTranslator::requiredFiles();
+    for (const QFileInfo &pair : mtRoot.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (!pair.fileName().startsWith(QStringLiteral("mt.opus.")))
+            continue;
+        bool complete = true;
+        qint64 bytes = 0;
+        for (const QString &file : required) {
+            const QFileInfo part(QDir(pair.absoluteFilePath()).filePath(file));
+            if (!part.isFile() || part.size() <= 0) {
+                complete = false;
+                break;
+            }
+            bytes += part.size();
+        }
+        // 缺件的目录不当成模型：半套 onnx 装进去只会让引擎加载失败，
+        // 这里直接不显示，用户看到"没导入成功"比看到一条点了报错的条目更清楚。
+        if (!complete)
+            continue;
+
+        QVariantMap item;
+        item.insert(QStringLiteral("id"), pair.fileName());
+        item.insert(QStringLiteral("kind"), QStringLiteral("mt"));
+        item.insert(QStringLiteral("name"), pair.fileName());
+        item.insert(QStringLiteral("sizeBytes"), static_cast<double>(bytes));
+        item.insert(QStringLiteral("sizeText"), studious::frontend::humanBytes(bytes));
+        item.insert(QStringLiteral("path"), pair.absoluteFilePath());
+        out << item;
+    }
+    return out;
+}
+
+QString AppBackend::userMtDir()
+{
+    return QDir(studious::ui::paths::assetsRoot()).filePath(QStringLiteral("models/mt-user"));
+}
+
 
 bool AppBackend::localGpuAvailable() const
 {

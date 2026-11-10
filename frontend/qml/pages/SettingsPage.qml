@@ -144,6 +144,41 @@ Item {
         return out
     }
 
+    // 表格实际渲染的行：引擎驱动（runtime）排在前，模型跟在后，
+    // 两类之间由 delegate 画一条分割线（来源不同，混排容易看串行）。
+    readonly property var assetRows: {
+        var list = page.filteredAssets
+        var runtimes = []
+        var models = []
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].type === "runtime")
+                runtimes.push(list[i])
+            else
+                models.push(list[i])
+        }
+        var out = []
+        for (var r = 0; r < runtimes.length; ++r)
+            out.push({ entry: runtimes[r], dividerBefore: false })
+        for (var m = 0; m < models.length; ++m)
+            out.push({ entry: models[m], dividerBefore: runtimes.length > 0 && m === 0 })
+        return out
+    }
+
+    // 用户自己导入的条目：接在对应分类的清单条目下面，由下面那条分割线隔开；
+    // 一条都没有时整段（连分割线）都不显示。"全部"栏里 LLM 和 MT 混排说不清
+    // 归属，所以只在两个分类栏里出现。
+    readonly property var userRows: {
+        if (page.assetTab !== "llm" && page.assetTab !== "mt")
+            return []
+        var out = []
+        var list = backend.userModels
+        for (var i = 0; i < list.length; ++i) {
+            if (list[i].kind === page.assetTab)
+                out.push(list[i])
+        }
+        return out
+    }
+
     // 已安装资产的总占用。后端给的是字节，这里格式化。
     readonly property string installedTotalText: {
         var total = 0
@@ -188,7 +223,7 @@ Item {
     }
 
     // ---- 从文件导入：先定「装到哪一条」，再挑本地文件 ----
-    // 一类只认一个目标：优先占位条目（例如 7B 那种「需自行导入」的），
+    // 一类只认一个目标：优先清单里没有下载渠道的占位条目，
     // 其次第一个还没装的，最后才落到同类的第一条（覆盖已装的）。
     // 运行时（llama-server / onnxruntime）不在导入范围内，跳过。
     function importTargetFor(category) {
@@ -239,8 +274,19 @@ Item {
     }
 
     function beginImport(category) {
-        page.pendingImportId = page.importTargetFor(category)
         page.importCategoryOpen = false
+        // 本地 LLM：用户自己的 gguf 放 models/llm-user，只验文件头，不套清单的 sha256。
+        // 哈希校验只针对「线上那份下载」，两种导入不再共用一条路径。
+        if (category === "llm") {
+            page.openUserModelDialog()
+            return
+        }
+        // 本地 MT：六件套的打包导入还没做，直接说清楚该把目录放哪儿。
+        if (category === "mt") {
+            backend.notifyMtImportUnavailable()
+            return
+        }
+        page.pendingImportId = page.importTargetFor(category)
         if (page.pendingImportId === "") {
             // 这一类清单里一条都没有：退回逐条挑选的老界面，至少能看到是空的。
             importPicker.open()
@@ -265,8 +311,17 @@ Item {
 
     function openImportDialog() {
         var folder = page.assetFolder(page.pendingImportId)
-        importFileDialog.folder = folder !== "" ? "file:///" + encodeURI(folder) : ""
+        // Qt 6 的 FileDialog 只有 currentFolder（Qt 5 才叫 folder）。
+        // 之前写成 folder 会在这一行抛 "Cannot assign to non-existent property"，
+        // 整个函数中断、下面的 open() 根本没执行 —— 表现就是「点了没反应」。
+        if (folder !== "")
+            importFileDialog.currentFolder = "file:///" + encodeURI(folder)
         importFileDialog.open()
+    }
+
+    // 用户自己的模型（任意 gguf）：不认清单条目，也不做哈希比对。
+    function openUserModelDialog() {
+        userModelFileDialog.open()
     }
 
     // 外部跳转入口：配置页「本地 MT → 下载 / 导入」直接落到资产分区的 mt 分类。
@@ -286,18 +341,22 @@ Item {
     readonly property string dirTree: [
         // 根目录用后端给的真实路径，迁移过的用户也能看到自己那份。
         backend.assetInstallRoot + "/",
-        "├─ models/                         " + qsTr("模型，按用途分三格"),
-        "│  ├─ llm/                        " + qsTr("本地 LLM 的 GGUF"),
+        "├─ models/                         " + qsTr("模型，按用途分块"),
+        "│  ├─ llm/                         " + qsTr("清单里下载的 GGUF"),
         "│  │  └─ model.qwen2.5-3b-instruct.q4km",
-        "│  ├─ mt/                         " + qsTr("本地 MT 语言包"),
+        "│  ├─ llm-user/                    " + qsTr("你自己导入的 GGUF（只验文件头）"),
+        "│  │  └─ Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+        "│  ├─ mt/                          " + qsTr("清单里下载的语言包"),
         "│  │  └─ mt.opus.en-zh/",
-        "│  └─ ocr/                        " + qsTr("OCR 三件套"),
-        "│     ├─ ocr.rec.ppocrv5",
-        "│     └─ run/                     " + qsTr("收拢后的 det.onnx / rec.onnx / 字典"),
-        "├─ runtime/                        " + qsTr("运行时"),
+        "│  ├─ mt-user/                     " + qsTr("你自己放进来的语言包"),
+        "│  │  └─ mt.opus.en-zh/            " + qsTr("六件套齐全才认"),
+        "│  └─ ocr/                         " + qsTr("OCR 三件套（det / rec / 字典）"),
+        "│     └─ run/                      " + qsTr("收拢后的 det.onnx / rec.onnx"),
+        "├─ runtime/                        " + qsTr("llama-server 运行时"),
         "│  └─ runtime.llama.cpu.win-x64/",
-        "├─ downloads/                      " + qsTr(".part 临时文件（可续传）"),
-        "└─ logs/                           " + qsTr("运行日志")
+        "├─ state/                          " + qsTr("导入记录与资产来源"),
+        "├─ downloads/                      " + qsTr("下载中的 .part（可续传）"),
+        "└─ logs/                           " + qsTr("llama-server 日志")
     ].join("\n")
 
     // 后端不会主动推缓存统计，进页面时拉一次，数字才有内容。
@@ -1277,7 +1336,7 @@ Item {
                                 title: qsTr("资产")
                                 hint: qsTr("在这里下载或导入模型与组件。分三类：本地 AI 模型、翻译模型、图像识别组件。")
 
-                                // 分类标签：全部 / LLM / 本地 MT
+                                // 分类标签：全部 / LLM / 本地 MT / 图像识别
                                 Segmented {
                                     items: [
                                         { code: "all", label: qsTr("全部") },
@@ -1316,6 +1375,9 @@ Item {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: qsTr("从文件导入")
                                         variant: "tonal"
+                                        // 本地 MT 暂不支持导入（原始 opus-mt 包要先转换），
+                                        // 在 MT 栏里直接把按钮置灰，点了也只会在状态栏多一句废话。
+                                        buttonEnabled: page.assetTab !== "mt"
                                         // 「全部」栏里说不清要装哪一类，先问一句；
                                         // 已经在某个分类栏里就直接挑文件。
                                         onClicked: {
@@ -1405,7 +1467,9 @@ Item {
 
                                     Text {
                                         Layout.fillWidth: true
+                                        // 用户导入的行也算内容，别在只有用户模型时显示"还没有内容"。
                                         visible: page.filteredAssets.length === 0
+                                                 && page.userRows.length === 0
                                         text: qsTr("这一分类下还没有内容")
                                         font.family: Theme.fontUi
                                         font.pixelSize: Theme.fontSizeSmall
@@ -1413,19 +1477,160 @@ Item {
                                     }
 
                                     Repeater {
-                                        model: page.filteredAssets
+                                        model: page.assetRows
 
-                                        delegate: RowLayout {
-                                            id: assetRow
+                                        // 每行是一个 ColumnLayout：需要时先画分割线，再放表格行本身。
+                                        delegate: ColumnLayout {
+                                            id: assetGroup
                                             required property var modelData
 
-                                            // 下载状态：后端 assetProgress 是 id → 百分比（-1 = 未知总量）
-                                            readonly property string assetId: assetRow.modelData.id
-                                            readonly property bool downloading:
-                                                backend.assetProgress.hasOwnProperty(assetRow.assetId)
-                                            readonly property int percent:
-                                                assetRow.downloading
-                                                    ? backend.assetProgress[assetRow.assetId] : -1
+                                            // 这一行的资产数据（分割线只是它前面的装饰）。
+                                            readonly property var asset: assetGroup.modelData.entry
+
+                                            Layout.fillWidth: true
+                                            spacing: Theme.s2
+
+                                            Rectangle {
+                                                // 引擎驱动（llama.cpp 运行时）与模型权重之间的分割线。
+                                                visible: assetGroup.modelData.dividerBefore
+                                                Layout.fillWidth: true
+                                                Layout.topMargin: Theme.s2
+                                                Layout.bottomMargin: Theme.s2
+                                                Layout.preferredHeight: 1
+                                                color: Theme.outlineVariant
+                                            }
+
+                                            RowLayout {
+                                                id: assetRow
+                                                property var modelData: assetGroup.asset
+
+                                                // 下载状态：后端 assetProgress 是 id → 百分比（-1 = 未知总量）
+                                                readonly property string assetId: assetRow.modelData.id
+                                                readonly property bool downloading:
+                                                    backend.assetProgress.hasOwnProperty(assetRow.assetId)
+                                                readonly property int percent:
+                                                    assetRow.downloading
+                                                        ? backend.assetProgress[assetRow.assetId] : -1
+
+                                                Layout.fillWidth: true
+                                                spacing: Theme.s3
+
+                                                Text {
+                                                    Layout.preferredWidth: page.colId
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    text: assetRow.modelData.id
+                                                    elide: Text.ElideRight
+                                                    font.family: Theme.fontMono
+                                                    font.pixelSize: Theme.fontSizeBody
+                                                    color: Theme.ink
+                                                }
+
+                                                Item {
+                                                    Layout.preferredWidth: page.colState
+                                                    Layout.preferredHeight: 22
+
+                                                    Badge {
+                                                        anchors.left: parent.left
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        // 用户自己导入的资产不做内容校验（没有可信哈希可比），在状态里写明。
+                                                        text: assetRow.modelData.installed && assetRow.modelData.origin === "import"
+                                                              ? page.stateLabel(assetRow.modelData.state) + " · " + qsTr("用户导入")
+                                                              : page.stateLabel(assetRow.modelData.state)
+                                                        filled: assetRow.modelData.installed
+                                                    }
+                                                }
+
+                                                Text {
+                                                    Layout.preferredWidth: page.colSize
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    text: assetRow.modelData.sizeText
+                                                    elide: Text.ElideRight
+                                                    font.family: Theme.fontMono
+                                                    font.pixelSize: Theme.fontSizeSmall
+                                                    color: Theme.inkVariant
+                                                }
+
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    text: assetRow.modelData.path
+                                                    elide: Text.ElideMiddle
+                                                    font.family: Theme.fontMono
+                                                    font.pixelSize: Theme.fontSizeSmall
+                                                    color: Theme.inkVariant
+                                                }
+
+                                                Item {
+                                                    Layout.preferredWidth: page.colAction
+                                                    Layout.preferredHeight: assetRow.implicitHeight
+
+                                                    AppButton {
+                                                        anchors.right: parent.right
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        variant: "text"
+
+                                                        text: {
+                                                            if (assetRow.downloading)
+                                                                return assetRow.percent >= 0
+                                                                       ? qsTr("下载中 %1%").arg(assetRow.percent)
+                                                                       : qsTr("下载中…")
+                                                            if (assetRow.modelData.placeholder) {
+                                                                // 模型条目撤下下载渠道后仍可自行导入：清单里有 id，
+                                                                // 导入就是把它装进 models/ 并记成 Import 来源。
+                                                                return assetRow.modelData.type === "model"
+                                                                       ? qsTr("导入文件")
+                                                                       : qsTr("暂不支持")
+                                                            }
+                                                            return assetRow.modelData.installed ? qsTr("卸载") : qsTr("下载")
+                                                        }
+
+                                                        // 占位资产（清单里 urls 为空）：运行时类不给点，
+                                                        // 模型类允许「自行导入」。
+                                                        buttonEnabled: assetRow.downloading
+                                                                       || !assetRow.modelData.placeholder
+                                                                       || assetRow.modelData.type === "model"
+
+                                                        onClicked: {
+                                                            if (assetRow.downloading) {
+                                                                backend.cancelAssetDownload(assetRow.assetId)
+                                                            } else if (assetRow.modelData.installed) {
+                                                                uninstallConfirm.assetId = assetRow.assetId
+                                                                uninstallConfirm.open()
+                                                            } else if (assetRow.modelData.placeholder) {
+                                                                // 模型类没有下载渠道时，「导入文件」= 把用户自己的
+                                                                // 文件放进 models/llm-user，不套清单哈希。
+                                                                page.pendingImportId = assetRow.assetId
+                                                                if (assetRow.modelData.type === "model")
+                                                                    page.openUserModelDialog()
+                                                                else
+                                                                    page.openImportDialog()
+                                                            } else {
+                                                                backend.downloadAsset(assetRow.assetId)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 用户自己导入的条目：接在清单条目后面，用一条分割线隔开。
+                                    // 一条都没有时整段（连分割线）都不占位。
+                                    Rectangle {
+                                        visible: page.userRows.length > 0
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: Theme.s2
+                                        Layout.bottomMargin: Theme.s2
+                                        Layout.preferredHeight: 1
+                                        color: Theme.outlineVariant
+                                    }
+
+                                    Repeater {
+                                        model: page.userRows
+
+                                        delegate: RowLayout {
+                                            id: userRow
+                                            required property var modelData
 
                                             Layout.fillWidth: true
                                             spacing: Theme.s3
@@ -1433,7 +1638,7 @@ Item {
                                             Text {
                                                 Layout.preferredWidth: page.colId
                                                 Layout.alignment: Qt.AlignVCenter
-                                                text: assetRow.modelData.id
+                                                text: userRow.modelData.name
                                                 elide: Text.ElideRight
                                                 font.family: Theme.fontMono
                                                 font.pixelSize: Theme.fontSizeBody
@@ -1447,18 +1652,17 @@ Item {
                                                 Badge {
                                                     anchors.left: parent.left
                                                     anchors.verticalCenter: parent.verticalCenter
-                                                    // 用户自己导入的资产不做内容校验（没有可信哈希可比），在状态里写明。
-                                                    text: assetRow.modelData.installed && assetRow.modelData.origin === "import"
-                                                          ? page.stateLabel(assetRow.modelData.state) + " · " + qsTr("用户导入")
-                                                          : page.stateLabel(assetRow.modelData.state)
-                                                    filled: assetRow.modelData.installed
+                                                    // 用户导入的条目没有清单 id、也没做哈希校验，
+                                                    // 用「用户导入」代替「已安装」，一眼能分清来源。
+                                                    tone: "good"
+                                                    text: qsTr("用户导入")
                                                 }
                                             }
 
                                             Text {
                                                 Layout.preferredWidth: page.colSize
                                                 Layout.alignment: Qt.AlignVCenter
-                                                text: assetRow.modelData.sizeText
+                                                text: userRow.modelData.sizeText
                                                 elide: Text.ElideRight
                                                 font.family: Theme.fontMono
                                                 font.pixelSize: Theme.fontSizeSmall
@@ -1468,7 +1672,7 @@ Item {
                                             Text {
                                                 Layout.fillWidth: true
                                                 Layout.alignment: Qt.AlignVCenter
-                                                text: assetRow.modelData.path
+                                                text: userRow.modelData.path
                                                 elide: Text.ElideMiddle
                                                 font.family: Theme.fontMono
                                                 font.pixelSize: Theme.fontSizeSmall
@@ -1477,46 +1681,17 @@ Item {
 
                                             Item {
                                                 Layout.preferredWidth: page.colAction
-                                                Layout.preferredHeight: assetRow.implicitHeight
+                                                Layout.preferredHeight: userRow.implicitHeight
 
                                                 AppButton {
                                                     anchors.right: parent.right
                                                     anchors.verticalCenter: parent.verticalCenter
                                                     variant: "text"
-
-                                                    text: {
-                                                        if (assetRow.downloading)
-                                                            return assetRow.percent >= 0
-                                                                   ? qsTr("下载中 %1%").arg(assetRow.percent)
-                                                                   : qsTr("下载中…")
-                                                        if (assetRow.modelData.placeholder) {
-                                                            // 模型条目撤下下载渠道后仍可自行导入：清单里有 id，
-                                                            // 导入就是把它装进 models/ 并记成 Import 来源。
-                                                            return assetRow.modelData.type === "model"
-                                                                   ? qsTr("导入文件")
-                                                                   : qsTr("暂不支持")
-                                                        }
-                                                        return assetRow.modelData.installed ? qsTr("卸载") : qsTr("下载")
-                                                    }
-
-                                                    // 占位资产（清单里 urls 为空）：运行时类不给点，
-                                                    // 模型类允许「自行导入」。
-                                                    buttonEnabled: assetRow.downloading
-                                                                   || !assetRow.modelData.placeholder
-                                                                   || assetRow.modelData.type === "model"
-
+                                                    text: qsTr("删除")
                                                     onClicked: {
-                                                        if (assetRow.downloading) {
-                                                            backend.cancelAssetDownload(assetRow.assetId)
-                                                        } else if (assetRow.modelData.installed) {
-                                                            uninstallConfirm.assetId = assetRow.assetId
-                                                            uninstallConfirm.open()
-                                                        } else if (assetRow.modelData.placeholder) {
-                                                            page.pendingImportId = assetRow.assetId
-                                                            page.openImportDialog()
-                                                        } else {
-                                                            backend.downloadAsset(assetRow.assetId)
-                                                        }
+                                                        userModelRemoveConfirm.fileName = userRow.modelData.id
+                                                        userModelRemoveConfirm.kind = userRow.modelData.kind
+                                                        userModelRemoveConfirm.open()
                                                     }
                                                 }
                                             }
@@ -1919,6 +2094,8 @@ Item {
         }
 
         ColumnLayout {
+            // 宽度绑到 Popup 的可用宽度，否则长文本会把按钮顶出弹窗
+            width: uninstallConfirm.availableWidth
             spacing: Theme.s3
 
             Text {
@@ -1983,6 +2160,87 @@ Item {
         }
     }
 
+    // ---- 删除用户导入的条目：这是真删文件（清单资产那条路只是"卸载后能重下"），单独问一次 ----
+    Popup {
+        id: userModelRemoveConfirm
+        property string fileName: ""
+        // "llm" = models/llm-user 里的单文件；"mt" = models/mt-user 里的语言包目录。
+        property string kind: "llm"
+        parent: Overlay.overlay
+        anchors.centerIn: Overlay.overlay
+        modal: true
+        width: 460
+        padding: Theme.s5
+
+        background: Rectangle {
+            radius: Theme.rLg
+            color: Theme.surfaceHigh
+            border.width: 1
+            border.color: Theme.outlineVariant
+        }
+
+        // 宽度必须显式绑到 Popup 的可用宽度：否则 ColumnLayout 会按文本的
+        // implicitWidth（一整行不换行）撑开，按钮被顶到弹窗外面去。
+        ColumnLayout {
+            width: userModelRemoveConfirm.availableWidth
+            spacing: Theme.s3
+
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: userModelRemoveConfirm.kind === "mt"
+                      ? qsTr("删除用户语言包")
+                      : qsTr("删除用户模型")
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSection
+                font.weight: Font.DemiBold
+                color: Theme.ink
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: userModelRemoveConfirm.kind === "mt"
+                      ? qsTr("确定删除「%1」？\n这会把 models/mt-user 里这个语言包目录整个删掉，清单里的资产不受影响。").arg(userModelRemoveConfirm.fileName)
+                      : qsTr("确定删除「%1」？\n这会删掉 models/llm-user 里的那份文件，清单里的资产不受影响。").arg(userModelRemoveConfirm.fileName)
+                wrapMode: Text.Wrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeBody
+                color: Theme.inkVariant
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: userModelRemoveConfirm.kind !== "mt"
+                text: qsTr("如果你还想留着，先从下载目录重新导入一次即可（原始下载文件不会被删）。")
+                wrapMode: Text.Wrap
+                font.family: Theme.fontUi
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.inkVariant
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.s2
+
+                Item { Layout.fillWidth: true }
+
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: userModelRemoveConfirm.close()
+                }
+
+                AppButton {
+                    text: qsTr("删除")
+                    variant: "danger"
+                    onClicked: {
+                        backend.removeUserModel(userModelRemoveConfirm.fileName)
+                        userModelRemoveConfirm.close()
+                    }
+                }
+            }
+        }
+    }
+
     // ---- 从文件导入（「全部」栏）：先问装哪一类，再直接挑文件 ----
     Popup {
         visible: page.importCategoryOpen
@@ -2001,6 +2259,8 @@ Item {
         }
 
         ColumnLayout {
+            // 宽度绑到 Popup 的可用宽度，否则长文本会把按钮顶出弹窗
+            width: importCategoryPicker.availableWidth
             anchors.fill: parent
             spacing: Theme.s3
 
@@ -2041,10 +2301,12 @@ Item {
             }
 
             Repeater {
+                // mt 暂时禁用：原始 opus-mt 包需要导出 + 量化才能用，转换器还没做，
+                // 硬把 PyTorch 包当语言包装进去只会得到"装好了却翻不出话"。
                 model: [
-                    { code: "llm", label: qsTr("本地 LLM") },
-                    { code: "mt", label: qsTr("本地 MT") },
-                    { code: "ocr", label: qsTr("OCR") }
+                    { code: "llm", label: qsTr("本地 LLM"), disabled: false },
+                    { code: "mt", label: qsTr("本地 MT"), disabled: true },
+                    { code: "ocr", label: qsTr("OCR"), disabled: false }
                 ]
 
                 delegate: ColumnLayout {
@@ -2059,18 +2321,20 @@ Item {
                         Layout.fillWidth: true
                         text: categoryRow.modelData.label
                         variant: "tonal"
-                        buttonEnabled: categoryRow.target !== ""
+                        buttonEnabled: categoryRow.target !== "" && !categoryRow.modelData.disabled
                         onClicked: page.beginImport(categoryRow.modelData.code)
                     }
 
                     Text {
                         Layout.fillWidth: true
                         Layout.leftMargin: Theme.s2
-                        text: categoryRow.target !== ""
-                              ? (page.assetInstalled(categoryRow.target)
-                                 ? qsTr("装到 %1（已安装，会覆盖）").arg(categoryRow.target)
-                                 : qsTr("装到 %1").arg(categoryRow.target))
-                              : qsTr("这一类还没有可装的条目，先去下载。")
+                        text: categoryRow.modelData.disabled
+                              ? qsTr("暂不支持从文件导入：语言包请在资产页下载")
+                              : (categoryRow.target !== ""
+                                 ? (page.assetInstalled(categoryRow.target)
+                                    ? qsTr("装到 %1（已安装，会覆盖）").arg(categoryRow.target)
+                                    : qsTr("装到 %1").arg(categoryRow.target))
+                                 : qsTr("这一类还没有可装的条目，先去下载。"))
                         elide: Text.ElideMiddle
                         font.family: Theme.fontMono
                         font.pixelSize: Theme.fontSizeTiny
@@ -2226,6 +2490,15 @@ Item {
                                                 page.localPath(importFileDialog.selectedFile))
     }
 
+    // 用户自己的模型：直接复制进 models/llm-user，跟清单资产完全分开。
+    FileDialog {
+        id: userModelFileDialog
+        title: qsTr("选择 GGUF 模型文件")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [qsTr("GGUF 模型 (*.gguf)"), qsTr("所有文件 (*)")]
+        onAccepted: backend.importLocalModel(selectedFile)
+    }
+
     // ---- 重置确认：清配置 + 清缓存，不可撤销 ----
     Popup {
         id: resetConfirm
@@ -2242,6 +2515,8 @@ Item {
         }
 
         ColumnLayout {
+            // 宽度绑到 Popup 的可用宽度，否则长文本会把按钮顶出弹窗
+            width: resetConfirm.availableWidth
             spacing: Theme.s3
 
             Text {

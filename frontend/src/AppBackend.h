@@ -103,7 +103,12 @@ class AppBackend : public QObject {
     Q_PROPERTY(QVariantList webProviders READ webProviders CONSTANT)
 
     // 本地 LLM 运行期实况
-    Q_PROPERTY(QStringList localModels READ localModels CONSTANT)
+    // localModels 不再是 CONSTANT：用户导入一个 .gguf 之后下拉框要立刻出现它，
+    // 所以挂到 localStateChanged（refreshLocalState() 会发）。
+    Q_PROPERTY(QStringList localModels READ localModels NOTIFY localStateChanged)
+    // 用户自己导入的模型（本地 LLM 在 models/llm-user，本地 MT 在 models/mt-user）。
+    // 资产页把它们接在对应分类的清单条目下面，用一条分割线隔开：没有就不显示。
+    Q_PROPERTY(QVariantList userModels READ userModels NOTIFY localStateChanged)
     Q_PROPERTY(bool localGpuAvailable READ localGpuAvailable CONSTANT)
     Q_PROPERTY(bool localCpuAvailable READ localCpuAvailable CONSTANT)
     // 只装了 Vulkan 运行时（没装 CPU 版）时为 true：此时「优先 GPU」必须开着，
@@ -355,6 +360,11 @@ public:
     QVariantList webProviders() const;
 
     QStringList localModels() const;
+    // 用户导入的模型列表（models/llm-user）：{id, name, kind, sizeBytes, sizeText, path}。
+    QVariantList userModels() const;
+    // 用户语言包的根目录（models/mt-user）：本地 MT 的导入还没做，但用户把
+    // 导出的六件套目录直接丢进去，资产页就能列出来。
+    static QString userMtDir();
     bool localGpuAvailable() const;
     bool localCpuAvailable() const;
     bool localGpuLocked() const;
@@ -620,6 +630,15 @@ public:
     // 手动导入：让用户挑的文件先按清单 sha256 校验再装到 assets 里。
     // 在工作线程跑，结果经 errorRaised / statusText 回传。
     Q_INVOKABLE void importAssetFromFile(const QString &assetId, const QString &filePath);
+    // 导入一个自定义 GGUF 当本地 LLM 模型：复制进 models/llm-user 并登记，
+    // 之后它就和清单里的模型一样出现在「模型文件」下拉里（与清单资产不共目录，不会同名顶掉）。
+    // 参数是 FileDialog.selectedFile 那种 QUrl（file:///C:/Users/…/x.gguf）；
+    // 复制在后台线程做（几百 MB 起步，不能在 GUI 线程同步拷）。
+    Q_INVOKABLE void importLocalModel(const QUrl &fileUrl);
+    // 删掉一个用户导入的模型（只动 models/llm-user，碰不到清单资产）。
+    Q_INVOKABLE void removeUserModel(const QString &fileName);
+    // 资产页「本地 MT → 从文件导入」：功能还没做，给一句明确的落点说明。
+    Q_INVOKABLE void notifyMtImportUnavailable();
     // 退出进程（托盘菜单「退出」与关闭行为都要用）。
     Q_INVOKABLE void quitApplication();
 
@@ -830,6 +849,8 @@ private:
     QVariantList m_assets;
     QString m_assetInstallRoot;
     QVariantMap m_assetProgress;
+    // 导入本地模型时挡住重复点击：复制几百 MB 的 GGUF 期间再点一次会拷出第二份。
+    bool m_modelImporting = false;
     // 每个下载任务的取消标志（工作线程读，主线程写）。
     QHash<QString, std::shared_ptr<std::atomic_bool>> m_assetCancel;
 };

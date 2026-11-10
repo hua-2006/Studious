@@ -4,9 +4,15 @@
 #include "AssetPaths.h"
 #include "platform/IPlatform.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QThread>
 
@@ -176,6 +182,30 @@ QString LocalEngine::llmModelsDir()
     return studious::ui::paths::modelsLlmDir();
 }
 
+QString LocalEngine::userLlmModelsDir()
+{
+    // 用户导入的模型单独一格：清单资产是"可校验的官方件"，这里是"自担的民间件"，
+    // 混在一个目录里会互相顶掉（同名就装不进去），也没法一眼看出哪条是自己放的。
+    return QDir(studious::ui::paths::assetsRoot()).filePath(QStringLiteral("models/llm-user"));
+}
+
+QStringList LocalEngine::userModelFiles()
+{
+    QStringList names;
+    const QFileInfoList files =
+        QDir(userLlmModelsDir()).entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+    for (const QFileInfo &info : files) {
+        if (info.size() > 0) {
+            names << info.fileName();
+        }
+    }
+    std::sort(names.begin(), names.end(), [](const QString &a, const QString &b) {
+        const int cmp = QString::compare(a, b, Qt::CaseInsensitive);
+        return cmp != 0 ? cmp < 0 : a < b;
+    });
+    return names;
+}
+
 QStringList LocalEngine::availableModels()
 {
     // 单一真源：清单 + AssetRegistry::isPresent()（存在且非空，不哈希）。
@@ -217,12 +247,242 @@ QStringList LocalEngine::availableModels()
         names << info.fileName();
     }
 
+    // 用户导入的模型住自己的目录（models/llm-user，与清单资产物理分开，同名也不会互相顶掉）。
+    // 那个目录里的文件都是用户亲手放的，不需要登记表来"证明"；只用 size>0 挡掉写了一半的。
+    for (const QString &name : userModelFiles()) {
+        if (!names.contains(name)) {
+            names << name;
+        }
+    }
+
+    // 兼容老版本：导入件曾经直接放在 models/llm，登记表里还记着、文件也还在的继续认
+    // （新导入一律进 llm-user，见 importModelFile）。
+    for (const QString &name : importedModelNames()) {
+        if (names.contains(name)) {
+            continue;
+        }
+        const QFileInfo info(QDir(llmDir).filePath(name));
+        if (!info.isFile() || info.size() <= 0) {
+            continue;
+        }
+        names << name;
+    }
+
     // 稳定且确定的顺序：先大小写不敏感，再按原始串兜底（避免只差大小写时顺序随平台变）。
     std::sort(names.begin(), names.end(), [](const QString &a, const QString &b) {
         const int cmp = QString::compare(a, b, Qt::CaseInsensitive);
         return cmp != 0 ? cmp < 0 : a < b;
     });
     return names;
+}
+
+namespace {
+
+// 导入模型的登记表：assets/state/imported-llm.json。
+// 它不参与清单校验 —— 清单仍是官方资产的单一真源；这张表只补一个缺口：
+// 清单外的 gguf 也得能在下拉里出现并真的被 llama-server 加载。
+QString importedRegistryPath()
+{
+    return QDir(studious::ui::paths::assetsRoot()).filePath(QStringLiteral("state/imported-llm.json"));
+}
+
+// 小于 1 MB 的"模型"只可能是坏文件或下了一半的重定向页面，不必交给 llama-server 丢人。
+constexpr qint64 kMinImportedModelBytes = 1024 * 1024;
+
+}  // namespace
+
+QStringList LocalEngine::importedModelNames()
+{
+    QFile file(importedRegistryPath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    file.close();
+
+    QStringList names;
+    const QJsonArray files = doc.object().value(QStringLiteral("files")).toArray();
+    names.reserve(files.size());
+    for (const QJsonValue &value : files) {
+        const QString name = value.toObject().value(QStringLiteral("name")).toString().trimmed();
+        // 只接受纯文件名：登记表被手改成 "../x.gguf" 之类不应该能决定路径。
+        if (!name.isEmpty() && name == QFileInfo(name).fileName()) {
+            names << name;
+        }
+    }
+    return names;
+}
+
+bool LocalEngine::importModelFile(const QString &sourcePath, QString *destName, QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+        return false;
+    };
+
+    const QFileInfo source(sourcePath.trimmed());
+    if (!source.exists() || !source.isFile()) {
+        return fail(studious::i18n::s("找不到要导入的模型文件。",
+                                      "The model file to import does not exist."));
+    }
+    if (source.size() < kMinImportedModelBytes) {
+        return fail(studious::i18n::s("文件太小，不像是 GGUF 模型（至少 1 MB）。",
+                                      "The file is too small to be a GGUF model (needs at least 1 MB)."));
+    }
+
+    // 只看文件头：GGUF 魔数 + 版本号。再往下校验就等于自己实现一遍 llama.cpp 的
+    // 模型加载器，索性把"这个权重能不能跑"交给 llama-server 自己回答。
+    {
+        QFile probe(source.absoluteFilePath());
+        if (!probe.open(QIODevice::ReadOnly)) {
+            return fail(studious::i18n::s("读不了这个文件（可能被占用或权限不足）。",
+                                          "Cannot read the file (in use or permission denied)."));
+        }
+        const QByteArray head = probe.read(8);
+        probe.close();
+        if (head.size() < 8 || !head.startsWith(QByteArrayLiteral("GGUF"))) {
+            return fail(studious::i18n::s("这不是 GGUF 文件（文件头不是 GGUF）。本地 LLM 只认 .gguf。",
+                                          "Not a GGUF file (missing the GGUF header). Local LLM only takes .gguf."));
+        }
+    }
+
+    const QString name = source.fileName();
+    const QDir dir(userLlmModelsDir());
+    if (!dir.exists() && !QDir().mkpath(dir.absolutePath())) {
+        return fail(studious::i18n::sf("无法创建模型目录：%1", "Cannot create the model directory: %1",
+                                       {dir.absolutePath()}));
+    }
+
+    const QString dest = dir.filePath(name);
+    const bool sameFile = QFileInfo(dest).absoluteFilePath() == source.absoluteFilePath();
+    if (!sameFile) {
+        // 复制，不移动：用户的原始文件留在下载目录里，删掉应用目录也不会把他的东西搞丢。
+        if (QFileInfo::exists(dest)) {
+            return fail(studious::i18n::sf(
+                "用户模型目录里已经有同名文件「%1」，先删掉或用别的名字。",
+                "A user model with the same name already exists: %1. Remove it or rename the file.",
+                {name}));
+        }
+        if (!QFile::copy(source.absoluteFilePath(), dest)) {
+            return fail(studious::i18n::sf("复制失败（磁盘空间不足或目标文件被占用）：%1",
+                                           "Copy failed (out of disk space or the target is locked): %1",
+                                           {dest}));
+        }
+    }
+
+    // 登记（幂等：同名条目覆盖）。写临时文件再提交，掉电不会留下半个 JSON。
+    QJsonArray previous;
+    {
+        QFile existing(importedRegistryPath());
+        if (existing.open(QIODevice::ReadOnly)) {
+            previous = QJsonDocument::fromJson(existing.readAll())
+                           .object()
+                           .value(QStringLiteral("files"))
+                           .toArray();
+            existing.close();
+        }
+    }
+
+    QJsonArray files;
+    for (const QJsonValue &value : previous) {
+        if (value.toObject().value(QStringLiteral("name")).toString() != name) {
+            files.append(value);
+        }
+    }
+
+    QJsonObject entry;
+    entry.insert(QStringLiteral("name"), name);
+    entry.insert(QStringLiteral("bytes"), static_cast<double>(QFileInfo(dest).size()));
+    entry.insert(QStringLiteral("source"), source.absoluteFilePath());
+    entry.insert(QStringLiteral("importedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    files.append(entry);
+
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("files"), files);
+
+    QDir().mkpath(QFileInfo(importedRegistryPath()).absolutePath());
+    QSaveFile registry(importedRegistryPath());
+    if (!registry.open(QIODevice::WriteOnly)) {
+        return fail(studious::i18n::s("记录导入结果失败（写不了 assets/state）。",
+                                      "Could not record the import (cannot write assets/state)."));
+    }
+    registry.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!registry.commit()) {
+        return fail(studious::i18n::s("记录导入结果失败（写入未完成）。",
+                                      "Could not record the import (write did not finish)."));
+    }
+
+    if (destName != nullptr) {
+        *destName = name;
+    }
+    qInfo().noquote() << QStringLiteral("[local] 导入模型 %1 <- %2").arg(name, source.absoluteFilePath());
+    return true;
+}
+
+bool LocalEngine::removeUserModel(const QString &fileName, QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+        return false;
+    };
+
+    const QString name = fileName.trimmed();
+    // 只接受纯文件名：界面传上来的就是文件名，带路径的一律当脏数据拒掉。
+    if (name.isEmpty() || name != QFileInfo(name).fileName()) {
+        return fail(studious::i18n::s("模型文件名不合法。", "That model file name is not valid."));
+    }
+
+    const QString path = QDir(userLlmModelsDir()).filePath(name);
+    if (!QFileInfo::exists(path)) {
+        return fail(studious::i18n::s("这个模型文件已经不在了。", "That model file is already gone."));
+    }
+    if (!QFile::remove(path)) {
+        // 最常见的原因：llama-server 正拿着它（正在用这个模型翻译）。
+        return fail(studious::i18n::sf("删不掉「%1」：可能正被本地引擎占用，先停下本地 LLM 再试。",
+                                       "Cannot delete %1: the local engine may be using it. Stop "
+                                       "local LLM first.",
+                                       {name}));
+    }
+
+    // 登记表里还留着这个名字就摘掉；写失败不影响"文件已删"这个事实，记一条日志即可。
+    QStringList registered = importedModelNames();
+    if (registered.contains(name)) {
+        QJsonArray files;
+        {
+            QFile existing(importedRegistryPath());
+            if (existing.open(QIODevice::ReadOnly)) {
+                const QJsonArray previous = QJsonDocument::fromJson(existing.readAll())
+                                                .object()
+                                                .value(QStringLiteral("files"))
+                                                .toArray();
+                for (const QJsonValue &value : previous) {
+                    if (value.toObject().value(QStringLiteral("name")).toString() != name) {
+                        files.append(value);
+                    }
+                }
+                existing.close();
+            }
+        }
+        QJsonObject root;
+        root.insert(QStringLiteral("version"), 1);
+        root.insert(QStringLiteral("files"), files);
+        QSaveFile registry(importedRegistryPath());
+        if (registry.open(QIODevice::WriteOnly)
+            && registry.write(QJsonDocument(root).toJson(QJsonDocument::Indented)) >= 0) {
+            registry.commit();
+        } else {
+            qWarning().noquote() << QStringLiteral("[local] 登记表没更新（文件已删）：%1")
+                                        .arg(importedRegistryPath());
+        }
+    }
+
+    qInfo().noquote() << QStringLiteral("[local] 删除用户模型 %1").arg(name);
+    return true;
 }
 
 QString LocalEngine::pathForName(const QString &fileName)
@@ -232,7 +492,16 @@ QString LocalEngine::pathForName(const QString &fileName)
         return QString();
     }
     const QFileInfo info(trimmed);
-    return info.isAbsolute() ? info.absoluteFilePath() : QDir(llmModelsDir()).filePath(trimmed);
+    if (info.isAbsolute()) {
+        return info.absoluteFilePath();
+    }
+    // 用户目录优先：同名时用户自己的那份更可能是他想跑的那个
+    // （清单资产的文件名都是 model.* 开头，实际很难撞上，这里只是给个确定答案）。
+    const QFileInfo user(QDir(userLlmModelsDir()).filePath(trimmed));
+    if (user.isFile()) {
+        return user.absoluteFilePath();
+    }
+    return QDir(llmModelsDir()).filePath(trimmed);
 }
 
 bool LocalEngine::isGpuAvailable()

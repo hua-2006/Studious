@@ -56,13 +56,33 @@ public:
     LocalEngine(const LocalEngine &) = delete;
     LocalEngine &operator=(const LocalEngine &) = delete;
 
-    // 清单里 type=="model"、位于 <installRoot>/models/llm 且 AssetRegistry::isPresent()
-    // （存在且非空，不哈希）成立的资产，返回文件名（不含目录，等于资产 id）。
-    // 不再自己扫目录 / 按后缀猜：用户手放的 .gguf 不会被当成可用模型
-    // （真要用就「导入」成清单里的那条资产）。
+    // 两路来源合并后返回文件名（不含目录）：
+    //   1. 清单里 type=="model"、位于 <installRoot>/models/llm 且 AssetRegistry::isPresent()
+    //      （存在且非空，不哈希）成立的资产；
+    //   2. 用户自己导入的 .gguf —— 住在专门的 models/llm-user 里（见 userLlmModelsDir），
+    //      那个目录里躺着的文件都是用户亲手放的，不必再靠登记表"证明"；
+    //      另外老版本把导入件放在 models/llm，登记表里记着且文件还在的继续认。
     // 排序按文件名做稳定排序（大小写不敏感，同名再按原始串兜底）：
     // 不用修改时间是因为重下一次资产就会让下拉框顺序整体乱跳，用户点错模型代价是几秒重启。
     static QStringList availableModels();
+
+    // ---- 用户自定义导入（本地 GGUF） ----
+    // 把用户挑的 .gguf **复制**进 <installRoot>/models/llm-user，并登记到
+    // assets/state/imported-llm.json；源文件留在原地不动。
+    // 校验只做两级：文件非空 + 头 4 字节是 "GGUF"。民间量化版对不上清单里的
+    // sha256，强制哈希等于禁止导入，所以这里不查清单、也不改清单。
+    // 成功时 destName 返回落盘后的文件名（下拉框里就是它）。
+    static bool importModelFile(const QString &sourcePath, QString *destName, QString *error);
+    // 已登记过的导入模型文件名（文件是否还在由调用方判断）。仅用于兼容老版本落点。
+    static QStringList importedModelNames();
+    // 用户模型的专用目录：<installRoot>/models/llm-user。
+    // 与清单资产（models/llm）物理分开 —— 同名文件不会互相顶掉，
+    // 卸载清单资产也永远碰不到这里；代价是这里的内容不参与任何校验。
+    static QString userLlmModelsDir();
+    // llm-user 里真实存在的文件名（按 availableModels 同一套规则稳定排序）。
+    static QStringList userModelFiles();
+    // 删掉用户导入的模型：只动 llm-user 里的文件，并把名字从登记表里摘掉。
+    static bool removeUserModel(const QString &fileName, QString *error);
 
     // 运行时目录里有服务端可执行文件就算可用（不探测显卡 / 驱动，扫描保持零成本）。
     static bool isGpuAvailable();   // runtime.llama.vulkan.<平台后缀>
