@@ -4,6 +4,7 @@
 #   .\package.ps1                 # 编译 + 打包
 #   .\package.ps1 -SkipBuild      # 用现有 frontend\build 直接打包
 #   .\package.ps1 -WithVision     # 额外把 OCR（视觉）模型打进包，开箱即可用截图翻译
+#   .\package.ps1 -MakeInstaller  # 再用 Inno Setup 产出一个 setup.exe
 #   .\package.ps1 -QtRoot D:\Qt -QtVer 6.12.0
 #
 # 产物:
@@ -18,6 +19,8 @@
 param(
     [switch]$SkipBuild,
     [switch]$WithVision,
+    [switch]$MakeInstaller,
+    [string]$IsccPath = "",
     [string]$QtRoot = "C:\Code\language\Qt",
     [string]$QtVer  = "6.12.0",
     [string]$Config = "Release"
@@ -184,3 +187,36 @@ Write-Host ""
 Write-Host "完成:" -ForegroundColor Green
 Write-Host "  目录 $( $stage )"
 Write-Host "  压缩包 $zip（$sizeMb MB）"
+
+# ---------- 7. 安装包（可选）----------
+if ($MakeInstaller) {
+    Write-Host ""
+    Write-Host "=== Inno Setup ===" -ForegroundColor Cyan
+    $iscc = $IsccPath
+    if (-not $iscc) {
+        $candidates = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+        )
+        $iscc = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    }
+    if (-not $iscc) {
+        Write-Host "  找不到 ISCC.exe（装 Inno Setup 6，或用 -IsccPath 指定）" -ForegroundColor Red
+        exit 1
+    }
+    $env:Path = $mingw + ";" + $qtBin + ";" + $env:Path
+    $ErrorActionPreference = "Continue"
+    & $iscc ("/DMyAppVersion=" + $version) ("/DStageDir=" + $stage) (Join-Path $root "installer.iss") 2>&1 |
+        Where-Object { $_ -match 'Successful|Error|Warning|setup' } | ForEach-Object { "  $_" }
+    $isccCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $setup = Join-Path $dist ("Studious-" + $version + "-setup.exe")
+    if ($isccCode -ne 0 -or -not (Test-Path $setup)) {
+        Write-Host "  安装包没生成（ISCC exit $isccCode）" -ForegroundColor Red
+        exit 1
+    }
+    $setupMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+    Write-Host "  安装包 $setup（$setupMb MB）" -ForegroundColor Green
+}
+
