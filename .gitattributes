@@ -11,3 +11,7 @@
 *.dll binary
 *.a binary
 *.lib binary
+
+# GitHub 语言统计：第三方代码不计入
+backend/third_party/** linguist-vendored
+installer/ChineseSimplified.isl linguist-vendored
